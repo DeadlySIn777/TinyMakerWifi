@@ -37,8 +37,9 @@
  * a print - and without touching print timing, because the sending runs on the
  * other CPU core.
  *
- * Why a task and not the loop. The print loop does open network windows mid-
- * print (network_service_window(160) between layers), but 160 ms is the budget
+ * Why a task and not the loop. network_loop() IS reached during a print - via
+ * network_service_window(160) between layers, and via Motor.ino:200/310 every
+ * 300 ms through every lift and lower - so 160 ms is the budget
  * and a blocking HTTP round trip to an unreachable host costs its full timeout.
  * Ten times over budget, on the same thread that drives UV exposure and Z
  * motion, is how you get banded layers.

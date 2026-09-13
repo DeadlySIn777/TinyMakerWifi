@@ -5195,8 +5195,16 @@ void network_loop() {
   // rejoins in the background; this is the belt-and-suspenders nudge for when
   // the core gives up, and it re-announces mDNS - tinymaker.local dies across a
   // reconnect - once the link is back. Non-blocking: reconnect() just kicks the
-  // WiFi task. Dormant during a print (network_loop isn't reached then); the
-  // background auto-reconnect covers that window.
+  // WiFi task.
+  //
+  // CORRECTION (09-13): this used to claim network_loop() is not reached during
+  // a print. It is. Motor.ino:200 and Motor.ino:310 call it every 300 ms through
+  // every lift and every lower, and network_service_window(160) calls it between
+  // layers. The watchdog above is safe anyway - reconnect() only kicks the WiFi
+  // task and returns - but the old sentence was load-bearing in the wrong
+  // direction: it reads as a licence to put blocking network work here, which
+  // would land squarely inside a curing layer. Anything added below must assume
+  // it CAN run mid-print, and gate on printerBusy() if that matters.
   static unsigned long wifiWatchTs = 0;
   // Seeded from the boot result: a printer that booted offline still owes an
   // mDNS announcement, even if the link returns before this watchdog's first
