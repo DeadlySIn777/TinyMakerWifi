@@ -58,6 +58,30 @@ For `.ctb` and friends you also need [UVtools](https://github.com/sn4k3/UVtools)
 | `--start` | begin printing as soon as the upload finishes |
 | `--action rename` | keep both when the name is already on the card (default is `replace`) |
 | `--uvtools PATH` | point at `UVtoolsCmd` if it is not on `PATH` |
+| `--describe` | name it `model_printer_layer_exposure_date`, so the printer's file list says what each model is |
+
+### About `--describe`
+
+The printer's file list shows names and nothing else, so `Tooth` three times
+over tells you nothing about which one was 0.05 mm at 2.6 s. With `--describe`
+the same file uploads as:
+
+```
+Tooth_SL1_005_26_2026_09_13_02_46_13
+```
+
+Layer height and exposure come from the `config.ini` inside the `.sl1`
+(PrusaSlicer writes one; a bare ZIP of PNGs does not, and then the name simply
+carries fewer facts). The date is the file's own modification time - when it was
+sliced, which is the fact worth keeping, not when it happened to be uploaded.
+
+**Why it looks like that and not like `0.05mm` or `2.6s`:** the printer keeps 40
+characters and deletes everything that is not a letter, a digit, `-` or `_`
+(`safeModelName`, [src/Import.ino:71](../src/Import.ino)). So `0.05` arrives as
+`005` whatever you do, and anything past 40 characters is cut off the END -
+which is where the date lives. The helper therefore shortens the MODEL name to
+make room and keeps the reading intact, rather than letting the firmware cut the
+timestamp off. It says so when it shortens one.
 
 ### What it will not do
 
