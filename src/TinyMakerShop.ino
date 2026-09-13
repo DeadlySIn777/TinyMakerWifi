@@ -16,36 +16,41 @@
  * token cannot arm, stop or change settings on the compressor: the worst a
  * stolen printer token can do is lie about whether a printer is busy.
  *
- * WHAT THIS IS *NOT*. It is not a Mesh-Lite node. The air station uses
- * espressif's Mesh-Lite to spread Wi-Fi across the shop, and that component is
- * ESP-IDF only - it wants to own AP+STA and station reconnection, which is
- * exactly what WiFiManager and the dashboard already own here, on a pinned
- * Arduino core 2.0.14. It also does not need porting: Mesh-Lite extends the
- * shop LAN, and this printer joins that LAN as an ordinary Wi-Fi client like
- * every other device. Being on the mesh and running the mesh are not the same
- * job.
+ * WHAT THIS IS *NOT*. It is not a Mesh-Lite node, and it does not need to be.
+ * Mesh-Lite is ESP-IDF only and wants to own AP+STA and station reconnection -
+ * which WiFiManager already owns here, on a core 2.0.14 that is pinned because
+ * Arduino_GFX 1.2.0 breaks above it.
+ *
+ * It is also unnecessary. The root's child-facing interface is a plain WPA2-PSK
+ * SoftAP on an IoT-Bridge NAT netif, so an ordinary station joins it with the
+ * normal password and is routed onto the shop LAN. Pointing WiFiManager at that
+ * SSID puts this printer on the mesh as a leaf with no code at all. Being ON the
+ * mesh and RUNNING the mesh are different jobs; see docs/shop-network.md,
+ * including why the shop router is usually the better choice (the bridge's NAT
+ * is one-way, and the dashboard lives on the wrong side of it).
  *
  * NO AIR REQUESTS. A resin printer uses no compressed air, so `/api/machine/air`
  * is deliberately not called. If the wash/cure station ever wants air, it asks
  * for its own - with its own token.
  *
- * WHEN IT SENDS - and the honest limit.
- * Heartbeats go out on state CHANGES (print started, finished, cancelled, dry
- * VAT) plus a slow idle tick, and every one of them is sent from a point where
- * the firmware already does network work safely.
+ * WHEN IT SENDS. Every 10 s, exactly as the air station asks, INCLUDING during
+ * a print - and without touching print timing, because the sending runs on the
+ * other CPU core.
  *
- * They do NOT go out every 10 s during a print, and that is on purpose:
- * network_loop() is dormant while printing (its own comment says so - the
- * exposure path only services network_service_http()), and the only way to beat
- * a 10 s drum mid-print would be to put a blocking request inside the layer
- * loop. On a single-threaded board that also drives UV exposure and Z motion,
- * that is how you get banded layers. The air station marks presence stale after
- * 30 s, so a printer mid-print will read "busy (stale)" rather than "busy".
+ * Why a task and not the loop. The print loop does open network windows mid-
+ * print (network_service_window(160) between layers), but 160 ms is the budget
+ * and a blocking HTTP round trip to an unreachable host costs its full timeout.
+ * Ten times over budget, on the same thread that drives UV exposure and Z
+ * motion, is how you get banded layers.
  *
- * That trade is deliberate: a correct roster entry is not worth a ruined print.
- * Making it beat properly means finding the real inter-layer gap and measuring
- * layer timing on hardware before and after - a change that belongs behind the
- * hardware gate, not in the same commit as the feature.
+ * So the HTTP lives in its own FreeRTOS task pinned to core 0 - the core Arduino
+ * does NOT run loop() on. It blocks there as long as it likes and the print loop
+ * never waits for it. The two sides share only a small struct behind a mutex:
+ * the print loop writes a state word (no allocation, no network), the task reads
+ * it and reports. Nothing the task does can stall a layer.
+ *
+ * Core 0 also hosts the Wi-Fi driver, which is why this task is low priority and
+ * sleeps between beats - it yields to the radio rather than competing with it.
  */
 
 #ifndef ENABLE_NETWORK
@@ -60,16 +65,16 @@
 // tight (see the notify path's preview-cache dance in TinyMakerTelegram.ino).
 // The token therefore never leaves the LAN - do not point shopHost at anything
 // off the local network.
+// host/token are passed in, never read from the globals here: this runs on the
+// shop task while the web handler may be rewriting those Strings on the other
+// core, and a String reallocated under a reader is a crash, not a glitch.
 static bool shopHttp(const char *method, const char *path, const String &body,
-                     String &out, String &error, bool sendToken = true) {
+                     String &out, String &error,
+                     const String &host, const String &token) {
   if (WiFi.status() != WL_CONNECTED) { error = "WiFi is not connected"; return false; }
-  if (shopHost.length() == 0)        { error = "no air station address set"; return false; }
-  if (sendToken && shopToken.length() == 0) {
-    error = "not paired with the air station";
-    return false;
-  }
+  if (host.length() == 0) { error = "no air station address set"; return false; }
 
-  String url = "http://" + shopHost + path;
+  String url = "http://" + host + path;
   HTTPClient http;
   WiFiClient net;
   if (!http.begin(net, url)) { error = "could not start the request"; return false; }
@@ -79,7 +84,7 @@ static bool shopHttp(const char *method, const char *path, const String &body,
   // one. Same lesson as the OTA check (auditas 08-22).
   http.setConnectTimeout(1500);
   http.setTimeout(1500);
-  if (sendToken) http.addHeader("Authorization", "Bearer " + shopToken);
+  if (token.length()) http.addHeader("Authorization", "Bearer " + token);
   if (body.length()) http.addHeader("Content-Type", "application/json");
 
   int code = (strcmp(method, "GET") == 0) ? http.GET() : http.POST(body);
@@ -95,6 +100,20 @@ static bool shopHttp(const char *method, const char *path, const String &body,
   return true;
 }
 
+// ---- Cross-core shared state ----------------------------------------------
+//
+// Touched by two threads: the print loop (writes the state word) and the shop
+// task on core 0 (reads it, writes the result). Everything here is guarded -
+// an Arduino String reallocated under a reader on the other core is a crash,
+// not a glitch.
+static SemaphoreHandle_t shopMux = nullptr;
+static TaskHandle_t      shopTask = nullptr;
+static char              shopWantState[8] = "idle";   // what we should be reporting
+static volatile bool     shopStateDirty = false;      // send now, do not wait for the tick
+
+#define SHOP_LOCK()   do { if (shopMux) xSemaphoreTake(shopMux, portMAX_DELAY); } while (0)
+#define SHOP_UNLOCK() do { if (shopMux) xSemaphoreGive(shopMux); } while (0)
+
 // Remembered so the dashboard can say what happened instead of looking healthy
 // while nothing arrives (same reasoning as the #88 notify status).
 bool     shopLastTried = false;
@@ -103,7 +122,10 @@ uint32_t shopLastAtMs  = 0;
 char     shopLastReason[64] = {0};
 char     shopLastState[8]   = {0};
 
+// Called from the shop task. Locked: the dashboard reads these from the loop
+// thread while building config JSON.
 static void shopRemember(bool ok, const String &error, const char *state) {
+  SHOP_LOCK();
   shopLastTried = true;
   shopLastOk    = ok;
   shopLastAtMs  = millis();
@@ -114,6 +136,7 @@ static void shopRemember(bool ok, const String &error, const char *state) {
     strncpy(shopLastReason, error.c_str(), sizeof(shopLastReason) - 1);
     shopLastReason[sizeof(shopLastReason) - 1] = 0;
   }
+  SHOP_UNLOCK();
 }
 
 // ---- Who are we actually talking to? --------------------------------------
@@ -145,20 +168,44 @@ static String shopJsonStr(const String &json, const char *key) {
 
 static void shopForgetVerification() { shopVerified = false; shopVerifiedAt = 0; }
 
-static bool shopVerifyStation(String &error) {
+// One locked copy per beat. Everything after this point works on the copies.
+static void shopSnapshot(String &host, String &token, String &devId) {
+  SHOP_LOCK();
+  host  = shopHost;
+  token = shopToken;
+  devId = shopDeviceId;
+  SHOP_UNLOCK();
+}
+
+// The writers. Settings form and backup restore go through here so the task
+// never sees a String mid-reallocation.
+void shopSetConfig(bool en, const String &host, const String &token,
+                   const String &devId) {
+  SHOP_LOCK();
+  shopEnabled  = en;
+  shopHost     = host;
+  shopToken    = token;
+  shopDeviceId = devId;
+  SHOP_UNLOCK();
+  shopForgetVerification();   // new address or new station = prove it again
+}
+
+static bool shopVerifyStation(const String &host, const String &token,
+                              const String &devId, String &error) {
   // Re-check every 10 minutes: long enough to cost nothing, short enough that
   // a station swapped underneath us is noticed while the shop is still open.
   if (shopVerified && shopVerifiedAt && (uint32_t)(millis() - shopVerifiedAt) < 600000UL)
     return true;
-  if (shopDeviceId.length() == 0) {
+  if (devId.length() == 0) {
     error = "no expected air station ID saved - pair the printer again";
     return false;
   }
   String out;
-  if (!shopHttp("GET", "/api/info", "", out, error, /*sendToken=*/false)) return false;
+  // No token on this one - we do not yet know who is answering.
+  if (!shopHttp("GET", "/api/info", "", out, error, host, "")) return false;
   String got = shopJsonStr(out, "device_id");
   if (got.length() == 0) { error = "that address is not an air station"; return false; }
-  if (got != shopDeviceId) {
+  if (got != devId) {
     // Deliberately does NOT name the ID we expected - the message reaches a
     // browser, and the point is to not leak our side of the pairing.
     error = "a different air station answered - refusing to send our token";
@@ -173,25 +220,35 @@ static bool shopVerifyStation(String &error) {
 // state: "idle" | "busy" | "fault" | "unknown" - the air station accepts no
 // others and answers 400 for anything else.
 bool shopHeartbeat(const char *state, String &error) {
-  if (!shopVerifyStation(error)) return false;   // identity BEFORE credential
+  String host, token, devId;
+  shopSnapshot(host, token, devId);
+  if (token.length() == 0) { error = "not paired with the air station"; return false; }
+  if (!shopVerifyStation(host, token, devId, error)) return false;  // identity BEFORE credential
   String out;
   String body = String("{\"state\":\"") + state + "\"}";
-  bool ok = shopHttp("POST", "/api/machine/heartbeat", body, out, error);
+  bool ok = shopHttp("POST", "/api/machine/heartbeat", body, out, error, host, token);
   // A refused token means the pairing is gone or we are at the wrong station:
   // re-verify next time rather than retrying with a credential that failed.
   if (!ok) shopForgetVerification();
   return ok;
 }
 
-// Best-effort: a failure is remembered and then swallowed. A print must never
-// stall because the compressor is off - exactly the rule the chat channels
-// already follow.
+// ---- The only thing the print loop calls -----------------------------------
+//
+// Writes one word and returns. No network, no allocation, no waiting: safe to
+// call from anywhere in the print flow, including between layers.
 void shopReport(const char *state) {
   if (!shopEnabled) return;
-  String error;
-  bool ok = shopHeartbeat(state, error);
-  shopRemember(ok, error, state);
-  if (!ok) DBG("Shop heartbeat (%s) failed: %s\n", state, error.c_str());
+  SHOP_LOCK();
+  bool changed = strncmp(shopWantState, state, sizeof(shopWantState)) != 0;
+  strncpy(shopWantState, state, sizeof(shopWantState) - 1);
+  shopWantState[sizeof(shopWantState) - 1] = 0;
+  SHOP_UNLOCK();
+  // A state CHANGE is news - do not make the shop wait up to 10 s for it.
+  if (changed) {
+    shopStateDirty = true;
+    if (shopTask) xTaskNotifyGive(shopTask);
+  }
 }
 
 // Hooks called from the print flow. Named for the event, not the state, so the
@@ -201,22 +258,57 @@ void shopNotifyPrintFinished() { shopReport("idle"); }
 void shopNotifyPrintCanceled() { shopReport("idle"); }
 void shopNotifyFault()         { shopReport("fault"); }
 
-// Idle tick from network_loop(). network_loop() does not run during a print, so
-// this can never land inside a layer - that is the whole reason it lives here
-// and not on a timer.
+// ---- The task, on core 0 ---------------------------------------------------
+//
+// Blocks freely: nothing on the print path waits for it.
+static void shopTaskFn(void *) {
+  // Let Wi-Fi and the first screen settle before the first beat.
+  vTaskDelay(pdMS_TO_TICKS(5000));
+  uint32_t failStreak = 0;
+  for (;;) {
+    // 10 s is the cadence the air station documents (presence goes stale at
+    // 30 s). After repeated failures back off to 60 s: a compressor that is
+    // switched off should not cost a connect attempt every 10 s all night.
+    uint32_t waitMs = (failStreak >= 3) ? 60000 : 10000;
+    // Wake early when the print flow reports a new state.
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(waitMs));
+
+    if (!shopEnabled) { failStreak = 0; continue; }
+
+    char state[8];
+    SHOP_LOCK();
+    strncpy(state, shopWantState, sizeof(state));
+    state[sizeof(state) - 1] = 0;
+    SHOP_UNLOCK();
+    shopStateDirty = false;
+
+    String error;
+    bool ok = shopHeartbeat(state, error);
+    shopRemember(ok, error, state);
+    if (ok) failStreak = 0;
+    else {
+      if (failStreak < 1000) failStreak++;
+      DBG("Shop heartbeat (%s) failed: %s\n", state, error.c_str());
+    }
+  }
+}
+
+// Started once from network_loop(). Creating it lazily keeps the task out of
+// the network-free build and off boards where Shop Network was never turned on.
 void shopLoop() {
-  if (!shopEnabled || printerBusy()) return;
-  static uint32_t last = 0;
-  // 10 s is the cadence the air station documents; presence goes stale at 30 s.
-  if (last != 0 && (uint32_t)(millis() - last) < 10000UL) return;
-  last = millis();
-  shopReport("idle");
+  if (!shopEnabled || shopTask) return;
+  if (!shopMux) shopMux = xSemaphoreCreateMutex();
+  if (!shopMux) return;
+  // Core 0: Arduino runs loop() on core 1, so nothing this task does can land
+  // inside a layer. Priority 1 - below the Wi-Fi driver it shares the core with.
+  xTaskCreatePinnedToCore(shopTaskFn, "tmshop", 4096, nullptr, 1, &shopTask, 0);
 }
 
 // Appended to configJson(). The token is never sent to the browser - only
 // whether one is set, and its last 4 characters, so a person can tell two
 // tokens apart without the page ever holding a credential.
 String tinymakerShopConfigJson() {
+  SHOP_LOCK();   // the shop task writes these from core 0
   String out = ",\"shopEnabled\":";
   out += shopEnabled ? "true" : "false";
   out += ",\"shopHost\":\"";
@@ -235,6 +327,7 @@ String tinymakerShopConfigJson() {
   out += shopDeviceId.length() > 0 ? "true" : "false";
   out += ",\"shopVerified\":";
   out += shopVerified ? "true" : "false";
+  SHOP_UNLOCK();
   return out;
 }
 

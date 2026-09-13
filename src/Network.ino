@@ -1823,16 +1823,19 @@ void applyConfigRequest() {
     // formCheck is the project's checkbox helper (an unchecked box sends
     // nothing at all, so a plain hasArg would read as "off" on every partial
     // post - see formFullPost).
-    shopEnabled = wifiEnabled && formCheck("shop_enabled", shopEnabled);
-    shopHost = formString("shop_host", shopHost, 64);
-    shopHost.trim();
+    bool shopEn = wifiEnabled && formCheck("shop_enabled", shopEnabled);
+    String shopHostNew = formString("shop_host", shopHost, 64);
+    shopHostNew.trim();
     String shopTok = formString("shop_token", "", 128);
     shopTok.trim();
-    if (shopTok.length()) shopToken = shopTok;   // blank = keep the stored one
+    if (shopTok.length() == 0) shopTok = shopToken;   // blank = keep the stored one
     // Not a secret - it is the station's public identity - but it is what we
     // check BEFORE handing over the token, so it is saved next to it.
-    shopDeviceId = formString("shop_device_id", shopDeviceId, 64);
-    shopDeviceId.trim();
+    String shopDevNew = formString("shop_device_id", shopDeviceId, 64);
+    shopDevNew.trim();
+    // Through the setter, not straight onto the globals: the shop task reads
+    // those Strings from the other core (TinyMakerShop.ino).
+    shopSetConfig(shopEn, shopHostNew, shopTok, shopDevNew);
   }
 
   savePrintSettings();

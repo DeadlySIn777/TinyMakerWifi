@@ -27,33 +27,43 @@ interfaces and station reconnection. In this firmware that job already belongs
 to WiFiManager and the dashboard's captive portal. Two owners of the Wi-Fi
 driver is not a configuration problem, it is a rewrite.
 
-## Why that turns out not to matter
+## But the printer CAN still join the mesh - as an ordinary station
 
-From the shop diagram:
+This is the part worth knowing: **you do not need Mesh-Lite on a node to be a
+leaf of the mesh.**
 
-```
-Shop router ─── Laptop / phone
-     ├───────── Le Potato
-Compressor ESP32 — mesh root + command gateway
-     ├── TinyMaker printer
-     └── Other ESP32 nodes
-```
+The root brings up its child-facing interface as a plain WPA2-PSK SoftAP
+(`mesh_network.cpp`: `softap.ap.authmode = WIFI_AUTH_WPA2_PSK`) sitting on an
+IoT-Bridge netif created with `esp_bridge_create_softap_netif(..., true, true)` -
+that is a DHCP server plus NAT onto the shop LAN.
 
-Mesh-Lite carries **normal IP traffic**. It is a way to extend Wi-Fi coverage,
-not a separate protocol the API rides on. The compressor's root is itself on the
-shop router, so every machine on the mesh and every machine on the router are on
-the same IP network.
+So any Wi-Fi station can associate to that SoftAP with the normal password, get
+a lease, and be routed to the rest of the shop. That is exactly what the printer
+is. **Point WiFiManager at the root's SoftAP SSID and password and the printer
+is on the mesh** - no firmware change, no Mesh-Lite, no vendor bytes, no derived
+AES key. Those belong to the mesh's own node-to-node layer, which a leaf that
+only speaks IP never participates in.
 
-That means the printer does not need to *run* the mesh to *talk to* the
-compressor. It joins the shop Wi-Fi as an ordinary client and reaches
-`/api/machine/heartbeat` over plain IP, exactly like the laptop does. Being on
-the mesh and running the mesh are different jobs.
+What it does not get: re-parenting and range extension. It attaches to the root
+and stays there. Your reference leaf nodes do not extend range either, so this
+matches them.
 
-**The one thing this gives up: range.** A leaf node exists to get coverage where
-the router does not reach. If the printer sits somewhere the shop Wi-Fi is weak,
-this approach does not help - and the fix is a repeater or an access point, not
-firmware. Where the printer stands is a question about your shop, not about the
-code.
+### The catch worth checking: NAT is one-way
+
+Behind the bridge's NAT, the printer can reach the compressor and the shop LAN,
+but traffic cannot easily come back the other way. **The dashboard at
+`tinymaker.local` may stop being reachable from your laptop**, because the
+laptop sits on the router side of the NAT and the printer sits behind it.
+
+That is a real trade, and it decides the setup:
+
+| Where the printer sits | Join | Why |
+|---|---|---|
+| Shop Wi-Fi reaches it | **the shop router** | dashboard stays reachable from any device; the compressor is reachable all the same, same IP network |
+| Shop Wi-Fi does not reach it | the root's SoftAP | connectivity at the cost of reaching the dashboard from the router side |
+
+Prefer the router when you have the choice. The mesh is for coverage, and
+coverage is the only thing it buys here.
 
 ## What is implemented
 
@@ -62,8 +72,8 @@ Everything in the protocol that does not require being a mesh node:
 | Spec step | Status |
 |---|---|
 | 1. Confirm board and framework | done - see above |
-| 2. Join mesh as a child | **not possible on this chip/framework** |
-| 3. Mesh encryption config | n/a - follows from 2 |
+| 2. Join mesh as a child | yes - as a plain station on the root's SoftAP; no Mesh-Lite needed (see above) |
+| 3. Mesh encryption config | n/a - a leaf that only speaks IP never joins the node-to-node layer |
 | 4. One Wi-Fi/event-loop init | unchanged; HTTP stays off the motion path |
 | 5. Own pairing identity | done - host, expected station ID, own token |
 | 6. Discover and verify | done, adapted - see below |
@@ -85,7 +95,7 @@ This matters more here than on a mesh node: a typed hostname can drift onto
 another box through a re-used DHCP lease or a stray mDNS answer, and without the
 check the printer would hand its credential to whatever answered.
 
-### Step 7, and its honest limit
+### Step 7, every 10 seconds - including mid-print
 
 Real states are reported, not `unknown`:
 
@@ -93,22 +103,33 @@ Real states are reported, not `unknown`:
 |---|---|
 | print started | `busy` |
 | print finished / cancelled | `idle` |
-| sitting idle | `idle` (slow tick) |
+| sitting idle | `idle` |
 
-**Heartbeats do not go out every 10 s during a print.** `network_loop()` is
-dormant while printing - the exposure path only services
-`network_service_http()` - so the only way to beat that drum mid-print is to put
-a blocking HTTP request inside the layer loop, on a single-threaded board that
-is simultaneously driving UV exposure and Z motion. That is how you get banded
-layers.
+The beat is a true 10 s, during prints as well, and a state change is sent
+immediately rather than waiting for the next tick. Presence never goes stale.
 
-Since the station marks presence stale after 30 s, a printer mid-print shows as
-**busy but stale**. That is the wrong-looking answer for the right reason: a
-correct roster entry is not worth a ruined print.
+**It does not run on the print loop.** The print loop does open network windows
+mid-print (`network_service_window(160)` between layers), but 160 ms is the
+budget and a blocking HTTP round trip to an unreachable host costs its whole
+timeout - ten times over, on the thread that also drives UV exposure and Z
+motion.
 
-Fixing it properly means finding the real inter-layer gap and measuring layer
-timing on hardware before and after. That is a separate change behind the
-hardware gate, not a line in this one.
+So the HTTP lives in its own FreeRTOS task pinned to **core 0**, the core
+Arduino does not run `loop()` on. It blocks there for as long as it likes and
+nothing on the print path ever waits for it. The two sides share one small
+struct behind a mutex: the print flow writes a state word - no allocation, no
+network, safe from anywhere - and the task reads it and reports.
+
+Two details that make it well-behaved: the task is low priority, because core 0
+also hosts the Wi-Fi driver and it should yield to the radio rather than race
+it; and after three consecutive failures the interval backs off to 60 s, so a
+compressor that is switched off does not cost a connect attempt every 10 s all
+night.
+
+Config is read through one locked snapshot per beat. The settings form and
+backup restore write through `shopSetConfig()` rather than touching the globals,
+because an Arduino `String` reallocated under a reader on the other core is a
+crash, not a glitch.
 
 ## Setting it up
 

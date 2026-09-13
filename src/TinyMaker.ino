@@ -837,6 +837,7 @@ void shopNotifyPrintStarted();  // Shop Network hooks (TinyMakerShop.ino)
 void shopNotifyPrintFinished();
 void shopNotifyPrintCanceled();
 void shopLoop();
+void shopSetConfig(bool en, const String &host, const String &token, const String &devId);
 void tgNotifyLowResinSoon(float ml, int minsToStop);   // 0.17 #40: pre-warn before low-resin stop
 void screenBootUpdatePrompt();
 void screenBootUpdateDisablePrompt();
@@ -1409,10 +1410,18 @@ void applyConfigBackup(const String &j) {
   waApiKey = backupStr(j, "waApiKey", waApiKey);
   dcEnabled = wifiEnabled && backupBool(j, "dcEnabled", dcEnabled);
   dcWebhook = backupStr(j, "dcWebhook", dcWebhook);
-  shopEnabled = wifiEnabled && backupBool(j, "shopEnabled", shopEnabled);
-  shopHost    = backupStr(j, "shopHost", shopHost);
-  shopToken   = backupStr(j, "shopToken", shopToken);
-  shopDeviceId = backupStr(j, "shopDeviceId", shopDeviceId);
+  {
+    // Same reason as the settings form: the shop task may be reading these.
+    bool en = wifiEnabled && backupBool(j, "shopEnabled", shopEnabled);
+    String h = backupStr(j, "shopHost", shopHost);
+    String t = backupStr(j, "shopToken", shopToken);
+    String d = backupStr(j, "shopDeviceId", shopDeviceId);
+#if ENABLE_NETWORK
+    shopSetConfig(en, h, t, d);
+#else
+    shopEnabled = en; shopHost = h; shopToken = t; shopDeviceId = d;
+#endif
+  }
   if (tgEnabled) { waEnabled = false; dcEnabled = false; }  // one channel at a time
   else if (waEnabled) dcEnabled = false;
   connectEnabled = wifiEnabled && backupBool(j, "connectEnabled", connectEnabled);
