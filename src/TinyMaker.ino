@@ -388,6 +388,18 @@ bool shopEnabled = false;           // report our state to the shop's air statio
 String shopHost = "";               // "air.local" or an IP - LAN only, plain HTTP
 String shopToken = "";              // machine token (secret - never echoed to browser)
 String shopDeviceId = "";           // the air station we paired with (checked before the token is sent)
+// Which network the printer joins. 0 = the shop router (normal), 1 = the air
+// station's own SoftAP, for a printer parked out of router range.
+//
+// The shop AP lives HERE and never in the ESP32's own saved-network slot. That
+// slot holds exactly one network, WiFiManager owns it, and the single bare
+// WiFi.begin() in this firmware reads it. Writing the shop AP there would
+// overwrite the router password with no way back except a USB cable
+// (pre-mortem 09-13, killer 1). Connecting to the shop AP therefore always
+// happens with WiFi.persistent(false) around it.
+uint8_t netMode = 0;                // 0 = router, 1 = shop mesh SoftAP
+String shopApSsid = "";             // the air station's SoftAP name
+String shopApPass = "";             // its WPA2 password (secret - never echoed)
 // 0.17 #88: was the last chat message actually delivered? The send result was
 // computed and thrown away, which is why the #40 heap bug could kill mid-print
 // notifications for weeks while an idle "Send test" kept working. A fixed char
@@ -482,6 +494,9 @@ void loadDeviceConfig() {
   shopHost    = sysPrefs.getString("shopHost", "");
   shopToken   = sysPrefs.getString("shopToken", "");
   shopDeviceId = sysPrefs.getString("shopDevId", "");
+  netMode     = sysPrefs.getUChar("netMode", 0);
+  shopApSsid  = sysPrefs.getString("shopApSsid", "");
+  shopApPass  = sysPrefs.getString("shopApPass", "");
   if (tgEnabled) { waEnabled = false; dcEnabled = false; }  // one channel at a time
   else if (waEnabled) dcEnabled = false;
   vatRemainingMl = sysPrefs.getFloat("vatRemMl", -1);
@@ -581,6 +596,9 @@ void saveDeviceConfig() {
   sysPrefs.putString("shopHost", shopHost);
   sysPrefs.putString("shopToken", shopToken);
   sysPrefs.putString("shopDevId", shopDeviceId);
+  sysPrefs.putUChar("netMode", netMode);
+  sysPrefs.putString("shopApSsid", shopApSsid);
+  sysPrefs.putString("shopApPass", shopApPass);
   sysPrefs.putBool("lowResinOn", lowResinPauseEnabled);
   sysPrefs.putUChar("lowResinMl", lowResinThresholdMl);
   sysPrefs.putUChar("lowResinWarn", lowResinWarnMl);   // 0.17 #40
@@ -1701,6 +1719,19 @@ void resetEverythingToFactory() {
   sysPrefs.putUShort("prevRegDs", 0);
   sysPrefs.putUChar("prevBaseS", 0);
   sysPrefs.end();
+#if ENABLE_NETWORK
+  /* Wi-Fi credentials were the one thing "reset to factory" never touched
+     (pre-mortem 09-13, killer 5). It set wifiEnabled = true and stopped, so a
+     printer that was sold, lent or returned carried the owner's shop Wi-Fi
+     password out of the building - and the promise on the screen was simply
+     untrue. wifiEraseCredentials() is the single function both recovery
+     gestures already funnel through, so calling it here covers the shop AP and
+     the network choice for free.
+     Consequence, deliberately accepted: after a factory reset the printer comes
+     up in its captive portal, exactly as it does on a fresh flash. That is what
+     the words mean. */
+  wifiEraseCredentials();
+#endif
   // saveDeviceConfig() - kvieciancio reikalas (LCD ir web kviecia po viena karta);
   // jis irgi irasys resinProf, tad cia to nekartojam.
 }

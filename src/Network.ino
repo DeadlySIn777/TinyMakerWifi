@@ -1679,6 +1679,12 @@ String configJson() {
   out += tinymakerWhatsAppConfigJson();
   out += tinymakerDiscordConfigJson();
   out += tinymakerShopConfigJson();
+  out += ",\"netMode\":";
+  out += String((int)netMode);
+  out += ",\"shopApSsid\":\"";
+  out += jsonEscape(shopApSsid);
+  out += "\",\"shopApPassSet\":";
+  out += shopApPass.length() > 0 ? "true" : "false";
   return out;
 }
 
@@ -1836,6 +1842,27 @@ void applyConfigRequest() {
     // Through the setter, not straight onto the globals: the shop task reads
     // those Strings from the other core (TinyMakerShop.ino).
     shopSetConfig(shopEn, shopHostNew, shopTok, shopDevNew);
+
+    /* Which network to join. SAVED ONLY - never a live switch. The connect
+       happens once at boot, so this takes effect on the next reboot and can
+       never re-point the radio while the plate is moving (pre-mortem 09-13,
+       killer 2). There is deliberately no automatic failover: one radio cannot
+       honestly test two networks, and every cheap test is answered by the wrong
+       one (killer 4). The person chooses, once.
+       Recovery is unchanged: hold Back at power-on, or Reset WiFi, clears this
+       along with everything else - see wifiEraseCredentials(). */
+    uint8_t nmWanted = (uint8_t)formLong("net_mode", netMode, 0, 1);
+    String apSsid = formString("shop_ap_ssid", shopApSsid, 32);
+    apSsid.trim();
+    String apPass = formString("shop_ap_pass", "", 64);
+    apPass.trim();
+    if (apPass.length() == 0) apPass = shopApPass;   // blank = keep the stored one
+    // Refuse a mode we cannot actually carry out, instead of booting into a
+    // portal and looking broken.
+    if (nmWanted == 1 && apSsid.length() == 0) nmWanted = 0;
+    netMode    = nmWanted;
+    shopApSsid = apSsid;
+    shopApPass = apPass;
   }
 
   savePrintSettings();
@@ -3396,7 +3423,14 @@ void drawWifiBadge() {
     gfx2->fillCircle(136, 8, 3, cloudColor);
     gfx2->fillRect(126, 8, 12, 3, cloudColor);
   }
-  uint16_t c = (WiFi.status() == WL_CONNECTED) ? GREEN : DARKGREY;
+  /* Green = the router, and the dashboard works. ORANGE = connected, but via
+     the air station's SoftAP, where the dashboard is NOT reachable from a
+     laptop on the router side. Without this the two states look identical -
+     full bars, strong signal, everything "fine" - and the person spends a
+     weekend blaming the browser (pre-mortem 09-13, killer 3). A degraded state
+     must never render the same as a healthy one. */
+  uint16_t c = (WiFi.status() != WL_CONNECTED) ? DARKGREY
+                                               : (netMode == 1 ? ORANGE : GREEN);
   gfx2->fillRect(148, 8, 2, 3, c);   // short bar
   gfx2->fillRect(151, 5, 2, 6, c);   // medium bar
   gfx2->fillRect(154, 2, 2, 9, c);   // tall bar (ends 2 px from the edge)
@@ -4819,15 +4853,33 @@ void network_setup() {
   wifi_config_t conf;
   esp_wifi_get_config(WIFI_IF_STA, &conf);
   bool hasSSID = strlen((const char*)conf.sta.ssid) > 0;
-  bool saved = hasSSID && !forcePortal;
+  // The shop AP is a network we can join even when the driver slot is empty,
+  // so it counts as "we have credentials" - otherwise a printer set to shop
+  // mode would open the portal on every boot.
+  bool hasShopAp = (netMode == 1) && shopApSsid.length() > 0;
+  bool saved = (hasSSID || hasShopAp) && !forcePortal;
 
   if (saved) {
     // Credentials stored in NVS: try to connect ourselves with a visible
     // 15 s progress bar. NO config portal on failure - the printer may
     // simply be away from its home network; boot into offline mode instead.
     WiFi.mode(WIFI_STA);
-    WiFi.begin();
-    netWifiBarsStart("WiFi connecting...");
+    if (hasShopAp) {
+      /* Shop mesh mode. persistent(false) is the whole safety of this branch:
+         without it the ESP32 writes these credentials into its single saved-
+         network slot and the router password is gone for good (pre-mortem
+         09-13, killer 1). The router stays in that slot, untouched, so
+         switching back to router mode is just a reboot - no retyping, no USB.
+         Deliberately no scan and no fallback-to-the-other-network here: one
+         radio cannot honestly test two networks, and every cheap test is
+         answered by the wrong one. The choice is the person's, made once. */
+      WiFi.persistent(false);
+      WiFi.begin(shopApSsid.c_str(), shopApPass.c_str());
+      WiFi.persistent(true);
+    } else {
+      WiFi.begin();          // router: credentials live in the driver's slot
+    }
+    netWifiBarsStart(hasShopAp ? "Shop mesh connecting..." : "WiFi connecting...");
     const int steps = 60; // 60 x 250 ms = 15 s
     for (int i = 0; i < steps && WiFi.status() != WL_CONNECTED; i++) {
       netWifiBarsPhase(1 + (i % 4), false);
@@ -5312,6 +5364,19 @@ void screenWifiResetConfirm() {
 // resetSettings() alone is UNRELIABLE on Arduino core 2.0.x - the NVS
 // entry sometimes survives and getWiFiIsSaved() stays true after reboot.
 void wifiEraseCredentials() {
+  /* Both recovery gestures (hold Back at power-on, and Reset WiFi in the menu)
+     funnel through here, and so does resetEverythingToFactory(). Everything the
+     connect path reads must be cleared here or "Reset WiFi" stops resetting
+     Wi-Fi and the person stops looking after the first attempt (pre-mortem
+     09-13, killer 5). That now includes the shop AP and the network choice. */
+  netMode = 0;
+  shopApSsid = "";
+  shopApPass = "";
+  sysPrefs.begin("tinymaker", false);
+  sysPrefs.putUChar("netMode", 0);
+  sysPrefs.putString("shopApSsid", "");
+  sysPrefs.putString("shopApPass", "");
+  sysPrefs.end();
   WiFi.mode(WIFI_STA);
   WiFi.persistent(true);
   WiFi.disconnect(true, true);  // wifioff = true, eraseap = true

@@ -1040,8 +1040,21 @@ static void drawSaverBlock(uint8_t pos, const char *stateBig, const String &nums
 void drawIdleScreen(uint8_t pos){
   // Idle keeps the IP - it is the one place a fresh user discovers where the
   // dashboard lives. The PRINT saver shows layers instead (V pick 07-22).
-  drawSaverBlock(pos, "Idle", "",
-                 WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String(""));
+  String line;
+#if ENABLE_NETWORK
+  if (WiFi.status() == WL_CONNECTED) {
+    /* On the air station's SoftAP the printer sits behind that bridge's NAT:
+       it can reach out, but a laptop on the router side cannot reach in. An IP
+       address here would be an address nobody can open, printed in the one
+       place a new user goes to find the dashboard (pre-mortem 09-13, killer 3).
+       Say what is true instead. */
+    line = (netMode == 1) ? String("Shop link - no dashboard")
+                          : WiFi.localIP().toString();
+  }
+#else
+  if (WiFi.status() == WL_CONNECTED) line = WiFi.localIP().toString();
+#endif
+  drawSaverBlock(pos, "Idle", "", line);
 }
 
 // 0-22: printing saver - "Printing" + "47% 1h23m" (percent + time left),

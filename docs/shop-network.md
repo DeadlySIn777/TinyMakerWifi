@@ -50,20 +50,52 @@ matches them.
 
 ### The catch worth checking: NAT is one-way
 
-Behind the bridge's NAT, the printer can reach the compressor and the shop LAN,
-but traffic cannot easily come back the other way. **The dashboard at
-`tinymaker.local` may stop being reachable from your laptop**, because the
-laptop sits on the router side of the NAT and the printer sits behind it.
+Behind the bridge's NAT the printer can reach the compressor and the shop LAN,
+but traffic cannot come back the other way. **The dashboard at `tinymaker.local`
+is not reachable from your laptop** while the printer is on the shop AP, and
+neither is PrusaSlicer's "Send to printer".
 
-That is a real trade, and it decides the setup:
+So this is a per-installation choice, not a thing to leave on:
 
-| Where the printer sits | Join | Why |
+| Where the printer sits | Setting | Why |
 |---|---|---|
-| Shop Wi-Fi reaches it | **the shop router** | dashboard stays reachable from any device; the compressor is reachable all the same, same IP network |
-| Shop Wi-Fi does not reach it | the root's SoftAP | connectivity at the cost of reaching the dashboard from the router side |
+| Shop Wi-Fi reaches it | **Router** (default) | dashboard works from any device; the compressor is reachable all the same |
+| Shop Wi-Fi does not reach it | **Shop mesh** | stays online at the cost of the dashboard from the router side |
 
-Prefer the router when you have the choice. The mesh is for coverage, and
-coverage is the only thing it buys here.
+### Choosing it
+
+**Settings → Network → Router / Shop mesh**, plus the air station's SoftAP name
+and password. Saved only - it takes effect at the **next boot**. There is no
+live switch and no automatic failover, on purpose:
+
+- One radio cannot honestly test two networks. The cheap "is my router back?"
+  probe is answered by the compressor, from the wrong side, every time. The
+  honest test deafens the radio for seconds - and `network_loop()` runs every
+  300 ms through every lift and lower (`Motor.ino:200`, `Motor.ino:310`), so
+  that lands inside a curing layer.
+- Automatic failover would also have to store the fallback in the ESP32's single
+  saved-network slot, overwriting the router password with no way back but a USB
+  cable. A person choosing once has neither problem.
+
+### You can tell which one you are on
+
+A degraded state must never look like a healthy one, so:
+
+- the Wi-Fi bars on the menu turn **orange** on the shop mesh (green = router)
+- the idle screen prints **"Shop link - no dashboard"** instead of an address
+  that nobody can open
+
+### Getting back
+
+Unchanged, and it now really works: **hold Back at power-on**, or **Reset WiFi**
+in the menu. Both funnel through `wifiEraseCredentials()`, which clears the shop
+AP and the network choice along with the router credentials, and the captive
+portal comes back.
+
+The shop AP password is a Wi-Fi password for a network that is not yours alone.
+It is never echoed to the browser (the dashboard sees only whether one is set),
+and **a factory reset now erases it** - which it did not before, so a printer
+sold or lent used to carry it out of the building.
 
 ## What is implemented
 
@@ -72,7 +104,7 @@ Everything in the protocol that does not require being a mesh node:
 | Spec step | Status |
 |---|---|
 | 1. Confirm board and framework | done - see above |
-| 2. Join mesh as a child | yes - as a plain station on the root's SoftAP; no Mesh-Lite needed (see above) |
+| 2. Join mesh as a child | yes - a saved Settings choice; plain station on the root's SoftAP, no Mesh-Lite |
 | 3. Mesh encryption config | n/a - a leaf that only speaks IP never joins the node-to-node layer |
 | 4. One Wi-Fi/event-loop init | unchanged; HTTP stays off the motion path |
 | 5. Own pairing identity | done - host, expected station ID, own token |
