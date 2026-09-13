@@ -6608,7 +6608,7 @@ $('cfgConnectAutoBackup').addEventListener('change',async()=>{
 });
 $('connectBackupDownloadButton').addEventListener('click',async()=>{try{const r=await fetch('/api/connect/backup',{cache:'no-store'});if(!r.ok){let j={};try{j=await r.json();}catch(e){}throw new Error(j.error||('backup failed (HTTP '+r.status+')'));}const b=await r.blob();const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='tinymaker-connect-backup.json';a.click();URL.revokeObjectURL(a.href);msg('Connect backup downloaded.');}catch(e){msg(e.message,true);loadConfig();}});
 $('connectBackupRestoreButton').addEventListener('click',async()=>{if(!await uiConfirm('Restore all settings from the TinyMaker Connect backup? Current settings will be overwritten.',{danger:true}))return;try{await api('/api/connect/restore',{method:'POST'},12000);msg('Settings restored from Connect backup.');await refreshAfterSettingsSwap();refreshStatus();}catch(e){msg(e.message,true);loadConfig();}});
-$('configDefaultsButton').addEventListener('click',async()=>{const keep=$('configDefaultsButton').textContent.indexOf('integrations')>=0;if(!await uiConfirm((keep?'Reset config to defaults and keep integration settings?':'Reset config to defaults?')+' The active resin goes back to Slow draft, its edit is removed, and the resin calibration (your weighings) is erased.',{danger:true}))return;try{await api('/api/config/defaults',{method:'POST'});msg(keep?'Defaults restored. Integration settings kept.':'Defaults restored.');await refreshAfterSettingsSwap();}catch(e){msg(e.message,true);}});
+$('configDefaultsButton').addEventListener('click',async()=>{const keep=$('configDefaultsButton').textContent.indexOf('integrations')>=0;if(!await uiConfirm((keep?'Reset config to defaults and keep integration settings?':'Reset config to defaults?')+' The active resin goes back to Slow draft, its edit is removed, and the resin calibration (your weighings) is erased. It ALSO erases the WiFi password and restarts the printer into its setup network - you will need to join TinyMaker-Setup and enter WiFi again.',{danger:true}))return;try{await api('/api/config/defaults',{method:'POST'});msg(keep?'Defaults restored. Integration settings kept.':'Defaults restored.');await refreshAfterSettingsSwap();}catch(e){msg(e.message,true);}});
 /* Tankio matuoklis: X g is Y ml. Rankenos buvo netycia istrintos perrasant
    kortele i dvi eilutes (auditor find, 08-11) - mygtukas liko negyvas. */
 /* Vaizdo jungiklis: perpiesiam is kesuotu sluoksniu, nieko neuzklausiant. */
@@ -8350,7 +8350,7 @@ window.__markToolInit=()=>{
    zetonas liks pilkas. */
 (function(){
   var el=document.getElementById('stateValue'); if(!el) return;
-  var MAP=[[/(print|cur|expos|homing|lift|retract|unpack|receiv|resum)/i,'live'],
+  var MAP=[[/(print|cur|expos|homing|lift|lower|drop|rais|retract|unpack|receiv|resum|refill|clean|test)/i,'live'],
            [/paus/i,'paused'],
            [/(fail|error|stopp|abort)/i,'error'],
            [/(finish|done|complete)/i,'done']];

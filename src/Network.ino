@@ -2016,6 +2016,22 @@ void handleApiConfigDefaults() {
   resetWebConfigToDefaults();
   tinymakerConnectScheduleBackup();
   sendApiOk(configJson());
+  /* Since the factory reset also erases Wi-Fi credentials, this endpoint now
+     ends with the radio holding nothing. Left as it was, the browser saw the
+     connection die mid-reply and reported a FAILURE for an action that had in
+     fact succeeded - while the printer sat there with no network and no portal,
+     needing a power cycle and a walk to the machine.
+
+     Same shape as the WiFi-off path above (Network.ino:1889): reply first, give
+     the answer time to leave, then reboot. forcePortal makes the reboot come up
+     in the captive portal rather than a dead radio, so the way back is to join
+     TinyMaker-Setup - no cable, no LCD typing. The LCD reset already behaved
+     this way; only the browser button did not. */
+  netPrefs.begin("tinymaker", false);
+  netPrefs.putBool("forcePortal", true);
+  netPrefs.end();
+  delay(700);            // let the response reach the browser first
+  ESP.restart();
 }
 
 void handleApiConfigMqttDefaults() {
