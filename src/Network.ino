@@ -4865,17 +4865,32 @@ void network_setup() {
     // simply be away from its home network; boot into offline mode instead.
     WiFi.mode(WIFI_STA);
     if (hasShopAp) {
-      /* Shop mesh mode. persistent(false) is the whole safety of this branch:
-         without it the ESP32 writes these credentials into its single saved-
-         network slot and the router password is gone for good (pre-mortem
-         09-13, killer 1). The router stays in that slot, untouched, so
-         switching back to router mode is just a reboot - no retyping, no USB.
+      /* Shop mesh mode. Keeping these credentials OUT of the ESP32's single
+         saved-network slot is the whole safety of this branch: written there,
+         they overwrite the router password and it is gone for good (pre-mortem
+         09-13, killer 1).
+
+         WiFi.persistent(false) DOES NOT DO THAT HERE, despite reading as if it
+         does. On core 2.0.14 the flag is only consumed inside wifiLowLevelInit(),
+         behind `if(!lowLevelInitDone)` - see the core's own
+         libraries/WiFi/src/WiFiGeneric.cpp:658-695, where
+         esp_wifi_set_storage(WIFI_STORAGE_RAM) sits inside that first-init
+         block. By the time we get here the driver is long since initialised
+         (WiFi.mode(WIFI_STA) above, and WiFiManager before that), so the call is
+         a silent no-op and storage stays WIFI_STORAGE_FLASH. Verified against
+         the pinned core source, not assumed.
+
+         So set the storage mode directly. esp_wifi_set_storage() is an IDF call
+         that takes effect immediately on an initialised driver, and it is put
+         back to FLASH straight after so WiFiManager keeps persisting the router
+         credential the way it always has.
+
          Deliberately no scan and no fallback-to-the-other-network here: one
          radio cannot honestly test two networks, and every cheap test is
          answered by the wrong one. The choice is the person's, made once. */
-      WiFi.persistent(false);
+      esp_wifi_set_storage(WIFI_STORAGE_RAM);
       WiFi.begin(shopApSsid.c_str(), shopApPass.c_str());
-      WiFi.persistent(true);
+      esp_wifi_set_storage(WIFI_STORAGE_FLASH);
     } else {
       WiFi.begin();          // router: credentials live in the driver's slot
     }
