@@ -377,6 +377,9 @@ progress::-moz-progress-bar{background:var(--live)}
     </div>
     <div style='display:flex;gap:12px;align-items:center;flex-wrap:wrap'>
       <button id='vatRefillButton' class='button secondary' type='button' style='width:auto;flex:1 1 160px'>Set VAT full</button>
+      <button id='vatEmptyButton' class='button secondary' type='button'
+        title='Tell the printer the vat is empty - the resin counter had no way to say this'
+        style='width:auto;flex:1 1 160px'>Set VAT empty</button>
       <button id='dryRunToggle' class='button secondary' type='button'
         title='Run the motions without curing: the UV LEDs stay off'
         style='width:auto;flex:1 1 160px'>Dry run: off</button>
@@ -6931,6 +6934,7 @@ $('dryRunToggle').addEventListener('click',async()=>{
   }catch(e){msg(e.message,true);}
 });
 $('vatRefillButton').addEventListener('click',async()=>{if(!await uiConfirm('VAT filled full?',{cancel:'No',ok:'Yes'}))return;try{const r=await api('/api/vat/refilled',{method:'POST'});refreshStatus();}catch(e){msg(e.message,true);}});
+$('vatEmptyButton').addEventListener('click',async()=>{if(!await uiConfirm('Tell the printer the vat is empty? The resin counter goes to 0 ml.'))return;try{await api('/api/vat/empty',{method:'POST'});msg('Vat marked empty.');await refreshStatus();}catch(e){msg(e.message,true);}});
 $('cfgWifiEnabled').addEventListener('change',confirmNetworkToggle);
 $('cfgWebDashboardEnabled').addEventListener('change',confirmNetworkToggle);
 $('cfgMqttEnabled').addEventListener('change',updateMqttFields);

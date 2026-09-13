@@ -105,7 +105,14 @@ def convert_to_sl1(src, uvtools, workdir):
         die(f"could not run UVtools at {uvtools}")
     except subprocess.TimeoutExpired:
         die("UVtools took longer than 15 minutes - giving up")
-    if r.returncode != 0 or not os.path.isfile(out):
+    # Judge it by the FILE, not the exit code. UVtoolsCmd 6.2.0 returns 1 even
+    # on a completely successful convert (verified on 6.2.0: exit 1, and a valid
+    # 99 KB .sl1 sitting right there). Trusting the code meant every .ctb was
+    # reported as a failure while the conversion had actually worked.
+    #
+    # check_sl1() runs next and rejects anything that is not a ZIP of PNG layers,
+    # so a silently WRONG conversion still cannot reach the printer.
+    if not os.path.isfile(out) or os.path.getsize(out) == 0:
         detail = (r.stderr or r.stdout or "").strip()
         die("UVtools could not convert this file.\n"
             f"        command: {' '.join(cmd)}\n"

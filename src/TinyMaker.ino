@@ -988,6 +988,22 @@ float vatRemaining() {
 
 // "VAT refilled" action (LCD Advanced item / dashboard button / after refill
 // pause): bookkeeping restarts from a full VAT.
+/* The other half of "VAT refilled", and it was missing.
+   vatRemaining() clamps anything below zero straight back to a full vat, and
+   the only two ways to set the level were "refilled" (= full) or a weight that
+   needs the empty vat weighed first. So a printer with an EMPTY vat had no way
+   to say so, and went on reporting resin it does not have - which is the one
+   number the low-resin stop depends on.
+   lowResinNotified is set, not cleared: the person just told us the vat is
+   empty, so firing a "low resin!" alert at them about it is noise. A refill
+   re-arms it. */
+void vatMarkEmpty() {
+  vatRemainingMl = 0.0f;
+  lowResinNotified = true;
+  lowResinPreWarned = true;
+  saveVatRemaining();
+}
+
 void vatMarkRefilled() {
   vatRemainingMl = (float)Vat_Capacity_Ml;
   lowResinNotified = false;

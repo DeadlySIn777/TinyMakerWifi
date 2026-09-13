@@ -50,6 +50,34 @@ a half-written export is never sent.
 For `.ctb` and friends you also need [UVtools](https://github.com/sn4k3/UVtools)
 (free, open source). `.sl1` and `.zip` need nothing at all.
 
+### UVtools quirks, found by actually running it (v6.2.0)
+
+Two things that cost time if you meet them cold:
+
+- **`UVtoolsCmd` returns exit code 1 even when the conversion fully succeeds.**
+  Verified: exit 1, and a valid 99 KB `.sl1` written next to it. So `tm_send.py`
+  judges the result by the output FILE, not the exit code. `check_sl1()` still
+  runs afterwards and rejects anything that is not a ZIP of PNG layers, so a
+  silently wrong conversion cannot reach the printer.
+- **`ctb` is an ambiguous target.** Two encoders claim that extension (Chitubox
+  and CTBEncrypted), so `convert x.sl1 ctb out.ctb` fails and prints the list of
+  32 encoders. Use the strict encoder name - `Chitubox`. This only matters going
+  TOWARDS ctb; `sl1` is claimed by one encoder, which is the direction this tool
+  uses.
+
+Also worth knowing: a real `.sl1` needs **both** `config.ini` and
+`prusaslicer.ini` inside it. UVtools refuses one without the other
+("Malformed file: prusaslicer.ini is missing"). The printer is more forgiving -
+it takes any ZIP of PNGs - so a bare archive that the printer prints happily can
+still be unreadable to UVtools.
+
+### Verified end to end
+
+`.ctb` -> UVtools -> `.sl1` -> upload -> unpacked and printable on the machine.
+The test article was a cube sliced by PrusaSlicer 2.9.6 with the TinyMaker
+profile, converted to Chitubox format, then sent with
+`tm_send.py --describe`.
+
 ### Useful flags
 
 | Flag | What it does |

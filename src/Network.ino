@@ -2422,6 +2422,16 @@ void handleApiPrintStart() {
   sendApiOk("\"queued\":true");
 }
 
+// POST /api/vat/empty -> the vat is empty. Same shape and same gate as
+// /api/vat/refilled; see vatMarkEmpty() for why this exists.
+void handleApiVatEmpty() {
+  if (rejectIfWebControlOff()) return;
+  vatMarkEmpty();
+  String out = "\"vatRemainingMl\":";
+  out += String(vatRemaining(), 1);
+  sendApiOk(out);
+}
+
 void handleApiVatRefilled() {
   if (rejectIfWebControlOff()) return;
   vatMarkRefilled();
@@ -5075,6 +5085,7 @@ void network_setup() {
   server.on("/api/shop/test", HTTP_POST, handleApiShopTest);
   server.on("/api/print/start", HTTP_POST, handleApiPrintStart);
   server.on("/api/vat/refilled", HTTP_POST, handleApiVatRefilled);
+  server.on("/api/vat/empty", HTTP_POST, handleApiVatEmpty);
   server.on("/api/vat/weight", HTTP_POST, handleApiVatWeight);   // 0.17 0-16
   server.on("/api/resin/calibrate", HTTP_POST, handleApiResinCalibrate);   // R-cal 0.17
   server.on("/api/update", HTTP_GET, handleApiUpdateGet);
