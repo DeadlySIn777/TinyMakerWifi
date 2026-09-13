@@ -132,6 +132,78 @@ def check_sl1(path):
 
 
 # --------------------------------------------------------------------------
+# self-describing names
+# --------------------------------------------------------------------------
+
+# The printer keeps 40 characters and throws away everything that is not a
+# letter, a digit, "-" or "_" (safeModelName, src/Import.ino:71). So "0.05"
+# arrives as "005", and a long name loses its TAIL - which is where the date is.
+# That is why the model name is trimmed here rather than left to the firmware:
+# trimmed here, the reading survives; trimmed there, the timestamp is the first
+# thing to go.
+NAME_MAX = 40
+
+
+def _clean(v, default="x"):
+    out = "".join(c for c in str(v) if c.isalnum())
+    return out or default
+
+
+def sl1_settings(path):
+    """Pull layer height, exposure and printer from an .sl1's config.ini.
+
+    PrusaSlicer writes one; a bare ZIP of PNGs (which the printer also accepts)
+    does not. Missing values are not an error - the name just carries fewer
+    facts.
+    """
+    out = {}
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = [n for n in z.namelist() if n.lower().endswith("config.ini")]
+            if not names:
+                return out
+            for line in z.read(names[0]).decode("utf-8", "replace").splitlines():
+                if "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                out[k.strip()] = v.strip()
+    except (zipfile.BadZipFile, OSError):
+        pass
+    return out
+
+
+def describe_name(path):
+    """model_platform_layer_exposure_YYYY_MM_DD_HH_MM_SS, inside 40 chars.
+
+    The date is the file's own modification time - when it was sliced, which is
+    the fact worth keeping, not when it happened to be uploaded.
+    """
+    cfg = sl1_settings(path)
+    model = os.path.splitext(os.path.basename(path))[0]
+    model = "".join(c for c in model if c.isalnum() or c in "-_") or "Model"
+
+    platform = _clean(cfg.get("printerModel") or cfg.get("printerProfile") or "", "")
+    layer = _clean(cfg.get("layerHeight", ""), "")
+    expo = _clean(cfg.get("expTime", ""), "")
+
+    stamp = time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime(os.path.getmtime(path)))
+
+    tail = ""
+    for part in (platform, layer, expo):
+        if part:
+            tail += "_" + part
+    tail += "_" + stamp
+
+    # Spend what is left on the model name, never on the tail.
+    room = NAME_MAX - len(tail)
+    if room < 1:
+        # Nothing sensible fits - keep the model and let the date go rather than
+        # hand back a name that is only numbers.
+        return model[:NAME_MAX], True
+    return model[:room] + tail, len(model) > room
+
+
+# --------------------------------------------------------------------------
 # upload
 # --------------------------------------------------------------------------
 
@@ -178,8 +250,15 @@ def post(host, path, fields=None, filefield=None, filename=None,
             "address instead of tinymaker.local.")
 
 
-def upload(host, path, action, start):
+def upload(host, path, action, start, describe=False):
     name = os.path.splitext(os.path.basename(path))[0]
+    send_as = os.path.basename(path)
+    if describe:
+        name, trimmed = describe_name(path)
+        send_as = name + ".sl1"
+        log("  naming it " + name)
+        if trimmed:
+            log("  (model name shortened - the printer keeps 40 characters)")
     size = os.path.getsize(path)
     layers = check_sl1(path)
     log(f"  uploading {name}  ({layers} layers, {size/1048576:.1f} MB)")
@@ -191,7 +270,7 @@ def upload(host, path, action, start):
     code, body = post(host, "/upload",
                       fields={"action": action, "source": "tm_send"},
                       filefield="file",
-                      filename=os.path.basename(path),
+                      filename=send_as,
                       filebytes=data)
 
     if code == 409 and "conflict" in body:
@@ -220,12 +299,12 @@ def upload(host, path, action, start):
 # one file, end to end
 # --------------------------------------------------------------------------
 
-def send(path, host, action, start, uvtools_path):
+def send(path, host, action, start, uvtools_path, describe=False):
     ext = os.path.splitext(path)[1].lower()
     log(f"\n{os.path.basename(path)}")
 
     if ext in NATIVE:
-        return upload(host, path, action, start)
+        return upload(host, path, action, start, describe)
 
     if ext not in CONVERTIBLE:
         die(f"I don't know the format {ext}.\n"
@@ -242,14 +321,14 @@ def send(path, host, action, start, uvtools_path):
 
     with tempfile.TemporaryDirectory(prefix="tm_send_") as tmp:
         sl1 = convert_to_sl1(path, uv, tmp)
-        return upload(host, sl1, action, start)
+        return upload(host, sl1, action, start, describe)
 
 
 # --------------------------------------------------------------------------
 # watch mode
 # --------------------------------------------------------------------------
 
-def watch(folder, host, action, start, uvtools_path, settle=2.0):
+def watch(folder, host, action, start, uvtools_path, describe=False, settle=2.0):
     """Send anything new that lands in a folder.
 
     Point it at the export folder of Chitubox or Lychee and forget about it.
@@ -272,7 +351,15 @@ def watch(folder, host, action, start, uvtools_path, settle=2.0):
                 continue
             for f in now - known:
                 if os.path.splitext(f)[1].lower() in watched:
-                    pending[f] = (0, 0.0)
+                    # Seed the size at -1, never 0. Every slicer creates the file
+                    # first and writes into it after, so the first poll usually
+                    # sees 0 bytes. Seeded at 0 that reads as "size unchanged"
+                    # and the stale 0.0 timestamp makes it look settled forever
+                    # ago, so the watcher pounced on the empty placeholder, failed
+                    # the ZIP check, dropped it, and never looked again - the real
+                    # export was silently lost. -1 cannot equal any real size, so
+                    # the first poll always starts the settle clock properly.
+                    pending[f] = (-1, time.time())
             known = now
 
             for f in list(pending):
@@ -281,6 +368,16 @@ def watch(folder, host, action, start, uvtools_path, settle=2.0):
                     pending.pop(f, None)
                     continue
                 size = os.path.getsize(p)
+                if size == 0:
+                    # An empty file is never a finished export - it is the
+                    # placeholder the slicer just created. Waiting on "it stopped
+                    # growing" is not enough on its own: a slow export can sit at
+                    # 0 bytes for longer than the settle window, and the watcher
+                    # would then decide it had settled at zero, send it, fail the
+                    # ZIP check and drop it for good. Keep the clock reset until
+                    # there are actually bytes.
+                    pending[f] = (-1, time.time())
+                    continue
                 last_size, stable_since = pending[f]
                 if size != last_size:
                     pending[f] = (size, time.time())
@@ -289,7 +386,7 @@ def watch(folder, host, action, start, uvtools_path, settle=2.0):
                     continue
                 pending.pop(f, None)
                 try:
-                    send(p, host, action, start, uvtools_path)
+                    send(p, host, action, start, uvtools_path, describe)
                 except SystemExit:
                     # One bad export should not take the watcher down.
                     log("  skipped - still watching\n")
@@ -314,17 +411,20 @@ def main():
     ap.add_argument("--watch", metavar="DIR",
                     help="keep running and send anything new in DIR")
     ap.add_argument("--uvtools", metavar="PATH", help="path to UVtoolsCmd")
+    ap.add_argument("--describe", action="store_true",
+                    help="name it model_printer_layer_exposure_date so the "
+                         "printer's file list says what each model is")
     a = ap.parse_args()
 
     if a.watch:
-        watch(a.watch, a.printer, a.action, a.start, a.uvtools)
+        watch(a.watch, a.printer, a.action, a.start, a.uvtools, a.describe)
         return
     if not a.files:
         ap.error("give me a file to send, or --watch a folder")
     for f in a.files:
         if not os.path.isfile(f):
             die(f"no such file: {f}")
-        send(f, a.printer, a.action, a.start, a.uvtools)
+        send(f, a.printer, a.action, a.start, a.uvtools, a.describe)
 
 
 if __name__ == "__main__":

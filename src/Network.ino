@@ -3100,10 +3100,12 @@ void otaCheckLatest(uint16_t timeoutMs) {
   otaBinUrl = "";
   // No cache stamp here: this path is instant, so it costs nothing to retry.
   if (WiFi.status() != WL_CONNECTED) { otaState = 4; return; }
-  // Same shape, same reason: the clock syncs a few seconds after the link comes
-  // up, and the boot-time check often lands before it. Not caching this means
-  // the next check - a second later on the Update screen - just works.
-  if (!otaClockReady()) { otaState = 4; return; }
+  // "Not yet", not "failed". This must NOT become state 4: the cache above
+  // suppresses a repeat while state == 4, and at boot otaCheckedAt is still 0,
+  // so millis() - 0 is under a minute and the Update screen would answer
+  // "unknown" for the first 60 s of every boot without ever retrying. State 0
+  // is exactly what this is - we do not know yet - and the next call retries.
+  if (!otaClockReady()) { otaState = 0; return; }
 
   WiFiClientSecure client;
   client.setCACert(SLICER_CA_PEM);   // verified: this decides what code we run
@@ -3158,6 +3160,14 @@ void otaBootCheckMaybePrompt() {
   // about to start the print (screen 427 -> network_setup() -> print).
   if (resumeBootPending) return;
   if (!bootUpdateCheckEnabled || WiFi.status() != WL_CONNECTED) return;
+  /* Wait briefly for the clock before checking. The check now verifies a
+     certificate, and a certificate cannot be judged without a real date; NTP's
+     first packet leaves up to 5 s after configTime() while this runs a few
+     hundred ms later, so without this wait the boot prompt would lose nearly
+     every time and the feature would quietly stop existing.
+     Bounded at 3 s, and only here: this is the boot screen, nothing is moving,
+     and the alternative is a user who never learns an update exists. */
+  for (int i = 0; i < 30 && !otaClockReady(); i++) delay(100);
   otaCheckLatest(2500);
   if (otaHasUpdate()) screenBootUpdatePrompt();
 }
