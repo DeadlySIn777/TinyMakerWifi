@@ -382,6 +382,12 @@ String waPhone = "";                // phone with country code
 String waApiKey = "";               // CallMeBot key (secret - never echoed to browser)
 bool dcEnabled = false;             // Discord notifications via a channel webhook
 String dcWebhook = "";              // webhook URL (secret - never echoed to browser)
+// Shop Network (air station peer - TinyMakerShop.ino). Off until someone pairs
+// the printer on the compressor and pastes the machine token here.
+bool shopEnabled = false;           // report our state to the shop's air station
+String shopHost = "";               // "air.local" or an IP - LAN only, plain HTTP
+String shopToken = "";              // machine token (secret - never echoed to browser)
+String shopDeviceId = "";           // the air station we paired with (checked before the token is sent)
 // 0.17 #88: was the last chat message actually delivered? The send result was
 // computed and thrown away, which is why the #40 heap bug could kill mid-print
 // notifications for weeks while an idle "Send test" kept working. A fixed char
@@ -472,6 +478,10 @@ void loadDeviceConfig() {
   waApiKey = sysPrefs.getString("waApiKey", "");
   dcEnabled = sysPrefs.getBool("dcEnabled", false);
   dcWebhook = sysPrefs.getString("dcWebhook", "");
+  shopEnabled = sysPrefs.getBool("shopEnabled", false);
+  shopHost    = sysPrefs.getString("shopHost", "");
+  shopToken   = sysPrefs.getString("shopToken", "");
+  shopDeviceId = sysPrefs.getString("shopDevId", "");
   if (tgEnabled) { waEnabled = false; dcEnabled = false; }  // one channel at a time
   else if (waEnabled) dcEnabled = false;
   vatRemainingMl = sysPrefs.getFloat("vatRemMl", -1);
@@ -567,6 +577,10 @@ void saveDeviceConfig() {
   sysPrefs.putString("waApiKey", waApiKey);
   sysPrefs.putBool("dcEnabled", dcEnabled);
   sysPrefs.putString("dcWebhook", dcWebhook);
+  sysPrefs.putBool("shopEnabled", shopEnabled);
+  sysPrefs.putString("shopHost", shopHost);
+  sysPrefs.putString("shopToken", shopToken);
+  sysPrefs.putString("shopDevId", shopDeviceId);
   sysPrefs.putBool("lowResinOn", lowResinPauseEnabled);
   sysPrefs.putUChar("lowResinMl", lowResinThresholdMl);
   sysPrefs.putUChar("lowResinWarn", lowResinWarnMl);   // 0.17 #40
@@ -819,6 +833,10 @@ void tgNotifyFinished();   // Telegram hooks (TinyMakerTelegram.ino, #if-guarded
 void tgNotifyLowResin();
 void tgNotifyCanceled();
 void tgNotifyPowerRestored();   // 0.17: power-loss interrupted a print
+void shopNotifyPrintStarted();  // Shop Network hooks (TinyMakerShop.ino)
+void shopNotifyPrintFinished();
+void shopNotifyPrintCanceled();
+void shopLoop();
 void tgNotifyLowResinSoon(float ml, int minsToStop);   // 0.17 #40: pre-warn before low-resin stop
 void screenBootUpdatePrompt();
 void screenBootUpdateDisablePrompt();
@@ -1208,6 +1226,14 @@ String buildConfigBackupJson(bool includeSecrets = true) {
   out += dcEnabled ? "true" : "false";
   out += ",\"dcWebhook\":\"";
   out += backupEscape(dcWebhook);
+  out += "\",\"shopEnabled\":";
+  out += shopEnabled ? "true" : "false";
+  out += ",\"shopHost\":\"";
+  out += backupEscape(shopHost);
+  out += "\",\"shopToken\":\"";
+  out += backupEscape(shopToken);
+  out += "\",\"shopDeviceId\":\"";
+  out += backupEscape(shopDeviceId);
   out += "\",\"connectEnabled\":";
   out += connectEnabled ? "true" : "false";
   out += ",\"connectBaseUrl\":\"";
@@ -1383,6 +1409,10 @@ void applyConfigBackup(const String &j) {
   waApiKey = backupStr(j, "waApiKey", waApiKey);
   dcEnabled = wifiEnabled && backupBool(j, "dcEnabled", dcEnabled);
   dcWebhook = backupStr(j, "dcWebhook", dcWebhook);
+  shopEnabled = wifiEnabled && backupBool(j, "shopEnabled", shopEnabled);
+  shopHost    = backupStr(j, "shopHost", shopHost);
+  shopToken   = backupStr(j, "shopToken", shopToken);
+  shopDeviceId = backupStr(j, "shopDeviceId", shopDeviceId);
   if (tgEnabled) { waEnabled = false; dcEnabled = false; }  // one channel at a time
   else if (waEnabled) dcEnabled = false;
   connectEnabled = wifiEnabled && backupBool(j, "connectEnabled", connectEnabled);
@@ -2443,6 +2473,14 @@ void loop() {
         webStartPrint = false;    // consume the web SD-manager Start request
         printStartMs = millis();  // print-hours accounting (incl. pauses)
         savePrintActiveFlag(true);  // 0-30: armed until the single print exit
+#if ENABLE_NETWORK
+        // Tell the shop's air station we are working (TinyMakerShop.ino).
+        // Here rather than deeper in: the print has been committed but the
+        // layer loop has not begun, so a slow reply costs setup time, never
+        // exposure time. Guarded like every other network hook - the
+        // network-free build has no TinyMakerShop.ino at all.
+        shopNotifyPrintStarted();
+#endif
         uvLedSessionMs = 0;
         homing_canceled = false;
         print_paused = false;
@@ -3145,6 +3183,10 @@ void loop() {
         // pressed DURING the final lift lands here un-notified - catch it.
         if (print_canceled || homing_canceled) { if (!cancelNotified) tgNotifyCanceled(); }
         else                                   tgNotifyFinished();
+        // Shop roster follows the same two exits (TinyMakerShop.ino). Runs
+        // right after the chat notify, in the same already-safe window.
+        if (print_canceled || homing_canceled) shopNotifyPrintCanceled();
+        else                                   shopNotifyPrintFinished();
         #endif
         screen1();
         #if ENABLE_NETWORK

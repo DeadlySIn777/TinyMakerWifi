@@ -39,6 +39,7 @@
 #include <WiFiClientSecure.h> // HTTPS to GitHub for version check + self-update
 #include <HTTPClient.h>       // fetch version.txt
 #include <uri/UriBraces.h>   // /lib/{} - slicerio failai is korteles (0.17 SL-mod)
+#include "tm_pure.h"     // grynos funkcijos, testuojamos per `pio test -e native`
 #include "slicer_ca.h"   // gh-pages saknis: manifesto TLS tikrinamas (08-22)
 #include <HTTPUpdate.h>       // pull-and-flash firmware.bin (self-update)
 #include <esp_wifi.h>      // esp_wifi_restore() for reliable credential erase
@@ -1677,6 +1678,7 @@ String configJson() {
   out += tinymakerTelegramConfigJson();
   out += tinymakerWhatsAppConfigJson();
   out += tinymakerDiscordConfigJson();
+  out += tinymakerShopConfigJson();
   return out;
 }
 
@@ -1816,6 +1818,21 @@ void applyConfigRequest() {
   if (server.hasArg("dc_webhook") && server.arg("dc_webhook").length() > 0) {
     dcWebhook = formString("dc_webhook", dcWebhook, 200);
     dcWebhook.trim();
+    // Shop Network. Independent of the notify channel radio above - a printer
+    // can be on the shop roster and still send its chat messages elsewhere.
+    // formCheck is the project's checkbox helper (an unchecked box sends
+    // nothing at all, so a plain hasArg would read as "off" on every partial
+    // post - see formFullPost).
+    shopEnabled = wifiEnabled && formCheck("shop_enabled", shopEnabled);
+    shopHost = formString("shop_host", shopHost, 64);
+    shopHost.trim();
+    String shopTok = formString("shop_token", "", 128);
+    shopTok.trim();
+    if (shopTok.length()) shopToken = shopTok;   // blank = keep the stored one
+    // Not a secret - it is the station's public identity - but it is what we
+    // check BEFORE handing over the token, so it is saved next to it.
+    shopDeviceId = formString("shop_device_id", shopDeviceId, 64);
+    shopDeviceId.trim();
   }
 
   savePrintSettings();
@@ -2987,16 +3004,55 @@ int otaState = 0;
 // Tolerates a leading "v"/"V" (e.g. a version.txt copied from a git tag name) -
 // without this, "v0.8.0" would parse as 0.0.0 and silently report "Up to date".
 static int cmpSemver(const char *a, const char *b) {
-  if (*a == 'v' || *a == 'V') a++;
-  if (*b == 'v' || *b == 'V') b++;
-  int va[3] = {0, 0, 0}, vb[3] = {0, 0, 0};
-  sscanf(a, "%d.%d.%d", &va[0], &va[1], &va[2]);
-  sscanf(b, "%d.%d.%d", &vb[0], &vb[1], &vb[2]);
-  for (int i = 0; i < 3; i++) if (va[i] != vb[i]) return va[i] - vb[i];
-  return 0;
+  return tmCmpSemver(a, b);   // tm_pure.h - unit-tested on the PC, not the board
 }
 
 unsigned long otaCheckedAt = 0;   // millis() of the last successful check
+
+// ---- Self-update over a VERIFIED connection (security review 09-13) --------
+//
+// Until now both halves of the self-update ran with setInsecure(), and that was
+// the weakest link in the whole firmware. Not because the bytes are secret -
+// firmware.bin is public - but because of what they become: whoever answers as
+// slibbinas.github.io on this network decided what code the ESP32 runs next.
+// Worse than the slicer case (08-22, see slicer_ca.h), because there the payload
+// only had to match a checksum; here it is flashed straight into the app
+// partition and rebooted into.
+//
+// It was two unverified hops, and the FIRST one picked the second: line 2 of
+// version.txt becomes otaBinUrl and was never checked for scheme or host, so a
+// forged version.txt alone was enough - point it at http://anything/evil.bin and
+// the printer fetched and flashed it without a single certificate being looked
+// at.
+//
+// Both hops now verify against the same two anchors the slicer manifest uses
+// (*.github.io - the identical host), and otaBinUrl must live under our own
+// release directory or it is dropped.
+//
+// FAIL CLOSED is the right direction here: if verification breaks, updates stop
+// and the printer says so. Nothing dies - USB flashing and "install from file"
+// both still work - whereas failing open is how you flash someone else's code.
+
+// Certificates are only meaningful against a real clock, and ours arrives from
+// SNTP in the background. Before that, verification fails with a message that
+// blames the wrong thing, so check the clock first and say what is actually
+// going on.
+static bool otaClockReady() { return time(nullptr) >= 1700000000L; }
+
+// The release directory on gh-pages - everything we are willing to flash lives
+// under it. Derived from OTA_VERSION_URL so there is one place to change.
+static String otaTrustedBase() {
+  String b = OTA_VERSION_URL;
+  int cut = b.lastIndexOf('/');
+  return cut >= 0 ? b.substring(0, cut + 1) : b;
+}
+
+// A firmware URL is acceptable only if it is HTTPS and sits under that
+// directory. This is what stops a forged version.txt from redirecting the
+// flash somewhere else.
+static bool otaUrlTrusted(const String &url) {
+  return tmUrlUnderBase(url.c_str(), otaTrustedBase().c_str());
+}
 
 // Fetch version.txt over HTTPS and work out whether an update is available.
 // Blocking (a few seconds); the caller should show "checking..." first.
@@ -3014,9 +3070,13 @@ void otaCheckLatest(uint16_t timeoutMs) {
   otaBinUrl = "";
   // No cache stamp here: this path is instant, so it costs nothing to retry.
   if (WiFi.status() != WL_CONNECTED) { otaState = 4; return; }
+  // Same shape, same reason: the clock syncs a few seconds after the link comes
+  // up, and the boot-time check often lands before it. Not caching this means
+  // the next check - a second later on the Update screen - just works.
+  if (!otaClockReady()) { otaState = 4; return; }
 
   WiFiClientSecure client;
-  client.setInsecure();            // home LAN: skip cert validation
+  client.setCACert(SLICER_CA_PEM);   // verified: this decides what code we run
   HTTPClient https;
   https.setConnectTimeout(timeoutMs);
   https.setTimeout(timeoutMs);
@@ -3032,7 +3092,17 @@ void otaCheckLatest(uint16_t timeoutMs) {
     } else {
       otaLatestVer = body.substring(0, nl);      otaLatestVer.trim();
       otaBinUrl    = body.substring(nl + 1);      otaBinUrl.trim();
+      // Line 2 is the only part of version.txt that steers a later flash, so it
+      // is the one part that has to be checked.
+      if (otaBinUrl.length() && !otaUrlTrusted(otaBinUrl)) {
+        DBGLN("version.txt points off our release directory - ignoring the URL");
+        otaBinUrl = "";
+      }
     }
+    // Rebuild rather than drop. release.py always writes line 2, but a truncated
+    // or tampered file should not be able to take updates away either - the
+    // canonical name next to version.txt is what we would have fetched anyway.
+    if (otaBinUrl.length() == 0) otaBinUrl = otaTrustedBase() + "firmware.bin";
 #ifdef FIRMWARE_VERSION
     int c = cmpSemver(otaLatestVer.c_str(), FIRMWARE_VERSION);
 #else
@@ -3161,9 +3231,26 @@ void crashPingMaybe() {
 // Download a firmware image over HTTPS and flash it. Shows progress on the
 // LCD; reboots on success. Shared by "Install latest" and the version picker.
 void otaFlashUrl(const String &url, const char *subtitle) {
+  // Last gate before the app partition is overwritten. Both checks answer the
+  // same question - "do we actually know who is sending these bytes?" - and
+  // both refuse rather than guess.
+  if (!otaUrlTrusted(url)) {
+    netMessage("Update refused", "not our release URL");
+    delay(1800);
+    restoreIdleScreen();
+    return;
+  }
+  if (!otaClockReady()) {
+    // Without a clock the certificate cannot be judged, and the failure would
+    // read as a network error. Say the true thing instead.
+    netMessage("Clock not synced", "try again in a minute");
+    delay(1800);
+    restoreIdleScreen();
+    return;
+  }
   netProgressStart("Updating...", subtitle);
   WiFiClientSecure client;
-  client.setInsecure();
+  client.setCACert(SLICER_CA_PEM);   // see slicer_ca.h - same two anchors
   httpUpdate.rebootOnUpdate(true);
   httpUpdate.onProgress([](int done, int total) { netProgressBar(done, total); });
   t_httpUpdate_return ret = httpUpdate.update(client, url);
@@ -3222,12 +3309,8 @@ void handleApiUpdateInstall() {
   }
   String ver = server.arg("version");
   if (ver.length() > 0) {
-    int a, b, c;
-    char tail;
-    bool digitsOnly = true;
-    for (size_t i = 0; i < ver.length(); i++)
-      if (!isDigit(ver[i]) && ver[i] != '.') digitsOnly = false;
-    if (!digitsOnly || sscanf(ver.c_str(), "%d.%d.%d%c", &a, &b, &c, &tail) != 3) {
+    // tm_pure.h - same rule, one place, covered by the native tests
+    if (!tmVersionLooksValid(ver.c_str())) {
       sendApiError(400, "bad version");
       return;
     }
@@ -4893,6 +4976,7 @@ void network_setup() {
   server.on("/api/telegram/test", HTTP_POST, handleApiTelegramTest);
   server.on("/api/whatsapp/test", HTTP_POST, handleApiWhatsAppTest);
   server.on("/api/discord/test", HTTP_POST, handleApiDiscordTest);
+  server.on("/api/shop/test", HTTP_POST, handleApiShopTest);
   server.on("/api/print/start", HTTP_POST, handleApiPrintStart);
   server.on("/api/vat/refilled", HTTP_POST, handleApiVatRefilled);
   server.on("/api/vat/weight", HTTP_POST, handleApiVatWeight);   // 0.17 0-16
@@ -5083,6 +5167,7 @@ void network_loop() {
   if (otaMenuOpen()) ArduinoOTA.handle();
   mqtt_loop();
   tinymakerConnectLoop();
+  shopLoop();   // shop roster idle tick - never reached during a print
 
   // Live refresh of the WiFi info screen (312): redraw values every 2 s
   // while the screen is open. 'screen' global is defined in the main .ino

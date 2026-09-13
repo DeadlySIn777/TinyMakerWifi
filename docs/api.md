@@ -90,6 +90,11 @@ Key `/api/status` fields (additive; ignore unknowns):
 | `/upload` | POST | multipart model upload (`.sl1`/`.zip`); fields: `file`, `action=replace|rename` on a 409 name conflict, `source`, optional Connect credits fields |
 | `/api/files/local` | POST | the same upload path with the OctoPrint shape - PrusaSlicer "Send to printer" |
 
+Shop Network peer (`/api/shop/test`): see [shop-network.md](shop-network.md).
+
+Sending from Chitubox, Lychee or UVtools: see [slicers.md](slicers.md)
+and [`scripts/tm_send.py`](../scripts/tm_send.py).
+
 Upload answers only after the on-printer unpack finishes (minutes for big
 models); a name conflict returns `409` with a `conflict` body and the client
 retries with `action`.

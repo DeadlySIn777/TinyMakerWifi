@@ -46,6 +46,13 @@ jobs:
       - name: Install PlatformIO
         run: pip install --upgrade platformio
 
+      # Runs first: it takes seconds and it is the only step that actually
+      # EXECUTES firmware logic rather than just compiling it. If the SemVer
+      # comparison or the firmware-URL guard regressed, this says so before the
+      # slow build starts.
+      - name: Unit tests (native)
+        run: pio test -e native
+
       - name: Build both environments
         run: pio run
 

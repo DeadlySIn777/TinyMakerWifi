@@ -178,7 +178,112 @@ button.secondary:disabled,.button.secondary:disabled,button.delete:disabled{
 #printPreviewTitle.pvLink{cursor:pointer}
 #printPreviewTitle.pvLink:hover{color:var(--accent)}
 #printPreviewTitle.pvLink:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:6px}
-/*#include parts/slicer.css*/</style></head><body><main class='wrap'>
+/*#include parts/slicer.css*/
+/* ==========================================================================
+   0.18 pulto isvaizda (V 2026-09-13).
+   Pridedamas SLUOKSNIS, ne perrasymas: nauji tik zetonai + isvaizda, jokio
+   DOM ir jokio elgsenos pakeitimo, tad rizika lieka CSS lygyje.
+
+   KODEL. Oranzine buvo uzsikrovusi sesiais darbais vienu metu (remelis, aktyvi
+   kortele, Pause, eiga, SD juosta, logotipas), o kai viskas yra akcentas,
+   akcento nebelieka. Dabar oranzine = prekiu zenklas + VIENAS pagrindinis
+   veiksmas; „kazkas vyksta" perima melyna is musu paciu logotipo lanko, tad
+   busena skaitoma is kitos kambario puses.
+
+   Fonas suvienodintas su brandbook'u (#141416 / #1d1d20) - ten tai buvo
+   surasyta kaip „known variance to reconcile". Cia ta skola uzdaroma.
+   ========================================================================== */
+
+:root{
+  /* semantines busenos - ATSKIROS nuo prekiu zenklo, niekada nemaisomos */
+  --live:#4da3ff;            /* logotipo lankas: „vyksta dabar" */
+  --live-soft:rgba(77,163,255,.13);
+  --live-line:rgba(77,163,255,.34);
+  --good:#2fbf4f;
+  --good-soft:rgba(47,191,79,.13);
+  --warn-soft:rgba(255,177,95,.13);
+  --danger-soft:rgba(255,107,95,.12);
+  --ink3:#6f7887;            /* treciasis rasalas etiketems */
+  /* fonas pagal brandbook */
+  --bg:#141416;--wrap:#191a1d;--card:#1d1d20;--tile:#161619;--pv:#0f0f11;
+  --line:#26262a;--line2:#2c2c31;--line3:#232327;
+  --btnsec:#2e2e33;
+}
+[data-theme=light]{
+  --live:#1272d8;
+  --live-soft:rgba(18,114,216,.09);
+  --live-line:rgba(18,114,216,.28);
+  --good:#17913a;
+  --good-soft:rgba(23,145,58,.10);
+  --warn-soft:rgba(154,91,0,.10);
+  --danger-soft:rgba(178,52,52,.09);
+  --ink3:#7d8695;
+  --bg:#f2f2f4;--wrap:#f8f9fa;--card:#fff;--tile:#f4f5f7;--pv:#e4e8ec;
+  --line:#dfe1e5;--line2:#d9dbe0;--line3:#e3e5e9;
+  --btnsec:#e2e4e8;
+}
+
+/* --- kortele: mazesnis kontrastas rembui, svelnesnis kampas ------------- */
+.card{border-color:var(--line);border-radius:12px}
+
+/* --- tipografija: etikete ir reiksme nustoja sverti vienodai ------------ */
+.label{font-size:10.5px;font-weight:700;letter-spacing:.085em;
+       text-transform:uppercase;color:var(--ink3)}
+.value{font-size:17px;font-weight:600;margin-top:5px;
+       font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+.grid{gap:14px 16px}
+
+/* --- busena: zetonas, o ne dar viena eilute lenteleje ------------------- */
+#stateValue{display:inline-flex;align-items:center;gap:7px;
+  padding:3px 11px 3px 9px;border-radius:100px;font-size:13px;font-weight:700;
+  letter-spacing:.03em;background:var(--btnsec);color:var(--text);
+  border:1px solid var(--line2)}
+#stateValue::before{content:"";width:7px;height:7px;border-radius:50%;
+  background:var(--ink3);flex:none}
+body[data-tm-state=live] #stateValue{background:var(--live-soft);color:var(--live);
+  border-color:var(--live-line)}
+body[data-tm-state=live] #stateValue::before{background:currentColor;
+  animation:tmPulse 1.8s ease-in-out infinite}
+body[data-tm-state=paused] #stateValue{background:var(--warn-soft);color:var(--warncol);
+  border-color:rgba(255,177,95,.34)}
+body[data-tm-state=paused] #stateValue::before{background:currentColor}
+body[data-tm-state=done] #stateValue{background:var(--good-soft);color:var(--good);
+  border-color:rgba(47,191,79,.34)}
+body[data-tm-state=done] #stateValue::before{background:currentColor}
+body[data-tm-state=error] #stateValue{background:var(--danger-soft);color:var(--dangertxt);
+  border-color:rgba(255,107,95,.38)}
+body[data-tm-state=error] #stateValue::before{background:currentColor}
+@keyframes tmPulse{0%,100%{opacity:1}50%{opacity:.32}}
+@media (prefers-reduced-motion:reduce){
+  body[data-tm-state=live] #stateValue::before{animation:none}
+}
+
+/* --- kai spausdinama, LIKES LAIKAS yra atsakymas i visa puslapi --------- */
+#printRemainingBox{grid-column:1/-1;padding-top:4px;border-top:1px solid var(--line)}
+#printRemainingBox .value{font-size:31px;font-weight:650;letter-spacing:-.02em;
+  line-height:1.12}
+#printLayerBox .value,#printRunBox .value{font-size:17px}
+
+/* --- mygtukai: vienas pagrindinis, likusieji ramus ---------------------- */
+button,.button{border-radius:10px}
+.button{padding:13px 16px;min-height:44px}
+.actions button{min-height:44px;border-radius:10px;font-weight:600}
+#stopButton,.actions button.danger{background:var(--danger-soft);
+  color:var(--dangertxt);border:1px solid rgba(255,107,95,.4)}
+
+/* --- eigos juostos: „vyksta" spalva, ne prekiu zenklo ------------------- */
+progress::-webkit-progress-value{background:var(--live)}
+progress::-moz-progress-bar{background:var(--live)}
+
+/* --- oranzinis remelis aplink puslapi -> ramus kontūras ----------------
+   2 px akcento remas aplink VISKA buvo didziausia oranzines sanauda puslapyje,
+   ir jis konkuravo su Pause, eiga bei aktyvia kortele. Remas lieka - tik
+   nustoja buti prekiu zenklo spalvos, ir akcentas atitenka veiksmui. */
+.wrap{border:1px solid var(--line2)}
+
+/* --- perziuros sulinys giliau, kad modelis atsistotu priekyje ----------- */
+#printPreviewCard{background:var(--card)}
+</style></head><body><main class='wrap'>
 <div class='head'><div><h1><span id='brandHome' role='button' tabindex='0' aria-label='Dashboard' title='Dashboard'><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64' width='26' height='26' style='vertical-align:-4px;margin-right:8px'><rect x='8' y='40' width='48' height='9' rx='3' fill='#e8720c'/><rect x='14' y='27' width='36' height='9' rx='3' fill='#e8720c' opacity='.75'/><rect x='20' y='14' width='24' height='9' rx='3' fill='#e8720c' opacity='.5'/><path d='M22 6 A14 14 0 0 1 42 6' fill='none' stroke='#4da3ff' stroke-width='5' stroke-linecap='round'/></svg>TinyMaker</span><a href='#' id='fwVersion' class='fwBadge' title='Firmware version - tap for updates'></a><span id='fwBuild' class='fwbuild hidden' data-build=""></span><span id='wifiBars' class='wbars' title='WiFi'><i></i><i></i><i></i></span></h1><div class='fw'><a id='manualLink' href='https://slibbinas.github.io/TinyMakerWifi/manual/?theme=dark' target='_blank' rel='noopener'>Manual</a> · <a id='siteLink' href='https://tinymakerwifi.com' target='_blank' rel='noopener' title='Project site'>tinymakerwifi.com</a> &middot; <a id='roadmapLink' href='https://tinymakerwifi.com/roadmap' target='_blank' rel='noopener' title='What is coming and what shipped'>Roadmap</a> &middot; <a id='fbLink' href='https://tinymakerwifi.com/feedback/' target='_blank' rel='noopener' title='Tell us what works and what does not - 30 seconds, no account'>Feedback</a> <a href='#' id='gsBtn' title='Getting started guide'>?</a></div></div><a href='#' id='themeBtn' title='Light / dark theme'>&#9680;</a></div>
 
 <section id='resumeBanner' class='card banner hidden'>
@@ -8236,5 +8341,27 @@ window.__markToolInit=()=>{
    if(!on)return;
    clearInterval(t); try{__markToolInit();}catch(e){}
  },1000);}
+</script>
+
+<script>
+/* Busenos zodis -> body[data-tm-state], kad CSS galetu ji nuspalvinti.
+   TIK SKAITO #stateValue teksta - jokio API, jokio srauto, jokio elgsenos
+   pakeitimo. Jei sitas blokas dings, pultas veiks lygiai taip pat, tik
+   zetonas liks pilkas. */
+(function(){
+  var el=document.getElementById('stateValue'); if(!el) return;
+  var MAP=[[/(print|cur|expos|homing|lift|retract|unpack|receiv|resum)/i,'live'],
+           [/paus/i,'paused'],
+           [/(fail|error|stopp|abort)/i,'error'],
+           [/(finish|done|complete)/i,'done']];
+  function sync(){
+    var t=(el.textContent||'').trim(), s='idle';
+    for(var i=0;i<MAP.length;i++){ if(MAP[i][0].test(t)){ s=MAP[i][1]; break; } }
+    if(document.body.getAttribute('data-tm-state')!==s)
+      document.body.setAttribute('data-tm-state',s);
+  }
+  sync();
+  new MutationObserver(sync).observe(el,{childList:true,characterData:true,subtree:true});
+})();
 </script>
 </body></html>

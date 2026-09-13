@@ -104,6 +104,8 @@ to, kas jau surašyta — ten pilnas kontekstas):
 | Kai dirbi su… | Skaityk |
 |---|---|
 | LAN API / HTTP endpoint'ais (`Network.ino`) | [docs/api.md](docs/api.md) |
+| Slicerių suderinamumu (Chitubox/Lychee/PrusaSlicer siuntimas) | [docs/slicers.md](docs/slicers.md) |
+| Shop Network / oro stotimi / mesh'u | [docs/shop-network.md](docs/shop-network.md) |
 | PR — kur merge'inti, contribution taisyklės | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Cloudflare worker'iais / hosting'u / `/plan` `/team` `/tests` panel'ais | [Firmware_Hosting/](Firmware_Hosting/) + [feedback-worker.md](Firmware_Hosting/feedback-worker.md) |
 | Versijų kopėčiomis / kas kur išleista | [ROADMAP.md](ROADMAP.md) |
