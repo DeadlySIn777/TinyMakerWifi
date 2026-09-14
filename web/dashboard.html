@@ -616,7 +616,6 @@ progress::-moz-progress-bar{background:var(--live)}
        nekeicia: eile lieka perziura -> sliceris -> SD manager (V 08-20). -->
   <div id='homeRight'>
 <!--#include parts/meshy-card.html-->
-<!--#include parts/keycap-card.html-->
 <!--#include parts/slicer-card.html-->
 
   <section id='sdSection' class='card'>
@@ -637,7 +636,7 @@ progress::-moz-progress-bar{background:var(--live)}
               type='button' style='margin-top:0' aria-expanded='true'
               title='Collapse the model list'>&#9660;</button></h2>
     </div>
-    <div id='uploadHint' class='hint' style='margin:2px 0 10px'>Uploaded SL1/ZIP files are unpacked into printable model folders on the SD card.</div>
+
     <div id='sdActions' style='display:flex;align-items:center;gap:8px;margin-bottom:8px'>
       <!-- Filtre siulymai uzgula pati modeliu sarasa, del kurio filtras ir spaudziamas. -->
       <input id='filesFilter' type='text' class='hidden' placeholder='Filter models...'
@@ -658,6 +657,12 @@ progress::-moz-progress-bar{background:var(--live)}
     <div id='sdCollapsedHint' class='hint' style='display:none;margin-top:8px'>Model list hidden while the slicer is open.</div>
   </section>
   </div><!-- #homeRight -->
+
+<!-- Keycaps sits OUTSIDE #homeRight, at full page width. Inside it the card
+     was handed about half an 1100 px column - under its own breakpoint - so
+     on a desktop it never got its desktop layout: the stage never appeared
+     beside the controls and the 15-unit keyboard was squeezed to 27 px keys. -->
+<!--#include parts/keycap-card.html-->
 </div>
 
 <section id='modelPanel' class='card hidden'>
