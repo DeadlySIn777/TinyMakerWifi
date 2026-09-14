@@ -1,0 +1,165 @@
+<!-- Keycap card. Four steps, one at a time, the way a setup assistant works:
+     pick a key, style it, letter it, print it. The keyboard is step one because
+     the key you point at already answers three questions - its size, its row,
+     and whether this printer can make it at all. -->
+<section id='kcCard' class='card'>
+  <div class='cardHead'>
+    <h2>Keycaps</h2>
+    <span id='kcState' class='hint'></span>
+  </div>
+
+  <!-- the step rail -->
+  <ol id='kcSteps' class='kcSteps'>
+    <li data-step='1' class='on'><b>1</b><span>Key</span></li>
+    <li data-step='2'><b>2</b><span>Shape</span></li>
+    <li data-step='3'><b>3</b><span>Legend</span></li>
+    <li data-step='4'><b>4</b><span>Print</span></li>
+  </ol>
+
+  <!-- ---- step 1: the board -------------------------------------------- -->
+  <div class='kcPane' data-pane='1'>
+    <div class='hint' style='margin-bottom:8px'>
+      Pick the key you want. Shading shows what this printer can do with it.
+    </div>
+    <div id='kcBoard' class='kcBoard'></div>
+    <div class='kcKeyLegend hint'>
+      <span><i class='kcSw kcOk'></i>lies flat, no supports</span>
+      <span><i class='kcSw kcTilt'></i>fits tilted, needs supports</span>
+      <span><i class='kcSw kcNo'></i>too big for the bed</span>
+    </div>
+  </div>
+
+  <!-- ---- steps 2-4 share the zoomed key ------------------------------- -->
+  <div class='kcPane' data-pane='2 3 4' hidden>
+    <div class='kcSplit'>
+      <div class='kcPreview'>
+        <canvas id='kcTop' width='420' height='420' aria-label='top of the cap'></canvas>
+        <canvas id='kcSide' width='420' height='120' aria-label='cap seen from the front'></canvas>
+        <div id='kcDims' class='hint'></div>
+      </div>
+
+      <div class='kcOptions'>
+        <!-- step 2 -->
+        <div class='kcGroup' data-for='2'>
+          <label class='kcLbl'>Profile</label>
+          <div id='kcProfiles' class='kcTiles'></div>
+          <div id='kcProfileNote' class='hint'></div>
+          <label class='kcLbl' style='margin-top:12px'>Row</label>
+          <div id='kcRows' class='kcTiles kcSmall'></div>
+          <div class='hint'>Sculpted profiles tilt each row. The board picked this one for you.</div>
+        </div>
+
+        <!-- step 3 -->
+        <div class='kcGroup' data-for='3' hidden>
+          <label class='kcLbl'>Generate the artwork</label>
+          <textarea id='kcPrompt' rows='2' maxlength='500'
+            placeholder='a military IFAK first aid pouch, medical cross patch'
+            style='width:100%;box-sizing:border-box;background:var(--tile);color:var(--text);
+                   border:1px solid var(--line2);border-radius:8px;padding:8px;font:inherit'></textarea>
+          <div class='calRow' style='margin-top:6px'>
+            <button id='kcGen' type='button' style='flex:2 1 150px'>Generate</button>
+            <button id='kcGenClear' class='button secondary' type='button' style='flex:1 1 90px'
+              disabled>Clear</button>
+          </div>
+          <div id='kcGenNote' class='hint'>
+            Meshy makes the artwork; the engine keeps the stem. Whatever comes back is
+            sampled into a relief on the top face - it never becomes the cap itself.
+            Needs the Meshy key from the Generate&nbsp;a&nbsp;model card.
+          </div>
+
+          <label class='kcLbl' style='margin-top:14px'>Or use a drawn one</label>
+          <div id='kcIcons' class='kcTiles kcSmall'></div>
+          <label class='kcLbl' style='margin-top:12px'>Corner digit</label>
+          <div class='calRow'>
+            <input id='kcDigit' maxlength='1' placeholder='none' style='flex:0 0 62px;text-align:center'>
+            <label style='display:flex;align-items:center;gap:6px;white-space:nowrap'>
+              <span class='hint'>Depth</span>
+              <input id='kcDepth' type='range' min='0.15' max='0.9' step='0.05' value='0.45' style='flex:1'>
+              <span id='kcDepthVal' class='hint' style='width:52px;text-align:right'>0.45 mm</span>
+            </label>
+          </div>
+          <label style='display:flex;align-items:center;gap:6px;margin-top:8px'>
+            <input id='kcRaised' type='checkbox'>
+            <span class='hint'>raised instead of engraved</span></label>
+          <div id='kcLegendWarn' class='hint'></div>
+        </div>
+
+        <!-- step 4 -->
+        <div class='kcGroup' data-for='4' hidden>
+          <div id='kcReport' class='kcReport'></div>
+          <div class='calRow' style='margin-top:10px'>
+            <button id='kcAdd' class='button secondary' type='button' style='flex:1 1 130px'>Add to plate</button>
+            <button id='kcSlice' type='button' style='flex:2 1 150px'>Send to slicer</button>
+          </div>
+          <div class='calRow'>
+            <button id='kcStl' class='button secondary' type='button' style='flex:1 1 120px'>Export STL</button>
+            <button id='kcComb' class='button secondary' type='button' style='flex:1 1 180px'
+              title='A row of stems, each slot wider than the last. Print it once and keep the one that clicks.'>Stem fit test</button>
+          </div>
+          <div id='kcPlate' class='hint'></div>
+        </div>
+
+        <div class='calRow' style='margin-top:14px;border-top:1px solid var(--line);padding-top:10px'>
+          <button id='kcBack' class='button secondary' type='button' style='flex:1 1 90px'>Back</button>
+          <button id='kcNext' type='button' style='flex:1 1 90px'>Next</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+/* Scoped to the card - every colour comes from the dashboard's own tokens so
+   this follows the theme instead of pinning its own. */
+#kcCard .kcSteps{display:flex;gap:6px;list-style:none;margin:0 0 12px;padding:0}
+#kcCard .kcSteps li{flex:1;display:flex;align-items:center;gap:7px;padding:7px 10px;
+  border:1px solid var(--line);border-radius:8px;background:var(--tile);color:var(--muted2);
+  font-size:12px;transition:background .15s,color .15s,border-color .15s}
+#kcCard .kcSteps li b{display:grid;place-items:center;width:18px;height:18px;border-radius:50%;
+  background:var(--line2);color:var(--text);font-size:11px;font-weight:600}
+#kcCard .kcSteps li.on{border-color:var(--accent);color:var(--text);background:var(--card)}
+#kcCard .kcSteps li.on b{background:var(--accent);color:#fff}
+#kcCard .kcSteps li.done b{background:var(--good);color:#fff}
+#kcCard .kcSteps li.done{color:var(--muted)}
+
+#kcCard .kcBoard{display:flex;flex-direction:column;gap:4px;padding:10px;border-radius:10px;
+  background:var(--pv);border:1px solid var(--line);overflow-x:auto}
+#kcCard .kcRow{display:flex;gap:4px}
+#kcCard .kcKey{flex:0 0 auto;height:34px;border-radius:5px;border:1px solid var(--line2);
+  background:var(--tile);color:var(--muted);font:500 11px/1 system-ui,sans-serif;
+  display:grid;place-items:center;cursor:pointer;padding:0 2px;overflow:hidden;
+  transition:transform .12s,border-color .12s,color .12s,background .12s}
+#kcCard .kcKey:hover{transform:translateY(-1px);border-color:var(--accent);color:var(--text)}
+#kcCard .kcKey.sel{border-color:var(--accent);background:var(--accent);color:#fff}
+#kcCard .kcKey.tilt{border-style:dashed;color:var(--warncol)}
+#kcCard .kcKey.no{opacity:.42;cursor:not-allowed;border-style:dotted}
+#kcCard .kcKey.no:hover{transform:none;border-color:var(--line2);color:var(--muted)}
+#kcCard .kcKeyLegend{display:flex;flex-wrap:wrap;gap:14px;margin-top:8px}
+#kcCard .kcKeyLegend span{display:flex;align-items:center;gap:6px}
+#kcCard .kcSw{width:11px;height:11px;border-radius:3px;border:1px solid var(--line2);background:var(--tile)}
+#kcCard .kcSw.kcTilt{border-style:dashed;border-color:var(--warncol)}
+#kcCard .kcSw.kcNo{border-style:dotted;opacity:.42}
+
+#kcCard .kcSplit{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+@media (max-width:720px){#kcCard .kcSplit{grid-template-columns:1fr}}
+#kcCard .kcPreview canvas{width:100%;height:auto;display:block;border-radius:10px;
+  background:var(--pv);border:1px solid var(--line)}
+#kcCard #kcSide{margin-top:8px}
+#kcCard .kcLbl{display:block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--subh);margin-bottom:6px}
+#kcCard .kcTiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:6px}
+#kcCard .kcTiles.kcSmall{grid-template-columns:repeat(auto-fill,minmax(62px,1fr))}
+#kcCard .kcTile{padding:8px 6px;border:1px solid var(--line);border-radius:8px;background:var(--tile);
+  color:var(--muted);cursor:pointer;text-align:center;font-size:12px;line-height:1.3;
+  transition:border-color .12s,color .12s}
+#kcCard .kcTile:hover{border-color:var(--line2);color:var(--text)}
+#kcCard .kcTile.on{border-color:var(--accent);color:var(--text);background:var(--card)}
+#kcCard .kcTile small{display:block;color:var(--ink3);font-size:10px}
+#kcCard .kcTile[disabled]{opacity:.4;cursor:not-allowed}
+#kcCard .kcReport{font-size:12.5px;line-height:1.65}
+#kcCard .kcReport dl{display:grid;grid-template-columns:auto 1fr;gap:2px 14px;margin:0}
+#kcCard .kcReport dt{color:var(--muted2)}
+#kcCard .kcReport dd{margin:0;color:var(--text);font-variant-numeric:tabular-nums}
+#kcCard .kcReport .bad{color:var(--dangertxt)}
+#kcCard .kcReport .warn{color:var(--warncol)}
+</style>
