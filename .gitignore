@@ -46,3 +46,6 @@ __pycache__/
 
 # Test output (generated SVG previews), not source
 scripts/dev/test-out/
+
+# scratch renders and assembled pages from the keycap work
+out/

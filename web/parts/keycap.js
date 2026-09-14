@@ -1,0 +1,593 @@
+/* Keycap engine.
+ *
+ * THE PREMISE. A generator is good at a sculpt and hopeless at a part that has
+ * to fit a switch. The MX cross is a ~1.3 mm slot held to about a tenth of a
+ * millimetre; at this printer's 127.5 micron pixel that slot is ten pixels
+ * across. Nothing that arrived from a text prompt is going to land there.
+ *
+ * So the engine owns every mechanical surface - skirt, walls, stem post, cross -
+ * built from exact numbers, and anything generated only ever supplies a HEIGHT
+ * FIELD on the top face. Legends use that same height field. The stem is never
+ * generated, never inferred from a mesh, never trusted to anything but this file.
+ *
+ * The output is one closed manifold, not two solids left overlapping for the
+ * slicer to union. That matters here: the raster engine is WASM loaded at
+ * runtime, its fill rule is not visible from this repo, and a mesh that relies
+ * on an even-odd rasteriser unioning two solids would SUBTRACT one from the
+ * other instead - silently, with no error, producing a cap with a hole where
+ * the stem should be. Displacing one watertight surface has no such failure
+ * mode. test_keycap.mjs asserts watertightness and positive volume on every
+ * profile/row/size combination rather than trusting the construction.
+ *
+ * ORIENTATION. Built in keyboard space: +Z runs from the top face down to the
+ * mouth, +Y is the back of the board. orientForPrint() then lays the top face's
+ * mean plane on the plate, which is the printable orientation - see the note
+ * there for why the other one cannot work.
+ *
+ * No DOM, no imports - scripts/dev/test_keycap.mjs runs it in node.
+ */
+
+(function (root) {
+  'use strict';
+
+  /* ---- mechanical constants -------------------------------------------
+     These are the numbers that decide whether the cap fits a switch. */
+  var MX = {
+    /* MEASURED, not assumed. Two independent CAD models of real MX-compatible
+       caps were pulled apart for these - Signature Plastics' own DSA R3 (drawn
+       in inches) and a relegendable Cherry-profile cap (mm) - and they agree:
+
+         arm length   4.038 (SP)   4.00 (relegendable)   -> 4.00
+         post radius  2.756 (SP)   3.40 (relegendable)   -> 2.76
+         SLOT WIDTH   1.194 (SP)   1.10 (relegendable)   -> 1.15 nominal
+
+       The slot number is the one that matters and the one I had wrong: I was
+       carrying 1.30 mm, which is 0.1-0.2 mm wider than either real cap. Both
+       of those are injection moulded, though, and cured resin spreads past the
+       mask edge - so a PRINTED cap still wants the modelled slot a little over
+       nominal. That margin is slotClearance, and it is the only number here
+       that is still a guess. */
+    crossLen:   4.00,
+    crossWide:  1.15,   // nominal moulded slot, mean of the two reference caps
+    crossDepth: 4.20,   // switch stem stands 3.6 mm proud; this clears it
+    postR:      2.76,
+    /* The relegendable cap flares its slot over the first stretch of depth so
+       the switch finds its way in - 1.50 mm at the mouth closing to 1.10. That
+       lead-in is worth copying twice over on a printed cap, where the first
+       layers of the opening are the roughest part of the whole part. */
+    crossChamfer:   0.20,   // extra width at the mouth of the slot
+    crossChamferZ:  0.45,   // over this much depth
+    /* ⚠️ STILL A TUNING VALUE. Print stemTestComb(), keep the first stem that
+       clicks on without force, and set this to that slot minus crossWide.
+       Nothing in this project has yet put a switch on a printed stem. */
+    slotClearance: 0.08 // -> a 1.23 mm slot, between the two reference caps
+  };
+
+  /* ---- profiles ---------------------------------------------------------
+     Heights are mm from the mouth plane to the highest point of the cap; angle
+     is the row's tilt in degrees, positive meaning the BACK edge stands further
+     from the plate (how a top row leans toward you). topInset is PER SIDE, so a
+     1u top face is 18.00 - 2*topInset across: 12.70 for DSA, 13.70 for XDA,
+     13.00 for SA, 12.40 for Cherry, 12.20 for OEM.
+
+     ⚠️ These are the community-measured figures keycap makers trade, not
+     manufacturer drawings - vendors disagree by a few tenths and nobody here
+     has put calipers on a real cap. They are a table on purpose: correct one
+     against a cap you own and every cap in that row follows. */
+  var PROFILES = {
+    DSA:    { dish: 'spherical',   uniform: true,  topInset: 2.65, dishDepth: 1.10,
+              rows: { R3: { h:  7.4, angle:  0 } },
+              note: 'uniform - one shape for every row' },
+    XDA:    { dish: 'spherical',   uniform: true,  topInset: 2.15, dishDepth: 0.80,
+              rows: { R3: { h:  9.1, angle:  0 } },
+              note: 'uniform, taller and flatter than DSA - the big top face' },
+    SA:     { dish: 'spherical',   uniform: false, topInset: 2.50, dishDepth: 1.30,
+              rows: { R1: { h: 16.5, angle: -13 }, R2: { h: 14.0, angle: -6 },
+                      R3: { h: 12.5, angle:   0 }, R4: { h: 13.7, angle:  6 } },
+              note: 'tall and sculpted - the most material and the longest print' },
+    CHERRY: { dish: 'cylindrical', uniform: false, topInset: 2.80, dishDepth: 0.85,
+              rows: { R1: { h:  9.4, angle: -1 }, R2: { h: 8.2, angle: 3 },
+                      R3: { h:  6.9, angle:  7 }, R4: { h: 7.6, angle: 13 } },
+              note: 'low and sculpted - the shortest print of the five' },
+    OEM:    { dish: 'cylindrical', uniform: false, topInset: 2.90, dishDepth: 0.90,
+              rows: { R1: { h: 11.2, angle: -3 }, R2: { h: 9.5, angle: 3 },
+                      R3: { h:  9.0, angle:  7 }, R4: { h: 9.4, angle: 13 } },
+              note: 'sculpted, a bit taller than Cherry - the stock-keyboard shape' }
+  };
+
+  var UNIT = 19.05;       // key pitch
+  var CAP_GAP = 1.05;     // pitch minus cap, so 1u is 18.00 mm
+  var DEPTH = 18.00;      // every cap is 1u deep
+  var BED = { x: 40.8, y: 30.6, zFlat: 58.0, zSupported: 52.0 };
+  var PIXEL_MM = 40.8 / 320;
+
+  function capWidth(sizeU) { return UNIT * sizeU - CAP_GAP; }
+
+  // ---- soup ---------------------------------------------------------------
+  function Soup() { this.t = []; }
+  Soup.prototype.tri = function (a, b, c) { this.t.push(a, b, c); };
+  Soup.prototype.quad = function (a, b, c, d) { this.tri(a, b, c); this.tri(a, c, d); };
+  Soup.prototype.count = function () { return this.t.length / 3; };
+  Soup.prototype.toFloat32 = function () {
+    var o = new Float32Array(this.t.length * 3), t = this.t;
+    for (var i = 0; i < t.length; i++) { o[i*3] = t[i][0]; o[i*3+1] = t[i][1]; o[i*3+2] = t[i][2]; }
+    return o;
+  };
+
+  /* Join two rings of EQUAL length, vertex i to vertex i. `outward` gives the
+     side wall a normal pointing away from the ring's axis; the reverse is for a
+     cavity wall, where out-of-the-solid points inward. Also does a flat annulus
+     when both rings share a z - see flatRing. */
+  function band(s, lo, hi, outward) {
+    for (var i = 0; i < lo.length; i++) {
+      var j = (i + 1) % lo.length;
+      if (outward) s.quad(lo[i], lo[j], hi[j], hi[i]);
+      else         s.quad(lo[i], hi[i], hi[j], lo[j]);
+    }
+  }
+  /* A flat annulus between two coplanar rings. `up` = +Z normal. Derived, not
+     guessed: for CCW rings seen from +Z, quad(outer[i],outer[j],inner[j],inner[i])
+     has a +Z cross product. */
+  function flatRing(s, outer, inner, up) {
+    for (var i = 0; i < outer.length; i++) {
+      var j = (i + 1) % outer.length;
+      if (up) s.quad(outer[i], outer[j], inner[j], inner[i]);
+      else    s.quad(outer[i], inner[i], inner[j], outer[j]);
+    }
+  }
+  /* Cap a ring with a centre fan. Valid only for a ring that is star-shaped
+     about its centroid - true for the rectangles here and, less obviously, for
+     the cross: every point of a + is visible from its centre. */
+  function fan(s, ring, up) {
+    var cx = 0, cy = 0, n = ring.length;
+    for (var i = 0; i < n; i++) { cx += ring[i][0]; cy += ring[i][1]; }
+    var c = [cx/n, cy/n, ring[0][2]];
+    for (var k = 0; k < n; k++) {
+      var a = ring[k], b = ring[(k+1) % n];
+      if (up) s.tri(c, a, b); else s.tri(c, b, a);
+    }
+  }
+  /* Bridge a big ring to a small one whose count divides it. Each small vertex
+     fans to a contiguous arc of the big ring. `offset` aligns small[0] with the
+     big vertex nearest it in angle; because both rings are star-shaped about
+     the origin, nested, and stepped monotonically in angle, every triangle
+     stays inside its own angular wedge and none can invert. */
+  function bridgeUneven(s, big, small, up) {
+    var m = big.length, n = small.length, per = m / n;
+    if (per !== Math.floor(per)) throw new Error('keycap: ring counts must divide (' + m + '/' + n + ')');
+    var a0 = Math.atan2(small[0][1], small[0][0]), best = 0, bestD = Infinity;
+    for (var q = 0; q < m; q++) {
+      var d = Math.abs(angDiff(Math.atan2(big[q][1], big[q][0]), a0));
+      if (d < bestD) { bestD = d; best = q; }
+    }
+    for (var k = 0; k < n; k++) {
+      var apex = small[k], b = best + k * per;
+      for (var e = 0; e < per; e++) {
+        var p = big[(b + e) % m], r = big[(b + e + 1) % m];
+        if (up) s.tri(apex, p, r); else s.tri(apex, r, p);
+      }
+      var nxt = small[(k + 1) % n], last = big[(b + per) % m];
+      if (up) s.tri(apex, last, nxt); else s.tri(apex, nxt, last);
+    }
+  }
+  function angDiff(a, b) { var d = a - b; while (d > Math.PI) d -= 2*Math.PI; while (d < -Math.PI) d += 2*Math.PI; return d; }
+
+  /* A rectangle walked CCW from (-w/2,-d/2) with n points per side, so its
+     ordering matches gridPerimeter() vertex for vertex. */
+  function subdivRect(w, d, n, z) {
+    var out = [], hx = w/2, hy = d/2, i;
+    for (i = 0; i < n; i++)     out.push([-hx + w*i/(n-1), -hy, z]);
+    for (i = 1; i < n; i++)     out.push([ hx, -hy + d*i/(n-1), z]);
+    for (i = n-2; i >= 0; i--)  out.push([-hx + w*i/(n-1),  hy, z]);
+    for (i = n-2; i >= 1; i--)  out.push([-hx, -hy + d*i/(n-1), z]);
+    return out;
+  }
+  function gridPerimeter(n) {
+    var out = [], i;
+    for (i = 0; i < n; i++)    out.push([i, 0]);
+    for (i = 1; i < n; i++)    out.push([n-1, i]);
+    for (i = n-2; i >= 0; i--) out.push([i, n-1]);
+    for (i = n-2; i >= 1; i--) out.push([0, i]);
+    return out;
+  }
+
+  /* The cross outline as one closed 12-point ring, CCW. */
+  function crossRing(len, wide, z) {
+    var L = len/2, W = wide/2;
+    return [[ W,-L,z],[ W,-W,z],[ L,-W,z],[ L, W,z],[ W, W,z],[ W, L,z],
+            [-W, L,z],[-W, W,z],[-L, W,z],[-L,-W,z],[-W,-W,z],[-W,-L,z]];
+  }
+  /* The post ring reuses the cross's angles at a fixed radius, so post-to-cross
+     is a clean radial band instead of an arbitrary polygon match. */
+  function postRing(cross, r, z) {
+    return cross.map(function (p) {
+      var m = Math.hypot(p[0], p[1]);
+      return [p[0]/m*r, p[1]/m*r, z];
+    });
+  }
+
+  /* Grid resolution has to leave the top perimeter (4n-4) divisible by the
+     cross's 12, so bridgeUneven gets a whole number. */
+  function snapGrid(n) {
+    n = Math.max(7, Math.min(61, Math.round(n)));
+    while ((4*n - 4) % 12) n++;
+    return n;
+  }
+
+  // ---- the top surface ----------------------------------------------------
+  /* z grows from the top face INTO the cap, so a dish - which removes material
+     from the middle of the face - is deepest at the centre. */
+  function topField(opts) {
+    var w = opts.topW, d = opts.topD, prof = opts.profile;
+    var dd = opts.dishDepth, tan = Math.tan(opts.angle * Math.PI / 180);
+    return function (x, y) {
+      var dish;
+      if (prof.dish === 'cylindrical') {
+        var u = x / (w/2);
+        dish = dd * Math.max(0, 1 - u*u);
+      } else {
+        var r = Math.hypot(x / (w/2), y / (d/2));
+        dish = dd * Math.max(0, 1 - r*r);
+      }
+      return dish + y * tan;
+    };
+  }
+
+  /* ---- the build --------------------------------------------------------- */
+  function build(opts) {
+    var o = opts || {};
+    var pname = (o.profile || 'CHERRY').toUpperCase();
+    var prof = PROFILES[pname];
+    if (!prof) throw new Error('keycap: unknown profile "' + pname + '"');
+    var rname = o.row || (prof.uniform ? Object.keys(prof.rows)[0] : 'R3');
+    var row = prof.rows[rname];
+    if (!row) throw new Error('keycap: ' + pname + ' has no row ' + rname +
+      ' (has ' + Object.keys(prof.rows).join(', ') + ')');
+
+    var mx = Object.assign({}, MX, o.mx || {});
+    var sizeU = o.sizeU || 1;
+    var W = capWidth(sizeU), D = DEPTH;
+    var wall = o.wall || 1.35;
+    /* The roof is the material between the dish and the top of the stem hole,
+       and it FOLLOWS the top contour rather than sitting at one flat height.
+       That distinction decides whether the low profiles exist at all: a flat
+       roof set below the cap's highest point makes a tilted Cherry R3 almost
+       4 mm thick at the front, and the stem then does not fit inside a 6.9 mm
+       cap. Real caps are thin and follow the curve, so this one does too. */
+    var roof = o.roof || 1.20;
+    var topW = W - 2*prof.topInset, topD = D - 2*prof.topInset;
+    var n = snapGrid(o.topGrid || 25);
+    var warn = [];
+
+    var field = topField({ topW: topW, topD: topD, profile: prof,
+                           dishDepth: (o.dishDepth != null ? o.dishDepth : prof.dishDepth),
+                           angle: (o.angle != null ? o.angle : row.angle) });
+    /* Legends and any generated skin are the same thing: an extra displacement
+       on this one surface. Nothing downstream has to know which it was. */
+    var relief = o.relief || null;
+    function raw(x, y) {
+      var z = field(x, y);
+      if (relief) z += relief(x / (topW/2), y / (topD/2), topW, topD);
+      return z;
+    }
+
+    // normalise so the cap's highest point is z = 0 and z grows into the cap
+    var i, j, minZ = Infinity;
+    for (i = 0; i < n; i++) for (j = 0; j < n; j++) {
+      var zz = raw(-topW/2 + topW*i/(n-1), -topD/2 + topD*j/(n-1));
+      if (zz < minZ) minZ = zz;
+    }
+    function surf(x, y) { return raw(x, y) - minZ; }
+
+    var gp = [], maxZ = -Infinity;
+    for (i = 0; i < n; i++) {
+      gp.push([]);
+      for (j = 0; j < n; j++) {
+        var x = -topW/2 + topW*i/(n-1), y = -topD/2 + topD*j/(n-1), z = surf(x, y);
+        if (z > maxZ) maxZ = z;
+        gp[i].push([x, y, z]);
+      }
+    }
+
+    /* Profile height tables quote the FRONT edge, not the overall height - a
+       sculpted cap's back edge stands taller by the row angle. Measuring from
+       the front is what makes the published numbers land on a real cap. */
+    var zFront = surf(0, -topD/2);
+    var mouthZ = row.h + zFront;
+
+    var slot = mx.crossWide + mx.slotClearance;
+    var crossXY = crossRing(mx.crossLen, slot, 0);
+    var postXY = postRing(crossXY, mx.postR, 0);
+
+    /* The hole floor is flat, so the switch bottoms out evenly, and it sits at
+       the deepest the roof gets anywhere under the post - otherwise a dish or a
+       legend could push the roof up through the floor and open a hole in the
+       top of the cap. */
+    var floorZ = surf(0, 0) + roof;
+    postXY.forEach(function (p) { var z = surf(p[0], p[1]) + roof; if (z > floorZ) floorZ = z; });
+    /* A low sculpted row cannot hold a full-depth stem - Cherry R4 is 8.45 mm
+       tall and a 4.2 mm stem under a 1.2 mm roof wants 8.58. Real caps shorten
+       the stem rather than not existing, so this does too: take what the cap
+       has, down to the 3.0 mm that still holds a switch, and say so. Below
+       that it refuses. */
+    var wantDepth = mx.crossDepth;
+    var haveDepth = mouthZ - 0.3 - floorZ;
+    var useDepth = Math.min(wantDepth, haveDepth);
+    var postTopZ = floorZ + useDepth;
+
+    // ---- refuse to emit a cap that cannot work ---------------------------
+    var innerW = topW - 2*wall, innerD = topD - 2*wall;
+    if (innerW <= 2*mx.postR + 1 || innerD <= 2*mx.postR + 1)
+      throw new Error('keycap: the ' + pname + ' top face is ' + topW.toFixed(1) +
+        ' mm, too small for a ' + (mx.postR*2).toFixed(1) + ' mm post inside ' + wall + ' mm walls');
+    if (useDepth < 3.0)
+      throw new Error('keycap: ' + pname + ' ' + rname + ' stands ' + mouthZ.toFixed(2) +
+        ' mm, which leaves only ' + Math.max(0, haveDepth).toFixed(2) +
+        ' mm for the stem under a ' + roof + ' mm roof - a switch needs at least 3.0. ' +
+        'Use a taller row, or a thinner roof.');
+    if (useDepth < wantDepth - 0.01)
+      warn.push('the stem is ' + useDepth.toFixed(2) + ' mm deep instead of ' + wantDepth +
+        ' - that is all ' + pname + ' ' + rname + ' has room for. It still holds a switch ' +
+        '(the stem stands 3.6 mm proud) but sits slightly higher on it.');
+    if (mx.postR * 2 <= mx.crossLen)
+      throw new Error('keycap: postR ' + mx.postR + ' is smaller than the ' +
+        mx.crossLen + ' mm cross - the slot would break out of the post');
+    if (sizeU >= 2) warn.push('a ' + sizeU + 'u cap needs stabiliser stems at ±11.94 mm; ' +
+      'this engine only makes the centre stem, so it will bind on a stabilised key');
+
+    var s = new Soup();
+
+    // top surface: solid is at larger z, so the outward normal is -Z
+    for (i = 0; i < n-1; i++) for (j = 0; j < n-1; j++)
+      s.quad(gp[i][j], gp[i][j+1], gp[i+1][j+1], gp[i+1][j]);
+
+    // rings, all 4n-4 long so every join is vertex-to-vertex
+    var per = gridPerimeter(n);
+    var topRing = per.map(function (q) { return gp[q[0]][q[1]]; });
+    var mouthOut = subdivRect(W, D, n, mouthZ);
+    var mouthIn  = subdivRect(W - 2*wall, D - 2*wall, n, mouthZ);
+    // the roof underside follows the top contour, so its ring is not planar
+    var roofRing = subdivRect(innerW, innerD, n, 0).map(function (q) {
+      return [q[0], q[1], surf(q[0], q[1]) + roof];
+    });
+
+    band(s, topRing, mouthOut, true);      // outer skirt
+    flatRing(s, mouthOut, mouthIn, true);  // the rim that sits on the switch plate
+    band(s, roofRing, mouthIn, false);     // cavity wall
+
+    // ---- the stem --------------------------------------------------------
+    var poLo = postXY.map(function (q) { return [q[0], q[1], surf(q[0], q[1]) + roof]; });
+    var poHi = postXY.map(function (q) { return [q[0], q[1], postTopZ]; });
+    var crLo = crossXY.map(function (q) { return [q[0], q[1], floorZ]; });
+
+    /* The slot mouth is flared, then steps down to full size - the lead-in the
+       relegendable reference cap uses, which matters more on a printed stem
+       than a moulded one. Set crossChamfer to 0 for a straight slot. */
+    var cham = Math.max(0, mx.crossChamfer || 0);
+    var chamZ = Math.max(0, Math.min(mx.crossChamferZ || 0, useDepth * 0.5));
+    var crHi = crossRing(mx.crossLen + cham, slot + cham, postTopZ);
+    var crMid = cham > 0 ? crossXY.map(function (q) { return [q[0], q[1], postTopZ - chamZ]; }) : null;
+
+    bridgeUneven(s, roofRing, poLo, true); // roof underside, around the post
+    band(s, poLo, poHi, true);             // post wall
+    flatRing(s, poHi, crHi, true);         // the post's free end
+    if (crMid) {
+      band(s, crMid, crHi, false);         // the flared lead-in
+      band(s, crLo, crMid, false);         // the slot proper
+    } else {
+      band(s, crLo, crHi, false);
+    }
+    fan(s, crLo, true);                    // the floor the switch bottoms out on
+
+    var pos = s.toFloat32();
+    return {
+      positions: pos,
+      triangles: s.count(),
+      profile: pname, row: rname, sizeU: sizeU,
+      size: { x: W, y: D, z: +mouthZ.toFixed(3) },
+      slotWidth: +slot.toFixed(3),
+      slotPixels: +(slot / PIXEL_MM).toFixed(1),
+      angle: (o.angle != null ? o.angle : row.angle),
+      mouthZ: +mouthZ.toFixed(3), frontZ: +zFront.toFixed(3),
+      roofMm: roof, floorZ: +floorZ.toFixed(3), postTopZ: +postTopZ.toFixed(3),
+      stemDepth: +useDepth.toFixed(3),
+      printPlan: fits(W, D, mouthZ),
+      warnings: warn
+    };
+  }
+
+  /* ---- print orientation -------------------------------------------------
+     Lay the top face's mean plane on the plate: rotate by -angle about X, then
+     drop to z=0.
+
+     The other orientation does not work, and it is worth writing down why. Mouth
+     down puts the roof last, spanning the hollow cavity - an 11 mm island with
+     nothing under it, which needs supports INSIDE the cap where they cannot be
+     cleaned off the stem. Top down, every layer sits on the one below and no
+     support touches a functional surface. The cost is that the dish rim meets
+     the plate as a ring rather than a face, so the over-exposed base layers
+     land on the cap's visible top edge - that is the real trade, and it is the
+     better half of it. */
+  function orientForPrint(positions, angleDeg) {
+    var a = -(angleDeg || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a);
+    var out = new Float32Array(positions.length), minZ = Infinity, k;
+    for (k = 0; k < positions.length; k += 3) {
+      var y = positions[k+1], z = positions[k+2];
+      out[k] = positions[k];
+      out[k+1] = y*c - z*sn;
+      out[k+2] = y*sn + z*c;
+      if (out[k+2] < minZ) minZ = out[k+2];
+    }
+    for (k = 2; k < out.length; k += 3) out[k] -= minZ;
+    return out;
+  }
+
+  /* ---- validate anything claiming to be a keycap -------------------------
+     Used on generated meshes. It reports; it does not repair. */
+  function validate(positions, opts) {
+    var o = opts || {}, issues = [], notes = [];
+    var px = o.pixelMm || PIXEL_MM;
+    var sizeU = o.sizeU || 1;
+    if (!positions || !positions.length || positions.length % 9)
+      return { ok: false, issues: ['not a triangle soup'], notes: [] };
+
+    var mn = [Infinity,Infinity,Infinity], mxx = [-Infinity,-Infinity,-Infinity];
+    for (var i = 0; i < positions.length; i += 3) for (var k = 0; k < 3; k++) {
+      if (positions[i+k] < mn[k]) mn[k] = positions[i+k];
+      if (positions[i+k] > mxx[k]) mxx[k] = positions[i+k];
+    }
+    var size = { x: mxx[0]-mn[0], y: mxx[1]-mn[1], z: mxx[2]-mn[2] };
+
+    var wantW = capWidth(sizeU);
+    if (size.x > UNIT * sizeU) issues.push('it is ' + size.x.toFixed(1) +
+      ' mm wide - a ' + sizeU + 'u cap must stay under the ' + (UNIT*sizeU).toFixed(2) +
+      ' mm pitch or it binds on its neighbour');
+    if (size.y > UNIT) issues.push('it is ' + size.y.toFixed(1) +
+      ' mm deep - over the ' + UNIT + ' mm row pitch');
+    if (size.x < wantW - 3 || size.y < DEPTH - 3)
+      notes.push('smaller than a ' + sizeU + 'u cap (' + wantW.toFixed(1) + ' × ' +
+        DEPTH + ' mm) - scale it up before slicing');
+    if (size.z > 20) issues.push('it is ' + size.z.toFixed(1) + ' mm tall; the tallest profile here is SA R1 at 16.5 mm');
+
+    var fit = fits(size.x, size.y, size.z);
+    if (!fit.ok) issues.push(fit.why);
+    else if (fit.tilt) notes.push(fit.why);
+
+    var mx = Object.assign({}, MX, o.mx || {});
+    var slot = mx.crossWide + mx.slotClearance, pxAcross = slot / px;
+    notes.push('stem slot ' + slot.toFixed(2) + ' mm = ' + pxAcross.toFixed(1) + ' pixels');
+    if (pxAcross < 8) issues.push('the slot is only ' + pxAcross.toFixed(1) +
+      ' pixels across - under about 8 it will not hold its shape');
+
+    var h = root.meshHealth ? root.meshHealth(positions) : null;
+    if (h && h.severity === 'bad') issues.push('mesh: ' + h.advice);
+    else if (h && !h.watertight) notes.push('mesh: ' + h.summary);
+
+    return { ok: !issues.length, size: size, slotWidth: +slot.toFixed(3),
+             slotPixels: +pxAcross.toFixed(1), issues: issues, notes: notes, health: h };
+  }
+
+  /* ---- what the bed will take -------------------------------------------
+     Print time depends on height alone, so a full plate costs the same as one
+     cap. Packing is therefore the whole game.
+
+     A cap too long to lie flat is NOT out of reach: tilting it about the depth
+     axis trades footprint for height, and height is the axis with 52 mm spare.
+     A 2.25u cap is 41.81 mm on a 40.8 mm bed and misses flat by a millimetre -
+     but at 30 deg it is 29.8 mm across and 40 mm tall, and fits easily. The
+     envelope below is computed, not assumed, and it says 3u is the ceiling: a
+     6.25u spacebar is 118 mm and clears at no angle at all. That is the single
+     key this printer cannot make in one piece.
+
+     Tilting about Y keeps the stem printable, which is the part that would
+     otherwise rule it out. The post grows out of the roof, so the roof has to
+     be laid down first; that holds for any tilt under 90 deg, because the
+     post's axis keeps a positive vertical component. Supports land on the
+     leading edge of the cap and never inside the stem cavity. */
+  function tiltFit(len, depth, h, opts) {
+    var o = opts || {};
+    var margin = o.margin == null ? 1.0 : o.margin;
+    var zLimit = o.zLimit || BED.zSupported;
+    if (depth > BED.y) return { ok: false };
+    var lo = null, hi = null;
+    for (var t = 0; t <= 860; t++) {
+      var r = t / 10 * Math.PI / 180;
+      var fx = len * Math.cos(r) + h * Math.sin(r);
+      var fz = len * Math.sin(r) + h * Math.cos(r);
+      if (fx <= BED.x - margin && fz <= zLimit) { if (lo === null) lo = t/10; hi = t/10; }
+    }
+    if (lo === null) return { ok: false };
+    /* Take the shallowest angle that clears: less tilt is less overhang, less
+       support contact, and a shorter print. */
+    var use = lo, rr = use * Math.PI / 180;
+    return { ok: true, deg: +use.toFixed(1), degMin: lo, degMax: hi,
+             footX: +(len*Math.cos(rr) + h*Math.sin(rr)).toFixed(2),
+             height: +(len*Math.sin(rr) + h*Math.cos(rr)).toFixed(2) };
+  }
+
+  function fits(w, d, h, opts) {
+    h = h || 9.0;
+    if (w <= BED.x && d <= BED.y)
+      return { ok: true, tilt: 0, rotate: false, supports: false, foot: { x: w, y: d }, height: h };
+    if (d <= BED.x && w <= BED.y)
+      return { ok: true, tilt: 0, rotate: true, supports: false, foot: { x: d, y: w }, height: h };
+    var t = tiltFit(w, d, h, opts);
+    if (t.ok) return { ok: true, tilt: t.deg, tiltRange: [t.degMin, t.degMax], rotate: false,
+      supports: true, foot: { x: t.footX, y: d }, height: t.height,
+      why: 'too long to lie flat, but it clears at ' + t.deg + '° - ' + t.footX +
+           ' mm across and ' + t.height + ' mm tall. Tilted means supports; they land on the ' +
+           'leading edge, not in the stem.' };
+    return { ok: false, tilt: null, rotate: false, supports: true,
+      why: 'a ' + w.toFixed(1) + ' × ' + d.toFixed(1) + ' mm cap clears the ' +
+        BED.x + ' × ' + BED.y + ' × ' + BED.zSupported +
+        ' mm volume at no angle. Above about 3u - which on a keyboard means only the ' +
+        'spacebar - the cap has to be split and joined.' };
+  }
+
+  function perPlate(sizeU, gap, h) {
+    gap = gap == null ? 1.5 : gap;
+    h = h || 9.0;
+    var f = fits(capWidth(sizeU), DEPTH, h);
+    if (!f.ok) return { count: 0, sizeU: sizeU, why: f.why };
+    var a = f.foot.x, b = f.foot.y;
+    var cols = Math.floor((BED.x + gap) / (a + gap)), rows = Math.floor((BED.y + gap) / (b + gap));
+    return { count: Math.max(0, cols) * Math.max(0, rows), cols: cols, rows: rows,
+             sizeU: sizeU, tilt: f.tilt, supports: f.supports, capMm: f.foot };
+  }
+
+  /* Lay caps out on the bed, translating each into place. Returns the plate as
+     one soup plus whatever did not fit, so the caller can say so instead of
+     silently dropping caps. */
+  function layout(caps, opts) {
+    var o = opts || {}, gap = o.gap == null ? 1.5 : o.gap;
+    var placed = [], left = [], cx = 0, cy = 0, rowH = 0, total = 0, parts = [];
+    caps.forEach(function (c) {
+      var w = c.size.x, d = c.size.y;
+      if (cx + w > BED.x + 1e-6) { cx = 0; cy += rowH + gap; rowH = 0; }
+      if (cy + d > BED.y + 1e-6) { left.push(c); return; }
+      var dx = cx + w/2 - BED.x/2, dy = cy + d/2 - BED.y/2;
+      var p = c.positions, out = new Float32Array(p.length);
+      for (var i = 0; i < p.length; i += 3) {
+        out[i] = p[i] + dx; out[i+1] = p[i+1] + dy; out[i+2] = p[i+2];
+      }
+      parts.push(out); total += p.length;
+      placed.push({ name: c.name || null, x: +dx.toFixed(2), y: +dy.toFixed(2) });
+      cx += w + gap; rowH = Math.max(rowH, d);
+    });
+    var all = new Float32Array(total), at = 0;
+    parts.forEach(function (p) { all.set(p, at); at += p.length; });
+    return { positions: all, triangles: all.length / 9, placed: placed,
+             leftOver: left.length, plates: 1 + Math.ceil(left.length / Math.max(placed.length, 1)) };
+  }
+
+  /* ---- the tuning print --------------------------------------------------
+     A row of stems, each slot a little wider than the last. Print it, try a
+     switch in each, keep the first that clicks on without force, then set
+     mx.slotClearance to that slot minus crossWide. This is how the number gets
+     found; assuming it is how twenty caps come out unusable. */
+  function stemTestComb(from, to, step, opts) {
+    var o = opts || {}, s = new Soup(), stems = [], x = 0, pitch = 10;
+    for (var w = from; w <= to + 1e-9; w += step) {
+      var one = build({
+        profile: 'DSA', sizeU: 1, topGrid: 7,
+        mx: Object.assign({}, MX, o.mx || {}, { slotClearance: w - MX.crossWide })
+      });
+      var p = one.positions;
+      for (var i = 0; i < p.length; i += 9) {
+        s.tri([p[i]+x, p[i+1], p[i+2]], [p[i+3]+x, p[i+4], p[i+5]], [p[i+6]+x, p[i+7], p[i+8]]);
+      }
+      stems.push({ x: +x.toFixed(2), slotMm: +w.toFixed(3) });
+      x += pitch;
+    }
+    return { positions: s.toFloat32(), triangles: s.count(), stems: stems,
+             note: 'left to right, slot widens by ' + step + ' mm each cap' };
+  }
+
+  root.keycap = {
+    MX: MX, PROFILES: PROFILES, UNIT: UNIT, DEPTH: DEPTH, BED: BED, PIXEL_MM: PIXEL_MM,
+    capWidth: capWidth, build: build, orientForPrint: orientForPrint,
+    validate: validate, fits: fits, tiltFit: tiltFit, perPlate: perPlate, layout: layout,
+    stemTestComb: stemTestComb
+  };
+  if (typeof module !== 'undefined' && module.exports) module.exports = root.keycap;
+})(typeof window !== 'undefined' ? window : globalThis);
