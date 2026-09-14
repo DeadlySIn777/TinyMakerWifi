@@ -1487,6 +1487,43 @@ void handleApiFileLayer() {
   f.close();
 }
 
+/* POST /api/files/rename  name=<current>  to=<new>
+
+   The model list could upload, start, preview and delete - but not rename, so
+   whatever name a file arrived with was the name it kept forever. That is fine
+   for "Benchy"; it is not fine for the self-describing names the send tool
+   produces ("DreamerFla_SL1_005_8_2026_09_13_22_39_36"), which carry the facts
+   you want at slice time and none of the ones you want three days later when
+   you are looking for the good one.
+
+   A model is a DIRECTORY of layer PNGs, so this is one SD.rename of the folder.
+   The metadata (model.json, the cached preview) lives inside it and travels
+   with it - nothing there stores the folder's own name. */
+void handleApiFileRename() {
+  if (rejectIfWebControlOff()) return;
+  if (rejectIfBusy()) return;
+  // The resume record points at a model by name: renaming the model it is
+  // waiting on would leave the prompt pointing at nothing (same reasoning as
+  // delete, audit 08-16).
+  if (rejectIfResumePending()) return;
+  if (!sdCardReady()) { sendApiError(503, "sd card unavailable"); return; }
+
+  String from = sanitizeSlug(server.arg("name"), "");
+  String to   = sanitizeSlug(server.arg("to"), "");
+  if (from.length() == 0 || to.length() == 0) { sendApiError(400, "name and to are required"); return; }
+  if (from == to) { sendApiOk("\"name\":\"" + jsonEscape(to) + "\""); return; }
+  if (!safeRootName(from) || !safeRootName(to)) { sendApiError(400, "bad name"); return; }
+  if (!validPrintableModel(from)) { sendApiError(404, "model not found"); return; }
+  if (sdPathExists("/" + to)) { sendApiError(409, "a model with that name already exists"); return; }
+
+  if (!SD.rename(("/" + from).c_str(), ("/" + to).c_str())) {
+    sendApiError(500, "rename failed");
+    return;
+  }
+  sdRev++;   // every cached list and per-model estimate now refers to a stale name
+  sendApiOk("\"name\":\"" + jsonEscape(to) + "\"");
+}
+
 void handleApiFileDelete() {
   if (rejectIfWebControlOff()) return;
   // Nebaigtas spaudinys laukia atsakymo, o jo irasas rodo i modeli korteleje -
@@ -2424,6 +2461,108 @@ void handleApiPrintStart() {
 
 // POST /api/vat/empty -> the vat is empty. Same shape and same gate as
 // /api/vat/refilled; see vatMarkEmpty() for why this exists.
+/* GET /api/preflight?name=MODEL -> everything worth checking before a long print.
+
+   Written after a session that lost a 1h35m print and two more starts to things
+   that were all visible beforehand: a resin profile that had silently reverted
+   to a 0.10 mm draft, a vat that could not reach the end, and a model whose
+   layer height did not match the printer's. Each was one field in a different
+   endpoint, so nobody ever checked all of them.
+
+   Cheap on purpose: layer count and resin come from model.json metadata, not a
+   PNG rescan, so this is safe to call from a button. */
+static void preflightCheck(String &out, bool &okAll, const char *id,
+                           bool pass, bool warnOnly, const String &detail) {
+  if (out.length()) out += ",";
+  out += "{\"check\":\"";  out += id;
+  out += "\",\"pass\":";   out += pass ? "true" : "false";
+  out += ",\"level\":\"";  out += pass ? "ok" : (warnOnly ? "warn" : "fail");
+  out += "\",\"detail\":\""; out += jsonEscape(detail);
+  out += "\"}";
+  if (!pass && !warnOnly) okAll = false;
+}
+
+void handleApiPreflight() {
+  if (!webDashboardRuntimeEnabled()) {
+    sendApiError(403, "web control is off");
+    return;
+  }
+  String name = sanitizeSlug(server.arg("name"), "");
+  String checks;
+  bool okAll = true;
+
+  // --- the printer itself ---
+  preflightCheck(checks, okAll, "idle", !printerBusy(), false,
+                 printerBusy() ? "printer is busy" : "idle");
+  preflightCheck(checks, okAll, "sd", sdCardReady(), false,
+                 sdCardReady() ? "card ready" : "no SD card");
+  preflightCheck(checks, okAll, "homed", zHomed, true,
+                 zHomed ? "Z reference is good" : "not homed since boot - heights are guesses");
+  // Dry run is a WARN, not a fail: a deliberate dry run is a legitimate thing to
+  // start. But it is also how you burn an hour producing nothing, so it is said
+  // out loud rather than left in a settings screen.
+  preflightCheck(checks, okAll, "uv", uvLedEnabled, true,
+                 uvLedEnabled ? "UV will fire" : "DRY RUN is on - nothing will cure");
+
+  // --- resin profile ---
+  bool haveProfile = resinProfileName.length() > 0;
+  preflightCheck(checks, okAll, "resin_profile", haveProfile, false,
+                 haveProfile ? ("using " + resinProfileName) : "no resin selected");
+  {
+    String d = "layer " + String(Layer_Height, 2) + " mm, base " +
+               String((int)Base_Exposure) + "s x" + String((int)Base_Layer) +
+               ", regular " + String(Regular_Exposure / 10.0, 1) + "s";
+    preflightCheck(checks, okAll, "exposure", true, true, d);
+  }
+
+  // --- the model ---
+  if (name.length() && validPrintableModel(name)) {
+    ModelSummary sum;
+    if (modelSummaryForModel(name, sum)) {
+      // Layer-height agreement. The firmware prints every OTHER slice at
+      // 0.10 mm, so a 0.05 mm file still prints - at half the detail. Worth
+      // saying, not worth blocking.
+      bool hMatch = (sum.slicedLayerHeightMm <= 0) ||
+                    (fabsf(sum.slicedLayerHeightMm - Layer_Height) < 0.001f);
+      String hd = sum.slicedLayerHeightMm <= 0
+          ? "file does not say what it was sliced at"
+          : ("file " + String(sum.slicedLayerHeightMm, 2) + " mm vs printer " +
+             String(Layer_Height, 2) + " mm" +
+             (hMatch ? "" : " - will print every other slice, half the detail"));
+      preflightCheck(checks, okAll, "layer_height", hMatch, true, hd);
+
+      preflightCheck(checks, okAll, "layer_count", sum.sourceLayers <= MAX_LAYER_FILES, false,
+                     String(sum.sourceLayers) + " of " + String(MAX_LAYER_FILES) + " max");
+
+      // Resin budget - the one that ends a print at hour seven.
+      double needMl = 0;
+      if (getModelMetadataResin(name, needMl) && needMl > 0) {
+        float have = vatRemaining();
+        float left = have - (float)needMl;
+        bool enough = left > (float)lowResinThresholdMl;
+        String rd = String(have, 1) + " ml in vat, needs " + String((float)needMl, 1) +
+                    " ml, leaves " + String(left, 1) + " ml (stop at " +
+                    String((int)lowResinThresholdMl) + " ml)";
+        preflightCheck(checks, okAll, "resin_volume", enough, false, rd);
+      } else {
+        preflightCheck(checks, okAll, "resin_volume", true, true,
+                       String(vatRemaining(), 1) + " ml in vat, model does not say how much it needs");
+      }
+    } else {
+      preflightCheck(checks, okAll, "model", false, false, "could not read that model");
+    }
+  } else if (name.length()) {
+    preflightCheck(checks, okAll, "model", false, false, "model not found");
+  } else {
+    preflightCheck(checks, okAll, "model", true, true, "no model named - printer checks only");
+  }
+
+  String out = "\"ready\":";
+  out += okAll ? "true" : "false";
+  out += ",\"checks\":[" + checks + "]";
+  sendApiOk(out);
+}
+
 // POST /api/move -> jog the build plate, mm signed (+ up, - down).
 // The gap this closes: the API could start, pause, stop and resume a print, but
 // never move the plate, so every "raise it so I can look" meant standing at the
@@ -5119,6 +5258,7 @@ void network_setup() {
   server.on("/api/files/layer", HTTP_GET, handleApiFileLayer);
   server.on("/api/live/slices", HTTP_GET, handleApiLiveSlices);   // P-live 3D stack
   server.on("/api/files/delete", HTTP_POST, handleApiFileDelete);
+  server.on("/api/files/rename", HTTP_POST, handleApiFileRename);
   server.on("/api/config", HTTP_GET, handleApiConfigGet);
   server.on("/api/config", HTTP_POST, handleApiConfigSave);
   server.on("/api/config/defaults", HTTP_POST, handleApiConfigDefaults);
@@ -5144,6 +5284,7 @@ void network_setup() {
   server.on("/api/vat/empty", HTTP_POST, handleApiVatEmpty);
   server.on("/api/move", HTTP_POST, handleApiMove);
   server.on("/api/uv/test", HTTP_POST, handleApiUvTest);
+  server.on("/api/preflight", HTTP_GET, handleApiPreflight);
   server.on("/api/vat/weight", HTTP_POST, handleApiVatWeight);   // 0.17 0-16
   server.on("/api/resin/calibrate", HTTP_POST, handleApiResinCalibrate);   // R-cal 0.17
   server.on("/api/update", HTTP_GET, handleApiUpdateGet);

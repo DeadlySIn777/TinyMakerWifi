@@ -195,33 +195,117 @@ button.secondary:disabled,.button.secondary:disabled,button.delete:disabled{
    ========================================================================== */
 
 :root{
-  /* semantines busenos - ATSKIROS nuo prekiu zenklo, niekada nemaisomos */
-  --live:#4da3ff;            /* logotipo lankas: „vyksta dabar" */
+  /* ---- 0.18 SHOP RED (V 2026-09-13) ---------------------------------------
+     Chitubox-style dark console, in the shop's red.
+
+     THE TRAP THIS AVOIDS. Red is now the BRAND, so red can no longer also mean
+     "danger" - a solid red Stop next to a solid red Start is two identical
+     buttons with opposite consequences. Danger keeps the hue and changes the
+     FORM instead: primary is filled, destructive is outlined on a dark ground.
+     Shape carries the warning, colour carries the brand.
+
+     "Something is happening" stays BLUE. It is the one state you read from
+     across the room, it must not compete with the accent, and blue on near-
+     black is the most legible live signal available. ---------------------- */
+  --accent:#e5484d;          /* shop red - brand + the one primary action */
+  --accent-deep:#c2262c;     /* pressed / hover */
+  --accent-soft:rgba(229,72,77,.13);
+  --accent-line:rgba(229,72,77,.38);
+
+  --live:#4da3ff;            /* printing - deliberately NOT red */
   --live-soft:rgba(77,163,255,.13);
   --live-line:rgba(77,163,255,.34);
-  --good:#2fbf4f;
-  --good-soft:rgba(47,191,79,.13);
-  --warn-soft:rgba(255,177,95,.13);
-  --danger-soft:rgba(255,107,95,.12);
-  --ink3:#6f7887;            /* treciasis rasalas etiketems */
-  /* fonas pagal brandbook */
-  --bg:#141416;--wrap:#191a1d;--card:#1d1d20;--tile:#161619;--pv:#0f0f11;
-  --line:#26262a;--line2:#2c2c31;--line3:#232327;
-  --btnsec:#2e2e33;
+  --good:#3ecf7a;
+  --good-soft:rgba(62,207,122,.13);
+  --warncol:#f0a43a;
+  --warn-soft:rgba(240,164,58,.13);
+  --dangertxt:#ff6b6b;
+  --danger-soft:rgba(255,107,107,.10);
+
+  /* near-black, very slightly cool so the red reads warm against it */
+  --bg:#0c0d10;--wrap:#111318;--card:#15181e;--tile:#12141a;--pv:#08090b;
+  --line:#22262e;--line2:#2b303a;--line3:#1c2027;
+  --text:#eef1f6;--muted:#9aa3b2;--muted2:#7b8494;--ink3:#69727f;
+  --link:#7fb6ff;
+  --btnsec:#1e222a;--btnsec-t:#eef1f6;
+  --danger:#3a1d20;
+  --subh:#8a8f99;--fwb:#6b7280;--wbar:#2b303a;
+  --toast:#1c2028;--toast-t:#eef1f6;
+  --overlay:rgba(8,9,11,.94);--dim:rgba(8,9,11,.65);
+  --banner:#2a1a12;--warnbg:#2a1618;
+  --dis:#2b303a;--dis-t:#69727f;
 }
 [data-theme=light]{
+  --accent:#d92d33;
+  --accent-deep:#b01f25;
+  --accent-soft:rgba(217,45,51,.09);
+  --accent-line:rgba(217,45,51,.30);
   --live:#1272d8;
   --live-soft:rgba(18,114,216,.09);
   --live-line:rgba(18,114,216,.28);
   --good:#17913a;
   --good-soft:rgba(23,145,58,.10);
-  --warn-soft:rgba(154,91,0,.10);
-  --danger-soft:rgba(178,52,52,.09);
-  --ink3:#7d8695;
-  --bg:#f2f2f4;--wrap:#f8f9fa;--card:#fff;--tile:#f4f5f7;--pv:#e4e8ec;
-  --line:#dfe1e5;--line2:#d9dbe0;--line3:#e3e5e9;
-  --btnsec:#e2e4e8;
+  --warncol:#a9700c;
+  --warn-soft:rgba(169,112,12,.10);
+  --dangertxt:#c0272d;
+  --danger-soft:rgba(192,39,45,.08);
+  --bg:#eef0f4;--wrap:#f7f8fa;--card:#fff;--tile:#f3f5f8;--pv:#e4e8ec;
+  --line:#dde1e8;--line2:#c9cfd9;--line3:#e5e8ee;
+  --text:#12151a;--muted:#5a6370;--muted2:#6d7683;--ink3:#7d8695;
+  --link:#155fb0;
+  --btnsec:#e6e9ef;--btnsec-t:#12151a;
+  --danger:#f7dcdd;
+  --toast:#f1f3f6;--toast-t:#12151a;
 }
+
+/* ---- Chitubox-ish console surfaces -------------------------------------- */
+.card{
+  background:linear-gradient(180deg,var(--card),var(--tile));
+  border:1px solid var(--line);
+  border-radius:12px;
+}
+.wrap{border:1px solid var(--line2);border-radius:16px}
+
+/* Primary = FILLED red. One per view. */
+button,.button{
+  background:linear-gradient(180deg,var(--accent),var(--accent-deep));
+  border:1px solid var(--accent-deep);
+  color:#fff;
+  font-weight:600;
+  letter-spacing:.01em;
+}
+button:hover,.button:hover{filter:brightness(1.08)}
+button:active,.button:active{filter:brightness(.94)}
+
+/* Secondary = quiet, so the red one is obviously THE action */
+.button.secondary,button.secondary{
+  background:var(--btnsec);
+  border:1px solid var(--line2);
+  color:var(--btnsec-t);
+  background-image:none;
+}
+.button.secondary:hover,button.secondary:hover{background:var(--line3);filter:none}
+
+/* Destructive = OUTLINED, never filled. Same hue, different form - this is
+   what keeps Stop from looking like Start now that the brand is red. */
+#stopButton,.actions button.danger,button.danger{
+  background:var(--danger-soft);
+  background-image:none;
+  border:1px solid var(--accent-line);
+  color:var(--dangertxt);
+  font-weight:600;
+}
+#stopButton:hover,button.danger:hover{
+  background:var(--accent-soft);
+  filter:none;
+}
+
+/* the active tab reads as selected without shouting */
+.tabs button.active,.navBtn.active{
+  background:linear-gradient(180deg,var(--accent),var(--accent-deep));
+  border-color:var(--accent-deep);
+}
+
 
 /* --- kortele: mazesnis kontrastas rembui, svelnesnis kampas ------------- */
 .card{border-color:var(--line);border-radius:12px}
