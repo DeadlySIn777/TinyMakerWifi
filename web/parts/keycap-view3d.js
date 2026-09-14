@@ -142,7 +142,8 @@
     function up() {
       if (!self.dragging) return;
       self.dragging = false;
-      if (Math.abs(self.vel) > 0.002) self._coast();
+      // settle back to the full-resolution buffer
+      if (Math.abs(self.vel) > 0.002) self._coast(); else self.draw();
     }
     this.c.addEventListener('mousedown', down);
     this.c.addEventListener('touchstart', down, { passive: false });
@@ -160,6 +161,7 @@
       self.vel *= 0.94;
       self.draw();
       if (Math.abs(self.vel) > 0.0012) self.raf = requestAnimationFrame(step);
+      else self.draw();                    // one last pass at full resolution
     })();
   };
 
@@ -228,9 +230,19 @@
      contact shadow drawn first so the cap sits on something. */
   View.prototype.draw = function () {
     var g = this.g, c = this.c;
-    var dpr = Math.min(window.devicePixelRatio || 1, 1.6);
-    var W = Math.max(1, Math.round(c.clientWidth * dpr)) || c.width;
-    var H = Math.max(1, Math.round(c.clientHeight * dpr)) || c.height;
+    /* Two caps on the backing store, both of which matter on a phone. The
+       device pixel ratio is held to 1.35 and the whole buffer to MAX_PX on its
+       long edge: this is a software rasteriser, so cost is pixels, and a 3x
+       retina buffer behind a 420 px canvas is 1.6 million of them per frame for
+       detail nobody can see on a 13 mm object. Dragging drops it further -
+       half resolution while the cap is moving, full the moment it settles. */
+    var dpr = Math.min(root.devicePixelRatio || 1, 1.35);
+    if (this.dragging || Math.abs(this.vel) > 0.0012) dpr *= 0.62;
+    var W = Math.max(1, Math.round((c.clientWidth || c.width) * dpr));
+    var H = Math.max(1, Math.round((c.clientHeight || c.height) * dpr));
+    var MAX_PX = this.o.maxPx || 560;
+    var lng = Math.max(W, H);
+    if (lng > MAX_PX) { W = Math.round(W * MAX_PX / lng); H = Math.round(H * MAX_PX / lng); }
     if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
     var css = this.o.tokens || {};
     g.clearRect(0, 0, W, H);
@@ -262,8 +274,12 @@
     // ---- the cap ----------------------------------------------------------
     var img = g.getImageData(0, 0, W, H);
     var data = img.data;
-    var zb = new Float32Array(W * H);
-    for (i = 0; i < zb.length; i++) zb[i] = Infinity;
+    /* Reused, not reallocated. At a 560 px buffer this is a 300 KB typed array
+       and allocating a fresh one per frame handed the collector a megabyte a
+       second during a drag. */
+    if (!this._zb || this._zb.length !== W * H) this._zb = new Float32Array(W * H);
+    var zb = this._zb;
+    zb.fill(Infinity);
 
     var base = css.base || [196, 188, 176];
     /* Camera space here has +Z running AWAY from the viewer - project() builds
