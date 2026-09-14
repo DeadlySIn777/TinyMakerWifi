@@ -178,6 +178,58 @@
     });
   }
 
+  /* ---- what you had open, kept across a reload -------------------------
+     "the prints it generates, I refresh and they disappear". The Library keeps
+     every generation, but the design actually ON the cap lived in a variable
+     and went with the page. Only the small stuff goes in localStorage - the
+     mesh itself is already in IndexedDB under libId, so this is a pointer plus
+     a handful of settings, not a megabyte. */
+  var SESSION = 'tmKeycapSession';
+  function rememberSession() {
+    try {
+      localStorage.setItem(SESSION, JSON.stringify({
+        key: st.key, sizeU: st.sizeU, profile: st.profile, row: st.row,
+        art: st.art, icon: st.icon, digit: st.digit, braille: st.braille,
+        depth: st.depth, raised: st.raised, touchedFinish: !!st.touchedFinish,
+        libId: st.libId || null, prompt: st.skinFrom || '', step: st.step
+      }));
+    } catch (e) { /* private window, or storage off - not worth a message */ }
+  }
+  function restoreSession() {
+    var raw;
+    try { raw = localStorage.getItem(SESSION); } catch (e) { return; }
+    if (!raw) return;
+    var d;
+    try { d = JSON.parse(raw); } catch (e) { return; }
+    if (!d || !d.profile || !K.PROFILES[d.profile]) return;
+    st.profile = d.profile;
+    st.row = K.PROFILES[d.profile].rows[d.row] ? d.row : Object.keys(K.PROFILES[d.profile].rows)[0];
+    st.sizeU = d.sizeU || 1;
+    st.key = d.key || null;
+    st.art = d.art || 'gen';
+    st.icon = d.icon || null;
+    st.digit = d.digit || '';
+    st.braille = d.braille || '';
+    st.depth = d.depth || st.depth;
+    st.raised = d.raised !== false;
+    st.touchedFinish = !!d.touchedFinish;
+    st.skinFrom = d.prompt || '';
+    st.libId = d.libId || null;
+    if ($('kcDigit')) $('kcDigit').value = st.digit;
+    if ($('kcBraille')) $('kcBraille').value = st.braille;
+    if ($('kcPrompt') && st.skinFrom) $('kcPrompt').value = st.skinFrom;
+    if ($('kcDepth')) $('kcDepth').value = st.depth;
+    if ($('kcDepthVal')) $('kcDepthVal').textContent = st.depth.toFixed(2);
+    /* The model comes back from IndexedDB, so a generated design survives a
+       reload without spending another generation. */
+    if (st.libId && window.keycapLibrary) {
+      window.keycapLibrary.get(st.libId).then(function (rec) {
+        if (rec && rec.positions) { st.sculpt = rec.positions; refresh(); }
+      }).catch(function () {});
+    }
+    if (d.step > 1 && st.key) go(d.step); else refresh();
+  }
+
   // ---- the shelf ---------------------------------------------------------
   function keepCurrent(prompt) {
     if (!window.keycapLibrary || !st.sculpt) return;
@@ -196,7 +248,7 @@
       prompt: prompt || st.skinFrom || '',
       kind: 'sculpt', positions: st.sculpt, thumb: thumb,
       design: window.keycapShare ? window.keycapShare.encode(designOf()) : null
-    }).then(function () { drawShelf(); })
+    }).then(function (rec) { st.libId = rec && rec.id; rememberSession(); drawShelf(); })
       .catch(function (e) { say('kcGenNote', 'Kept on the cap but NOT saved: ' + e.message, 'bad'); });
   }
 
@@ -241,6 +293,7 @@
       st.skinFrom = rec.prompt || '';
       st.libId = id;
       st.icon = null;
+      rememberSession();
       if ($('kcPrompt') && rec.prompt) $('kcPrompt').value = rec.prompt;
       drawShelf();
       refresh();
@@ -501,6 +554,7 @@
   }
 
   function refreshNow() {
+    rememberSession();
     var rel = null, err = null;
     try { rel = relief(); } catch (e) { err = e.message; }
     try {
@@ -1008,6 +1062,7 @@
   setArt(st.art);
   drawShelf();
   setFinish(st.raised);
+  restoreSession();
   $('kcDepth').value = st.depth;
   $('kcDepthVal').textContent = st.depth.toFixed(2);
   drawBoard(); drawProfiles(); drawRows(); drawIcons(); go(1);
