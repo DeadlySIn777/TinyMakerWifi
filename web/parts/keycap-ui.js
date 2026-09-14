@@ -331,6 +331,12 @@
   function useSaved(id) {
     window.keycapLibrary.get(id).then(function (rec) {
       if (!rec || !rec.positions) throw new Error('That design has no model stored.');
+      /* setArt FIRST. Opening a saved sculpt while the card was in Braille
+         mode left st.art on 'braille', so relief() went on returning dots and
+         the restored mesh was never built - the design silently did not arrive,
+         and the mode row still said Braille. setArt clears the fields of other
+         modes, so it has to run before the mesh is assigned, not after. */
+      setArt('gen');
       st.sculpt = rec.positions;
       st.skinFrom = rec.prompt || '';
       st.libId = id;
@@ -545,9 +551,18 @@
            sculpt is far more detail than a 127.5 micron mask can print. Saying
            what the printer can actually hold, on the note that was already
            there, is the difference between a happy preview and a happy part. */
+        /* THE NOTE QUOTED A WIDTH THE SCULPT NEVER HAS. This passed the TOP
+           FACE width - 12.70 mm on a DSA 1u - while seat() spreads the sculpt
+           to min(capWidth * 1.06, pitch - 0.4), which is 18.65. So the "about
+           N mm across" figure was out by nearly half, and the smallest-feature
+           number derived from it was wrong in the same direction. Measured, not
+           predicted: capFor() has already seated the mesh by the time anybody
+           reads this, so ask the seat what it actually did. */
+        var seatedNow = built && built.seated;
         var adv = window.keycapSkin.printableAdvice
                 ? window.keycapSkin.printableAdvice(
-                    K.capWidth(st.sizeU) - 2 * K.PROFILES[st.profile].topInset)
+                    seatedNow ? seatedNow.sculptMm.x
+                              : Math.min(K.capWidth(st.sizeU) * 1.06, 19.05 * st.sizeU - 0.4))
                 : null;
         say('kcGenNote', 'seated a ' + tris.toLocaleString() + ' triangle model on the cap' +
           (adv ? ' · ' + adv.note : ''));
@@ -1067,8 +1082,14 @@
           mv.map(function (m) { return m.dropMm.toFixed(2) + ' mm'; }).join(', ') +
           ') \u2014 it would have printed in mid air.');
       } else {
+        /* sculptMm.z is the whole sculpt, INCLUDING the part sunk into the
+           cap, so quoting it as "proud of the cap" overstated the figure by
+           seatDepth every time. The finished height minus the cap's own height
+           is what actually stands above the face, and it stays right after a
+           reseat has moved a piece and changed the bounding box. */
+        var proud = built.seated.sculptMm.z - built.seated.seatDepth;
         say('kcLegendWarn', built.seated.sculptTriangles.toLocaleString() +
-          ' triangle sculpt, ' + built.seated.sculptMm.z.toFixed(1) +
+          ' triangle sculpt, ' + proud.toFixed(1) +
           ' mm proud of the cap' +
           (sk.anchorage && sk.anchorage.shells > 1
             ? ', ' + sk.anchorage.shells + ' pieces all attached' : '') + '.');

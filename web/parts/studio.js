@@ -281,8 +281,30 @@
           });
           if (sub) sub.classList.remove('stOff');
         } else if (pair[1] === null && room === 'settings') {
-          go(localStorage.getItem('tmStudioRoom') === 'settings' ? 'monitor'
-             : (localStorage.getItem('tmStudioRoom') || 'monitor'));
+          /* THE PAGE HAS ALREADY NAVIGATED - that is why this observer fired.
+             Calling go() from here made it click #homeViewButton again, running
+             a second complete openView('home') for one movement: two preview
+             repaints, two fetchSlicesSeq bumps. Only the tab state is out of
+             date, so only the tab state is updated.
+
+             And the storage read was bare. In a private window or with site
+             data blocked, localStorage.getItem THROWS - inside a
+             MutationObserver callback, where nothing catches it - and the nav
+             was left showing Settings over the Monitor room. Every other
+             access in this file is wrapped; this one was missed. */
+          var back = 'monitor';
+          try { back = localStorage.getItem('tmStudioRoom') || 'monitor'; } catch (e2) {}
+          if (back === 'settings') back = 'monitor';
+          room = back;
+          Array.prototype.forEach.call(nav.querySelectorAll('.stTab'), function (t) {
+            var on = t.dataset.room === back;
+            t.classList.toggle('on', on);
+            t.setAttribute('aria-selected', on ? 'true' : 'false');
+          });
+          if (sub) sub.classList.add('stOff');
+          mMon.classList.toggle('stOff', back !== 'monitor');
+          mCre.classList.toggle('stOff', back !== 'create');
+          mLib.classList.toggle('stOff', back !== 'library');
         }
       }).observe(b, { attributes: true, attributeFilter: ['class'] });
     });
@@ -306,6 +328,49 @@
       b.replaceChild(c, n);
       b.insertBefore(a, c);
       break;
+    }
+  })();
+
+  /* ---- links that used to be a scroll and are now a journey -------------
+
+     Two things in this page assume everything is in one column, because until
+     the rooms existed it was. The preview card's title is a deep link into the
+     SD model list, and the SD list measures itself against #homeLeft to decide
+     how many rows to show. Both were silently right and are now silently wrong:
+     the link opens an accordion in a room nobody is looking at, and the
+     measurement reads a container this file emptied, so the list pins itself to
+     the five-row fallback on every desktop.
+
+     Neither is worth reaching into the dashboard's own code for. Take the
+     traveller to the room first, and give the measurement something real to
+     measure. */
+  (function () {
+    /* #printPreviewTitle, NOT the whole .cardHead. The card's header does two
+       jobs - the title is the deep link into the SD list, and the header itself
+       toggles the preview's stage size - so a listener on the header would
+       hijack every resize click to change rooms. Capture phase on the title
+       alone, so the room is switched before the page's own pvGo runs and its
+       scroll then finds a card that is on screen. */
+    var title = $('printPreviewTitle');
+    if (title) title.addEventListener('click', function () {
+      if (room !== 'monitor') go('monitor');
+    }, true);
+
+    /* sdFitRows measures #homeLeft to decide how many rows the SD list gets,
+       and #homeLeft is an empty hidden box now - so the measurement came back
+       zero and the list fell to its five-row floor on every desktop.
+
+       The id is the contract, not the element. #homeLeft means "the left column
+       of the home view", and that is exactly what the Monitor room's first
+       column is - so the id moves to it. One line, and every existing reader of
+       #homeLeft (this one, and anything added later) gets the right box back
+       without knowing the rooms exist. Patching getBoundingClientRect onto the
+       old node would have worked too, and would have been a trap for whoever
+       read the DOM next and found an element whose measurements were a lie. */
+    var left = $('homeLeft');
+    if (left && monA) {
+      left.removeAttribute('id');
+      monA.id = 'homeLeft';
     }
   })();
 

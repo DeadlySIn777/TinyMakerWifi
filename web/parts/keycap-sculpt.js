@@ -443,9 +443,22 @@
       }
     }
 
+    /* BOTTOM-UP, OR THE ANSWER DEPENDS ON TRIANGLE ORDER. Only anchored shells
+       are landing targets, so a floater sitting on another floater is dropped
+       straight past it if it happens to be considered first - and which one is
+       considered first came out of shellParts(), which is soup order. The same
+       scene could resolve two ways depending on how the generator happened to
+       emit its triangles. Lowest first (largest z, since z runs down into the
+       cap) means the thing underneath always lands before the thing on top of
+       it, and the loop below then finds a real target waiting. */
+    var order = [];
+    for (i = 0; i < parts.length; i++) order.push(i);
+    order.sort(function (a, b) { return parts[b].mx[2] - parts[a].mx[2]; });
+
     while (guard++ < parts.length + 2) {
       var did = false;
-      for (i = 0; i < parts.length; i++) {
+      for (var oi = 0; oi < order.length; oi++) {
+        i = order[oi];
         if (anchored[i] || parts[i].tris <= 2) continue;
         var f = parts[i], best = null, onto = null;
 

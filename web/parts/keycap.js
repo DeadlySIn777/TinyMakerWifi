@@ -424,7 +424,18 @@
       roofMm: roof, floorZ: +floorZ.toFixed(3), postTopZ: +postTopZ.toFixed(3),
       stemDepth: +useDepth.toFixed(3),
       printPlan: (function () {
-        var plan = fits(W, D, mouthZ);
+        /* MEASURED IN KEYBOARD SPACE, PRINTED IN PRINT SPACE. Every export
+           calls orientForPrint/orientAsPrinted first, which stands the cap on
+           the plate at the row angle - and on a 13-degree row that is a
+           different height from the one measured here, so the layer count and
+           the clock derived from it were short by up to five per cent. The
+           positions and the angle are both in hand at this point, so measure
+           the pose that will actually be printed instead of assuming the two
+           are the same. */
+        var oriented = orientForPrint(pos, (o.angle != null ? o.angle : row.angle));
+        var oz = 0;
+        for (var q = 2; q < oriented.length; q += 3) if (oriented[q] > oz) oz = oriented[q];
+        var plan = fits(W, D, oz > 0 ? oz : mouthZ);
         /* The relief knows whether it stands proud; the geometry does not. This
            is the one place that has both. */
         var deg = (relief && relief.raised)
