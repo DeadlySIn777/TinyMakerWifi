@@ -233,6 +233,13 @@
     st.row = knownRow(p, d.row);
     st.sizeU = d.sizeU || 1;
     st.key = d.key || null;
+    /* setArt() has already run once by now with the default 'gen', and it is
+       the only thing that paints the mode row and the [data-art] panels. Taking
+       st.art from storage without repainting leaves the state and the buttons
+       permanently disagreeing - and because refreshNow() writes the session
+       back, the mismatched pair is saved again and never heals. paintArt, not
+       setArt: the full one would re-apply the mode defaults over the depth and
+       finish this session is restoring. */
     st.art = d.art || 'gen';
     st.icon = d.icon || null;
     st.digit = d.digit || '';
@@ -445,6 +452,21 @@
     none:    { depth: 0.55, raised: false }
   };
 
+  /* Painting the mode row is not the same as CHANGING the mode, and conflating
+     them is why a restored session came back lying. setArt() also applies the
+     mode's defaults and clears the fields that belong to other modes - exactly
+     right when somebody clicks a mode button, exactly wrong when you are
+     putting back a design that already has its own depth, its own letter and
+     its own icon. restoreSession() and useSaved() want only the paint. */
+  function paintArt(mode) {
+    Array.prototype.forEach.call($('kcModes').querySelectorAll('button'), function (b) {
+      b.classList.toggle('on', b.getAttribute('data-mode') === mode);
+    });
+    Array.prototype.forEach.call($('kcCard').querySelectorAll('[data-art]'), function (p) {
+      p.hidden = p.getAttribute('data-art') !== mode;
+    });
+  }
+
   function setArt(mode) {
     st.art = mode;
     var d = ART_DEFAULTS[mode];
@@ -454,12 +476,7 @@
       if ($('kcDepthVal')) $('kcDepthVal').textContent = st.depth.toFixed(2);
       setFinish(d.raised);
     }
-    Array.prototype.forEach.call($('kcModes').querySelectorAll('button'), function (b) {
-      b.classList.toggle('on', b.getAttribute('data-mode') === mode);
-    });
-    Array.prototype.forEach.call($('kcCard').querySelectorAll('[data-art]'), function (p) {
-      p.hidden = p.getAttribute('data-art') !== mode;
-    });
+    paintArt(mode);
     if (mode === 'lib') drawShelf();
     if (mode !== 'lib') st.icon = null;
     if (mode !== 'braille') st.braille = '';
@@ -598,7 +615,27 @@
     var rel = null;
     try { rel = relief(); } catch (e) {}
     var c = capFor('print', rel);
-    return K.orientForPrint(c.positions, c.angle);
+    /* THE EXPORT WAS NOT IN THE POSE THE REPORT DESCRIBED. printPose() works
+       out a 40-88 degree lean for any seated sculpt - its own reason string
+       says "a cap with a figure on it cannot print face down, that buries the
+       sculpt against the plate" - and build() folds the raised-legend lean into
+       printPlan for the same kind of reason. Both ended up in cap.printPlan,
+       the hero preview's "as printed" toggle used them, the plate packer packed
+       against the LEANING footprint... and this function, the single source for
+       Export STL, Send to slicer and Add to plate, oriented by c.angle: the
+       profile ROW angle, which is 0 for DSA and XDA R3.
+
+       So the clock, the plate count and the picture all described a cap leaning
+       over on supports, and the file that came out was lying flat with the
+       figure face-down against the plate. Nothing downstream recovers it -
+       layout() only translates, it never rotates.
+
+       orientAsPrinted is the function the preview already uses, and it leans
+       about the same axis tiltFit and printPose measure the footprint on, so
+       after this the geometry, the footprint and the layer count are finally
+       describing one object. */
+    return K.orientAsPrinted(c.positions, c.angle,
+                             (c.printPlan && c.printPlan.tilt) || 0);
   }
 
   function refreshNow() {
@@ -819,7 +856,10 @@
     var supports = !!plan.supports;
     var layers = Math.ceil((plan.height || built.size.z) / 0.05);
     var est = window.printSim ? window.printSim.estimate(PROFILE_ANY, layers) : null;
-    var per = K.perPlate(st.sizeU);
+    /* The plan, so this agrees with the plate rather than re-deriving a flat
+       cap that the packer never packs. */
+    var per = K.perPlate(st.sizeU, null, built && built.size ? built.size.z : null,
+                         built && built.printPlan);
 
     var money = K.costOf(built);
     var rows = [
@@ -1000,6 +1040,17 @@
     if (dp) st.profile = dp;
     st.row = knownRow(st.profile, d.row);
     if (d.sizeU) st.sizeU = d.sizeU;
+    /* THE MODE HAS TO BE CHOSEN FIRST, and it was never chosen at all. A code
+       carrying Braille restored st.braille, filled #kcBraille and said "Opened"
+       - but left st.art as whatever it already was, and relief() only reaches
+       the Braille branch when st.art === 'braille'. On a freshly loaded page
+       that is 'gen', so relief() fell through to `if (!st.icon && !st.digit)
+       return null` and the dots never reached build(). The cap was previewed,
+       plated, sliced and exported blank, with the pasted letter sitting in a
+       panel that was hidden. It has to come first because setArt() clears the
+       fields belonging to other modes - set it after and it erases what it was
+       meant to restore. */
+    setArt(d.braille ? 'braille' : d.prompt ? 'gen' : d.icon ? 'lib' : 'gen');
     st.icon = d.icon || null;
     st.digit = d.digit || '';
     st.braille = d.braille || '';
@@ -1150,7 +1201,7 @@
   /* restoreSession() runs before drawBoard(), so anything it throws takes the
      entire card's initialisation with it and leaves an empty panel that says
      nothing about why. A session is a convenience; the card is not. */
-  try { restoreSession(); }
+  try { restoreSession(); paintArt(st.art); }
   catch (e) {
     try { localStorage.removeItem(SESSION); } catch (e2) {}
     say('kcState', 'the saved session was unreadable and has been cleared', 'bad');

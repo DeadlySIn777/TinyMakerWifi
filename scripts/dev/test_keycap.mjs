@@ -400,5 +400,23 @@ truthy('and the real profiles still build', K.build({ profile: 'DSA', row: 'R3',
 truthy('the hidden coupon is still reachable by name, for the comb',
   K.build({ profile: 'TEST', widthMm: 11, depthMm: 11, topGrid: 9 }).positions.length > 0);
 
+
+console.log('\nTHE PLATE COUNT AND THE PLATE PACKER ARE ONE NUMBER');
+/* perPlate() was the last consumer still deriving its own geometry. The engine
+   moved the layer count onto printPlan and left the per-plate count behind, so
+   for a cap whose lean is forced by its legend perPlate packed a flat 18 mm cap
+   at a 1.5 mm gap while layout() packed the leaning footprint at 3.5 mm - two
+   of the three biggest numbers on the card describing a plate nobody prints. */
+for (const [name, opts] of [['DSA R3', { profile: 'DSA', row: 'R3', topGrid: 9 }],
+                            ['SA R1', { profile: 'SA', row: 'R1', topGrid: 9 }],
+                            ['CHERRY R4', { profile: 'CHERRY', row: 'R4', topGrid: 9 }]]) {
+  const c = K.build(opts);
+  const said = K.perPlate(opts.sizeU || 1, null, c.size.z, c.printPlan).count;
+  const packed = K.layout(Array(12).fill(c)).placed.length;
+  ok('what ' + name + ' says fits is what the packer fits', said, packed);
+}
+truthy('and perPlate still answers without a plan, for the flat comparison',
+  K.perPlate(1).count > 0);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

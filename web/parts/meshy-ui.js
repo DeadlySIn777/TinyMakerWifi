@@ -169,8 +169,33 @@
 
   // ---- key ----------------------------------------------------------------
   $('meshyKeySave').addEventListener('click', function () {
-    window.meshy.setKey(($('meshyKey').value || '').trim());
-    $('meshyKey').value = '';
-    say('meshyInfo', window.meshy.hasKey() ? 'Key saved in this browser.' : 'Key cleared.');
+    /* setKey refuses a key that cannot go in a header rather than storing one
+       that will fail on every generation with a message about the network. */
+    try {
+      window.meshy.setKey($('meshyKey').value || '');
+      $('meshyKey').value = '';
+      say('meshyInfo', window.meshy.hasKey() ? 'Key saved in this browser.' : 'Key cleared.');
+      say('meshyProbe', '');
+    } catch (e) {
+      say('meshyInfo', e.message, true);
+    }
+  });
+
+  /* "Failed to fetch" cannot tell you whether the network is down or the key is
+     wrong, because the browser will not say. This asks both questions
+     separately and prints the one sentence that decides what you do next. */
+  var testBtn = $('meshyTest');
+  if (testBtn) testBtn.addEventListener('click', function () {
+    if (!window.meshy || !window.meshy.probe) return;
+    testBtn.disabled = true;
+    say('meshyProbe', 'checking…');
+    window.meshy.probe().then(function (r) {
+      say('meshyProbe', r.verdict + '  (internet ' + (r.internet ? 'yes' : 'no') +
+        ' · key ' + (r.key ? 'stored' : 'missing') +
+        ' · meshy ' + (r.meshy || '—') + ' · ' + r.ms + ' ms)',
+        !(r.internet && r.meshy === 'ok'));
+    }).catch(function (e) {
+      say('meshyProbe', 'the check itself failed: ' + e.message, true);
+    }).then(function () { testBtn.disabled = false; });
   });
 })();

@@ -30,8 +30,36 @@
   function key() {
     try { return localStorage.getItem(KEY_STORE) || ''; } catch (e) { return ''; }
   }
+  /* A KEY IS PASTED, AND A PASTE BRINGS FRIENDS. Copying from a dashboard picks
+     up a trailing newline, a non-breaking space from a styled <code> block, or
+     the smart quotes a chat client added. Any of those go into an Authorization
+     header, and the browser then throws a TypeError - the SAME class as a
+     network failure, so "invalid header" and "you are offline" arrive looking
+     identical and neither says which. Clean it here, once, where it is entered,
+     rather than guessing later from an error that cannot tell you.
+
+     Non-ASCII cannot go in a header at all, so a key carrying any is refused
+     outright with a reason, instead of being stored and failing on every
+     generation afterwards. */
+  function cleanKey(k) {
+    return String(k || '')
+      .replace(/[\u00a0\u2000-\u200b\u202f\u3000]/g, ' ')  // exotic spaces
+      .replace(/[\u2018\u2019\u201c\u201d]/g, '')            // smart quotes
+      .trim();
+  }
+  function keyProblem(k) {
+    if (!k) return null;
+    if (/[^\x21-\x7e]/.test(k))
+      return 'That key has a character that cannot go in an HTTP header - it was ' +
+             'probably copied with formatting. Paste it as plain text.';
+    if (k.length < 12) return 'That looks too short for a Meshy key.';
+    return null;
+  }
   function setKey(k) {
-    try { k ? localStorage.setItem(KEY_STORE, k) : localStorage.removeItem(KEY_STORE); } catch (e) {}
+    var c = cleanKey(k);
+    var bad = keyProblem(c);
+    if (bad) throw new Error(bad);
+    try { c ? localStorage.setItem(KEY_STORE, c) : localStorage.removeItem(KEY_STORE); } catch (e) {}
   }
 
   /* One seam for direct-vs-proxy, so switching is a constant and not a rewrite.
@@ -46,12 +74,42 @@
     if (!PROXY) {
       var k = key();
       if (!k) return Promise.reject(new Error('No Meshy API key set.'));
+      var bad = keyProblem(k);
+      if (bad) return Promise.reject(new Error(bad + ' (Saved keys are cleaned now; re-paste it.)'));
       h['Authorization'] = 'Bearer ' + k;
     }
     return fetch(url, {
       method: o.method || 'GET',
       headers: h,
       body: o.body ? JSON.stringify(o.body) : undefined
+    }).catch(function (e) {
+      /* fetch rejects with a bare TypeError - "Failed to fetch" - and the
+         browser will not say why, because explaining a cross-origin failure to
+         a page would make it a probe. The card used to print those three words
+         under the Generate button and stop, which tells the owner nothing and
+         leaves him wondering whether he was charged.
+
+         The set of causes is small, and two of them are ours to rule out: this
+         project has verified that api.meshy.ai answers a preflight from a plain
+         -HTTP LAN origin with Access-Control-Allow-Origin set to the printer's
+         own address and Authorization among the allowed headers, and that the
+         page carries no Content-Security-Policy. So it is never CORS and never
+         the printer. What is left is the browser's own route to the internet -
+         and a phone joined to the printer's own access point has none at all,
+         which is the commonest way to land here. */
+      if (e && (e.name === 'TypeError' || /failed to fetch|load failed|networkerror/i.test(e.message || ''))) {
+        var err = new Error(
+          'The browser could not reach api.meshy.ai at all - nothing was sent, ' +
+          'and nothing was charged. This is not the printer and not your key: ' +
+          'the request never left this device. Check, in this order - is this ' +
+          'device actually on the internet (a phone joined to the printer\'s own ' +
+          'WiFi is not), is an ad or tracking blocker stopping api.meshy.ai, is a ' +
+          'VPN or a captive portal in the way.');
+        err.offline = true;
+        err.cause = e;
+        throw err;
+      }
+      throw e;
     }).then(function (r) {
       return r.text().then(function (t) {
         var j = null;
@@ -207,8 +265,48 @@
     return { parsed: parsed, health: health, positions: pos };
   }
 
+  /* Is it the network, or is it Meshy? The message above cannot tell them
+     apart, and the difference decides what the owner does next: fix the WiFi,
+     or fix the key. So ask twice - once at a host that is always up and needs
+     no key, and once at Meshy itself.
+
+     The first request is deliberately no-cors: the answer is not read, only
+     whether it completes, which is all that is needed to know the device has a
+     route out. Nothing here sends the key anywhere it does not already go. */
+  function probe() {
+    var out = { internet: null, meshy: null, key: !!key() };
+    var t0 = Date.now();
+    return fetch('https://cloudflare-dns.com/dns-query?name=api.meshy.ai&type=A',
+                 { headers: { accept: 'application/dns-json' } })
+      .then(function (r) { out.internet = r.ok; return r.json().catch(function () { return null; }); })
+      .catch(function () { out.internet = false; return null; })
+      .then(function (dns) {
+        out.resolves = !!(dns && dns.Answer && dns.Answer.length);
+        if (!out.internet) return null;
+        /* A GET to the tasks list: cheap, generates nothing, and its STATUS is
+           the answer - 200 fine, 401 the key is wrong, 402 out of credits. */
+        return meshyFetch('/text-to-3d?page_size=1')
+          .then(function () { out.meshy = 'ok'; })
+          .catch(function (e) {
+            out.meshy = e && e.offline ? 'unreachable' : (e && e.message) || 'refused';
+          });
+      })
+      .then(function () {
+        out.ms = Date.now() - t0;
+        out.verdict = !out.internet
+          ? 'This device has no route to the internet. If you are on the printer\'s own WiFi, that network has none.'
+          : out.meshy === 'ok'
+            ? 'Reachable, and the key works.'
+            : out.meshy === 'unreachable'
+              ? 'The internet is up but api.meshy.ai is blocked - an ad blocker, a VPN or a firewall.'
+              : 'Reached Meshy, and it refused: ' + out.meshy;
+        return out;
+      });
+  }
+
   root.meshy = {
     setKey: setKey, hasKey: function () { return !!key(); },
+    probe: probe,
     setProxy: function (p) { PROXY = p || null; },
     createPreview: createPreview, refine: refine, task: task, waitFor: waitFor,
     fetchModel: fetchModel, textureUrl: textureUrl,

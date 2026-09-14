@@ -628,11 +628,24 @@
     };
   }
 
-  function perPlate(sizeU, gap, h) {
-    gap = gap == null ? 1.5 : gap;
+  /* ⚠️ THIS WAS THE LAST CONSUMER STILL DERIVING ITS OWN GEOMETRY. The comment
+     further down says "one source now - printPlan", and the layer count was
+     moved onto it; the per-plate count was not. perPlate recomputed everything
+     from fits(), which is pure geometry and cannot see a raised legend - so for
+     any cap whose lean is FORCED by its legend, perPlate packed an 18 x 18 mm
+     flat cap at a 1.5 mm gap while layout() packed a 19.61 mm leaning footprint
+     at 3.5 mm. Two of the three biggest numbers on the card disagreed with the
+     plate the owner was about to print. Hand it the plan instead. */
+  /* One pair of numbers for both packers. layout() opens the gap when anything
+     on the plate needs supports, because supports are wider than the part. */
+  var FLAT_GAP = 1.5, SUPPORT_GAP = 3.5;
+
+  function perPlate(sizeU, gap, h, plan) {
     h = h || 9.0;
-    var f = fits(capWidth(sizeU), DEPTH, h);
-    if (!f.ok) return { count: 0, sizeU: sizeU, why: f.why };
+    var f = plan || fits(capWidth(sizeU), DEPTH, h);
+    gap = gap == null ? (f.supports ? SUPPORT_GAP : FLAT_GAP) : gap;
+    if (!f.ok && f.ok !== undefined) return { count: 0, sizeU: sizeU, why: f.why };
+    if (!f.foot) return { count: 0, sizeU: sizeU, why: 'no footprint in the plan' };
     var a = f.foot.x, b = f.foot.y;
     var cols = Math.floor((BED.x + gap) / (a + gap)), rows = Math.floor((BED.y + gap) / (b + gap));
     return { count: Math.max(0, cols) * Math.max(0, rows), cols: cols, rows: rows,
@@ -673,7 +686,7 @@
     /* 1.5 mm is enough between two flat caps. Supported ones get 3.5: the
        support tree is wider at the plate than the part above it, and two
        neighbouring trees growing into each other is how a plate fails late. */
-    var gap = o.gap == null ? (anySupport ? 3.5 : 1.5) : o.gap;
+    var gap = o.gap == null ? (anySupport ? SUPPORT_GAP : FLAT_GAP) : o.gap;
 
     /* Shelf packing, tallest first. Sorting by depth first is what makes rows
        fill instead of leaving a strip of dead bed under every short cap. */
