@@ -109,5 +109,42 @@ threw = '';
 try { SC.seat(null, sculpt); } catch (e) { threw = 'no cap'; }
 ok('and no cap at all', threw, 'no cap');
 
+console.log('\nA DIORAMA: several pieces, and the one that only looks attached');
+/* This is what artisan caps are for - a scene with figures on it - and it is
+   where the arrangement fails silently. Overlapping pieces fuse in the slicer,
+   so figures touching a base are fine however many there are. A figure the
+   generator left hovering a fraction clear looks perfect on screen and is a
+   separate object in mid air on the plate. */
+const base = box(-9, 9, -9, 9, 0, 2.5);
+function merge(...parts) {
+  const n = parts.reduce((a, p) => a + p.length, 0);
+  const out = new Float32Array(n); let at = 0;
+  parts.forEach(p => { out.set(p, at); at += p.length; });
+  return out;
+}
+const scene = merge(base, box(-7,-1,-3,3, 2.0, 12), box(1, 7,-3,3, 2.0, 10));
+const seatedScene = SC.seat(cap, scene, { heightMm: 14 });
+const sceneChk = SC.check(seatedScene);
+ok('three pieces are found', sceneChk.anchorage.shells, 3);
+ok('all three are anchored', sceneChk.anchorage.floating.length, 0);
+ok('so the scene is accepted', sceneChk.ok, true);
+truthy('and it explains that overlapping pieces fuse',
+  sceneChk.notes.some(n => /fuse in the slicer/.test(n)));
+
+const broken = merge(base, box(-7,-1,-3,3, 2.0, 12), box(1, 7,-3,3, 4.0, 12));
+const brokenChk = SC.check(SC.seat(cap, broken, { heightMm: 14 }));
+ok('a hovering figure is caught', brokenChk.anchorage.floating.length, 1);
+ok('and the scene is refused', brokenChk.ok, false);
+truthy('the reason says it only looks attached',
+  /looks attached/.test(brokenChk.issues.join(' ')));
+truthy('and it reports how big the floater is',
+  brokenChk.anchorage.floating[0].sizeMm.every(v => v > 0),
+  brokenChk.anchorage.floating[0].sizeMm.join(' x ') + ' mm');
+
+/* Anchoring is transitive: a figure standing on a figure standing on the base
+   is attached, even though it never touches the cap itself. */
+const stacked = merge(base, box(-4, 4, -4, 4, 2.0, 8), box(-2, 2, -2, 2, 7.5, 13));
+ok('anchoring carries up a stack', SC.check(SC.seat(cap, stacked, { heightMm: 15 })).anchorage.floating.length, 0);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

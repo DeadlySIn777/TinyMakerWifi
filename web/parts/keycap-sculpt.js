@@ -120,6 +120,88 @@
     };
   }
 
+  /* ---- the diorama problem ----------------------------------------------
+     A scene with two figures on it is the thing artisan caps are FOR, and it
+     is also where this arrangement can fail silently.
+
+     The cap and the sculpt print as a union because they overlap, and that
+     works for any number of pieces - two figures that touch each other, or a
+     base, fuse into one solid the same way. What does NOT work is a piece that
+     touches nothing: a generator asked for "two Pokemon on a rock" can return
+     one of them hovering a fraction of a millimetre off the rock, and it looks
+     perfect on screen because the eye cannot see the gap. On the machine it is
+     a separate object floating in mid air with no support under it, and it
+     either fails or lands somewhere else in the vat.
+
+     So: split the sculpt into connected shells, and work out which of them are
+     anchored. A shell is anchored if it reaches down into the cap, or if it
+     overlaps something else that is. Bounding boxes, deliberately - a true
+     mesh intersection test is expensive and the answer only has to be
+     conservative in the safe direction: boxes overlap MORE often than the
+     meshes inside them, so this reports a floater only when the pieces are
+     genuinely far apart. */
+  function shells(p) {
+    var n = p.length / 9, parent = new Int32Array(n), i;
+    for (i = 0; i < n; i++) parent[i] = i;
+    function find(a) { while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; } return a; }
+    function join(a, b) { a = find(a); b = find(b); if (a !== b) parent[b] = a; }
+    var map = Object.create(null);
+    for (i = 0; i < n; i++) for (var c = 0; c < 3; c++) {
+      var q = i*9 + c*3;
+      var key = Math.round(p[q]*200) + ',' + Math.round(p[q+1]*200) + ',' + Math.round(p[q+2]*200);
+      if (map[key] === undefined) map[key] = i; else join(map[key], i);
+    }
+    var groups = {};
+    for (i = 0; i < n; i++) {
+      var r = find(i);
+      var g = groups[r] || (groups[r] = { tris: 0, mn: [1e9,1e9,1e9], mx: [-1e9,-1e9,-1e9] });
+      g.tris++;
+      for (var v = 0; v < 9; v += 3) for (var k = 0; k < 3; k++) {
+        var val = p[i*9 + v + k];
+        if (val < g.mn[k]) g.mn[k] = val;
+        if (val > g.mx[k]) g.mx[k] = val;
+      }
+    }
+    return Object.keys(groups).map(function (k) { return groups[k]; });
+  }
+
+  function boxesTouch(a, b, slack) {
+    for (var k = 0; k < 3; k++)
+      if (a.mn[k] - slack > b.mx[k] || b.mn[k] - slack > a.mx[k]) return false;
+    return true;
+  }
+
+  /* Which pieces of a seated sculpt are actually attached to something. */
+  function anchorage(seatedPositions, capTriangles, opts) {
+    var o = opts || {};
+    var slack = o.slack == null ? 0.15 : o.slack;   // mm of tolerable gap
+    var sc = seatedPositions.slice(capTriangles * 9);
+    var parts = shells(sc);
+    // a shell reaching z >= 0 is down inside the cap
+    var anchored = parts.map(function (g) { return g.mx[2] >= 0; });
+    var changed = true, i, j;
+    while (changed) {
+      changed = false;
+      for (i = 0; i < parts.length; i++) {
+        if (anchored[i]) continue;
+        for (j = 0; j < parts.length; j++) {
+          if (i === j || !anchored[j]) continue;
+          if (boxesTouch(parts[i], parts[j], slack)) { anchored[i] = true; changed = true; break; }
+        }
+      }
+    }
+    var floating = [];
+    for (i = 0; i < parts.length; i++)
+      if (!anchored[i] && parts[i].tris > 2)
+        floating.push({ triangles: parts[i].tris,
+                        sizeMm: [ +(parts[i].mx[0]-parts[i].mn[0]).toFixed(2),
+                                  +(parts[i].mx[1]-parts[i].mn[1]).toFixed(2),
+                                  +(parts[i].mx[2]-parts[i].mn[2]).toFixed(2) ],
+                        gapMm: +(-parts[i].mx[2]).toFixed(2) });
+    return { shells: parts.length, anchored: anchored.filter(Boolean).length,
+             floating: floating };
+  }
+
   /* Does the finished piece work - on a board, and in the machine? */
   function check(seated, opts) {
     var o = opts || {}, issues = [], notes = [];
@@ -147,7 +229,24 @@
 
     notes.push('the cap and the sculpt are two overlapping solids; the slicer ' +
       'rasterises them as a union, so the stem is never touched by the sculpt');
-    return { ok: !issues.length, issues: issues, notes: notes };
+
+    /* The diorama check. Only runs when the caller hands over the seated mesh,
+       because it needs the real geometry rather than the summary. */
+    var anchors = null;
+    if (seated.positions && seated.capTriangles != null) {
+      anchors = anchorage(seated.positions, seated.capTriangles, o);
+      if (anchors.shells > 1)
+        notes.push('the sculpt is ' + anchors.shells + ' separate pieces; ' +
+          anchors.anchored + ' of them are attached to the cap or to each other, ' +
+          'and overlapping pieces fuse in the slicer');
+      anchors.floating.forEach(function (f) {
+        issues.push('a piece ' + f.sizeMm.join(' × ') + ' mm is floating ' +
+          f.gapMm.toFixed(2) + ' mm clear of everything else. On screen it looks ' +
+          'attached; on the plate it is a separate object in mid air with nothing ' +
+          'under it. Seat it deeper, or have the generator put the figures on a base.');
+      });
+    }
+    return { ok: !issues.length, issues: issues, notes: notes, anchorage: anchors };
   }
 
   /* How it has to go on the plate.
@@ -173,6 +272,7 @@
     };
   }
 
-  root.keycapSculpt = { seat: seat, check: check, printPose: printPose, bounds: bounds };
+  root.keycapSculpt = { seat: seat, check: check, printPose: printPose, bounds: bounds,
+                        shells: shells, anchorage: anchorage };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.keycapSculpt;
 })(typeof window !== 'undefined' ? window : globalThis);
