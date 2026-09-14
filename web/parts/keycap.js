@@ -422,6 +422,30 @@
     return out;
   }
 
+  /* The pose the machine will actually build it in: laid top-face-down, then
+     leaned over by whatever the fit and the relief demand.
+
+     This exists because the preview was quietly dishonest. You judge a cap
+     standing upright, and then it prints leaning at 34 degrees on a raft of
+     supports, and the first time you see that is when you open the slicer. The
+     lean is where support scars land and where an overhang gets rough, so it
+     is worth being able to look at before committing resin to it. */
+  function orientAsPrinted(positions, rowAngleDeg, tiltDeg) {
+    var p = orientForPrint(positions, rowAngleDeg || 0);
+    if (!tiltDeg) return p;
+    var a = tiltDeg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+    var out = new Float32Array(p.length), minZ = Infinity, i;
+    for (i = 0; i < p.length; i += 3) {
+      var x = p[i], z = p[i + 2];
+      out[i]     = x * c + z * s;          // lean about Y, which is the axis
+      out[i + 1] = p[i + 1];               // tiltFit measures the footprint on
+      out[i + 2] = -x * s + z * c;         // so the two agree by construction
+      if (out[i + 2] < minZ) minZ = out[i + 2];
+    }
+    for (i = 2; i < out.length; i += 3) out[i] -= minZ;
+    return out;
+  }
+
   /* ---- validate anything claiming to be a keycap -------------------------
      Used on generated meshes. It reports; it does not repair. */
   function validate(positions, opts) {
@@ -703,6 +727,7 @@
   root.keycap = {
     MX: MX, PROFILES: PROFILES, UNIT: UNIT, DEPTH: DEPTH, BED: BED, PIXEL_MM: PIXEL_MM,
     capWidth: capWidth, build: build, orientForPrint: orientForPrint,
+    orientAsPrinted: orientAsPrinted,
     validate: validate, fits: fits, tiltFit: tiltFit, perPlate: perPlate,
     layout: layout, planSet: planSet, volumeMm3: volumeMm3, costOf: costOf,
     stemTestComb: stemTestComb

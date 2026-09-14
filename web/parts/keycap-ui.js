@@ -45,7 +45,7 @@
 
   var st = { step: 1, key: null, profile: 'XDA', row: 'R3', sizeU: 1,
              icon: null, digit: '', depth: 0.55, raised: true, plate: [],
-             skin: null, skinFrom: '', braille: '', name: '' };
+             skin: null, skinFrom: '', braille: '', name: '', pose: 'made' };
   var built = null;
 
   function say(id, msg, cls) {
@@ -297,7 +297,23 @@
       hero.autoSpin(true);
       setTimeout(function () { if (hero) hero.autoSpin(false); }, 5200);
     }
-    if (built) hero.setMesh(built.positions); else hero.setMesh(null);
+    if (!built) { hero.setMesh(null); return; }
+    hero.setMesh(st.pose === 'printed' ? printedMesh() : built.positions);
+  }
+
+  /* The lean the machine will use: whatever the footprint needs, or whatever a
+     raised legend needs, whichever is greater. */
+  function printedTilt() {
+    if (!built) return 0;
+    var plan = built.printPlan || {};
+    var raise = (window.keycapIcons && built.relief)
+      ? window.keycapIcons.raisedTilt(built.relief, K.PROFILES[st.profile],
+          K.DEPTH - 2 * K.PROFILES[st.profile].topInset)
+      : { tilt: 0 };
+    return Math.max(plan.tilt || 0, raise.tilt || 0);
+  }
+  function printedMesh() {
+    return K.orientAsPrinted(built.positions, built.angle, printedTilt());
   }
 
   /* The flat top-down view survives as a DETAIL inset: at 13 mm across, the
@@ -514,6 +530,58 @@
     say('kcState', 'stem test: slots ' + comb.stems.map(function (s) { return s.slotMm.toFixed(2); }).join(', ') +
       ' mm, left to right. Keep the first that clicks on without force, then set slotClearance to it minus ' +
       K.MX.crossWide + '.');
+  });
+
+  $('kcPose') && Array.prototype.forEach.call($('kcPose').querySelectorAll('button'),
+    function (b) {
+      b.addEventListener('click', function () {
+        st.pose = b.getAttribute('data-pose');
+        Array.prototype.forEach.call($('kcPose').querySelectorAll('button'), function (o) {
+          o.classList.toggle('on', o === b);
+        });
+        drawHero();
+        var t = printedTilt();
+        say('kcState', st.pose === 'printed'
+          ? (t ? 'as printed - leaning ' + t + '\u00b0, supports on the leading edge'
+               : 'as printed - flat on the plate, no supports')
+          : '');
+      });
+    });
+
+  /* A painting guide: the top of the cap straight down, big, with the relief
+     shaded so you can see where the paint goes. The owner asked for this back
+     when the point was photographs for painting reference. */
+  $('kcPaint') && $('kcPaint').addEventListener('click', function () {
+    var rel = null;
+    try { rel = relief(); } catch (e) {}
+    if (!rel) { say('kcState', 'nothing on the top face to paint', 'bad'); return; }
+    var N = 1000, c = document.createElement('canvas');
+    c.width = N; c.height = N;
+    var g = c.getContext('2d'), img = g.createImageData(N, N);
+    var pr = K.PROFILES[st.profile];
+    var topW = K.capWidth(st.sizeU) - 2 * pr.topInset;
+    var topD = K.DEPTH - 2 * pr.topInset;
+    var d = Math.abs(rel.depth) || 0.55;
+    for (var y = 0; y < N; y++) for (var x = 0; x < N; x++) {
+      var u = (x + 0.5) / N * 2 - 1, v = 1 - (y + 0.5) / N * 2;
+      var h = Math.abs(rel(u, v, topW, topD)) / d;
+      var i = (y * N + x) * 4;
+      var edge = Math.max(Math.abs(u), Math.abs(v)) > 0.995;
+      /* High contrast on purpose: this is held next to a cap under a lamp, not
+         admired on a screen. */
+      var t = edge ? 0.35 : 1 - Math.min(1, h) * 0.82;
+      img.data[i] = img.data[i+1] = img.data[i+2] = Math.round(255 * t);
+      img.data[i+3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    g.fillStyle = '#000';
+    g.font = '600 22px ui-sans-serif,system-ui,sans-serif';
+    g.fillText(topW.toFixed(1) + ' \u00d7 ' + topD.toFixed(1) + ' mm top face · ' +
+               (rel.raised ? 'raised ' : 'engraved ') + d.toFixed(2) + ' mm', 24, N - 26);
+    c.toBlob(function (b) {
+      if (b) { save(b, 'paint-guide-' + (st.key || st.profile) + '.png');
+               say('kcState', 'saved a 1000 px painting guide'); }
+    }, 'image/png');
   });
 
   // ---- the current design, as something that can be written down ---------

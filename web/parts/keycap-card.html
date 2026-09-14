@@ -49,6 +49,10 @@
           <canvas id='kcTop' width='420' height='420'
             aria-label='the cap in 3D - drag to turn it'></canvas>
           <span class='kcSpin'>drag to turn</span>
+          <div class='kcPose' id='kcPose'>
+            <button type='button' data-pose='made' class='on'>Made</button>
+            <button type='button' data-pose='printed'>Printed</button>
+          </div>
         </div>
         <div id='kcDims' class='kcDims'></div>
         <div class='kcInsets'>
@@ -122,7 +126,9 @@
             <button id='kcStl' class='button secondary' type='button' style='flex:1 1 110px'>Export STL</button>
           </div>
           <div class='calRow'>
-            <button id='kcComb' class='button secondary' type='button' style='flex:1 1 100%'
+            <button id='kcPaint' class='button secondary' type='button' style='flex:1 1 130px'
+              title='The top of the cap straight down, big, for painting from'>Paint guide</button>
+            <button id='kcComb' class='button secondary' type='button' style='flex:1 1 130px'
               title='A row of stems, each slot wider than the last. Print it once and keep the one that clicks.'>Stem fit test</button>
           </div>
           <p id='kcPlate' class='hint'></p>
@@ -253,6 +259,14 @@
 #kcCard #kcTop{position:absolute;inset:0;width:100%;height:100%;display:block;
   cursor:grab;touch-action:none;z-index:1}
 #kcCard #kcTop:active{cursor:grabbing}
+#kcCard .kcPose{position:absolute;right:11px;top:11px;z-index:3;display:flex;
+  border:1px solid var(--line2);border-radius:8px;overflow:hidden;
+  background:color-mix(in srgb,var(--pv) 78%,transparent)}
+@supports not (background:color-mix(in srgb,red 50%,transparent)){
+  #kcCard .kcPose{background:var(--pv)}}
+#kcCard .kcPose button{border:0;padding:6px 11px;white-space:nowrap;background:transparent;color:var(--muted2);
+  cursor:pointer;font:600 10px/1 ui-sans-serif,system-ui;letter-spacing:.09em;text-transform:uppercase}
+#kcCard .kcPose button.on{background:var(--accent-soft);color:var(--text)}
 #kcCard .kcSpin{position:absolute;left:13px;bottom:11px;z-index:3;pointer-events:none;
   font:600 10px/1 ui-sans-serif,system-ui;letter-spacing:.11em;text-transform:uppercase;color:var(--ink3)}
 #kcCard .kcDims{margin-top:10px;font-size:12.5px;color:var(--muted)}
