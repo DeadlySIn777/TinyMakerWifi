@@ -287,7 +287,12 @@
     Array.prototype.forEach.call(bars, function (r, i) {
       r.classList.add('bMark');
       r.dataset.rest = r.getAttribute('opacity') || '1';
-      r.dataset.i = String(bars.length - 1 - i);   // 0 = bottom bar
+      /* The rects are authored top of the file to bottom of the picture: the
+         first one is y=40, the widest and the LOWEST, because SVG y grows
+         downward. Reversing the index here filled the stack from the top,
+         which reads as a print running backwards. Index 0 is the bottom bar
+         and the bottom bar is the first rect. */
+      r.dataset.i = String(i);                    // 0 = bottom bar
     });
     var arc = svg.querySelector('path');
     if (arc) arc.classList.add('wMark');
