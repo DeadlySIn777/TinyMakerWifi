@@ -297,11 +297,14 @@
     var arc = svg.querySelector('path');
     if (arc) arc.classList.add('wMark');
 
+    /* The mark carried #e8720c - the accent this product retired - so three
+       orange bars sat next to a red wordmark and the page had two identities.
+       One accent, at rest and lit; only the opacity ladder separates them. */
     var restBars = function () {
       Array.prototype.forEach.call(bars, function (r) {
         r.classList.remove('lit');
         r.setAttribute('opacity', r.dataset.rest);
-        r.setAttribute('fill', '#e8720c');
+        r.setAttribute('fill', 'var(--accent)');
       });
       brand.classList.remove('printing');
     };
@@ -314,7 +317,7 @@
         var done = frac >= (idx + 1) / bars.length;
         var part = frac > idx / bars.length && !done;
         r.classList.toggle('lit', done || part);
-        r.setAttribute('fill', done || part ? 'var(--accent)' : '#e8720c');
+        r.setAttribute('fill', 'var(--accent)');
         r.setAttribute('opacity', done ? '1' : (part ? '0.8' : '0.22'));
       });
     };

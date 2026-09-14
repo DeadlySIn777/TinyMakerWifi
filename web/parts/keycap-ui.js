@@ -323,7 +323,6 @@
     window.keycapLibrary.get(id).then(function (rec) {
       if (!rec || !rec.positions) throw new Error('That design has no model stored.');
       st.sculpt = rec.positions;
-      st.skin = null;
       st.skinFrom = rec.prompt || '';
       st.libId = id;
       st.icon = null;
@@ -351,7 +350,6 @@
       throw new Error(tris.toLocaleString() + ' triangles is too many to spin in the ' +
         'browser. Decimate it to about 30,000 first.');
     st.sculpt = positions;
-    st.skin = null;
     st.icon = null;
     st.skinFrom = label || '';
     st.art = 'gen';
@@ -417,7 +415,7 @@
     ['kcGen', 'kcGenClear', 'kcNext', 'kcBack'].forEach(function (id) {
       var e = $(id); if (e) e.disabled = !!on;
     });
-    if (!on) $('kcGenClear').disabled = !(st.skin || st.sculpt);
+    if (!on) $('kcGenClear').disabled = !st.sculpt;
   }
 
   /* seat()'s own envelope, so the sentence describes the room the sculpt will
@@ -490,8 +488,7 @@
            resampled, nothing is flattened, and the cap's own geometry - the
            stem - is untouched. */
         st.sculpt = parsed.positions;
-        st.skin = null;
-        st.skinFrom = prompt;
+          st.skinFrom = prompt;
         var tris = parsed.positions.length / 9;
         /* The triangle count flatters the result - 30k triangles on a 14 mm
            sculpt is far more detail than a 127.5 micron mask can print. Saying
@@ -514,7 +511,7 @@
   });
 
   $('kcGenClear').addEventListener('click', function () {
-    st.skin = null; st.sculpt = null; st.skinFrom = '';
+    st.sculpt = null; st.skinFrom = '';
     $('kcGenClear').disabled = true;
     say('kcGenNote', 'back to the drawn set.');
     refresh();
@@ -588,7 +585,7 @@
     if (mode === 'lib') drawShelf();
     if (mode !== 'lib') st.icon = null;
     if (mode !== 'braille') st.braille = '';
-    if (mode !== 'gen') { st.skin = null; st.sculpt = null; st.skinFrom = ''; }
+    if (mode !== 'gen') { st.sculpt = null; st.skinFrom = ''; }
     if (mode === 'braille') setFinish(true);   // a recess is not readable
     if ($('kcBraille') && mode !== 'braille') $('kcBraille').value = '';
     drawIcons();
@@ -635,19 +632,11 @@
       if (!st.braille || !window.keycapBraille) return null;
       return window.keycapBraille.brailleRelief(st.braille, { dotHeight: Math.max(0.48, st.depth) });
     }
-    if (st.skin) {
-      var f = window.keycapSkin.reliefFromField(st.skin,
-        { depth: st.depth, raised: st.raised });
-      if (!st.digit) return f;
-      // keep the corner digit over a generated skin: take whichever stands proud
-      var d = digitRelief(st.raised);
-      var both = function (u, v, w, h) {
-        var a = f(u, v, w, h), b = d(u, v, w, h);
-        return st.raised ? Math.min(a, b) : Math.max(a, b);
-      };
-      both.depth = st.depth; both.raised = st.raised; both.parts = [];
-      return both;
-    }
+    /* The height-field branch that used to live here read st.skin, which is
+       never assigned, so it was unreachable. It was also the path this project
+       abandoned: a height field can only extrude a 2D shape, which is why a
+       generated creeper came out as three spikes and why keycap-sculpt seats
+       the real mesh instead. Gone rather than left as a trap. */
     if (!st.icon && !st.digit) return null;
     if (!st.icon) return digitRelief(st.raised);
     /* Icon and digit at their own depths, combined by whichever stands
@@ -970,7 +959,8 @@
     if (!rel) { say('kcLegendWarn', ''); return; }
     var topW = K.capWidth(st.sizeU) - 2 * pr.topInset, topD = K.DEPTH - 2 * pr.topInset;
     var f = ICO.checkLegendField(rel, topW, topD);
-    var src = st.skin ? 'generated' : 'drawn';
+    /* Also st.skin, so this said "drawn" about generated art, always. */
+    var src = st.sculpt ? 'generated' : 'drawn';
     if (f.ok) say('kcLegendWarn', src + ': thinnest feature ' + f.thinnestMarkMm.toFixed(2) +
       ' mm (' + (f.thinnestMarkMm / K.PIXEL_MM).toFixed(1) + ' pixels) - holds.');
     else say('kcLegendWarn', '⚠ ' + src + ': ' + f.issues[0], 'bad');
@@ -1078,8 +1068,13 @@
     if (!caps[0] || !caps[0].positions) return;
     var lay = K.layout(caps);
     if (!window.slicerLoadMesh) { say('kcState', 'The slicer engine is not loaded - open the slicer card once, then retry.', 'bad'); return; }
+    /* keepPose, or the slicer stands the cap back up on its "best" face and
+       undoes printPose - the lean that keeps the sculpt off the plate, the
+       height the clock counted, the footprint the plate was packed against.
+       A dropped file has no intended pose and should be auto-oriented; a cap
+       from this card has one, and it is on the screen next to the button. */
     var ok = window.slicerLoadMesh(lay.positions, (caps.length > 1 ? 'keycaps' : caps[0].name) + '.stl',
-                                   lay.positions.byteLength);
+                                   lay.positions.byteLength, { keepPose: true });
     say('kcState', ok ? ('sent ' + lay.placed.length + ' cap' + (lay.placed.length > 1 ? 's' : '') + ' to the slicer')
                       : 'the slicer would not take it', ok ? '' : 'bad');
   });
@@ -1164,7 +1159,13 @@
     return { profile: st.profile, row: st.row, sizeU: st.sizeU,
              icon: st.icon || undefined, digit: st.digit || undefined,
              braille: st.braille || undefined, depth: st.depth, raised: st.raised,
-             prompt: st.skin ? st.skinFrom : undefined,
+             /* st.skin was NEVER ASSIGNED A VALUE - null in six places, a
+                value in none - so this read `undefined` every single time and
+                no share code has ever carried the prompt that made the cap.
+                isReproducible() is `!(prompt && !icon && !braille)`, so with no
+                prompt it answered TRUE for every generated cap, and the warning
+                that the art will come back DIFFERENT could never fire. */
+             prompt: st.skinFrom || undefined,
              key: st.key || undefined, name: st.name || undefined };
   }
   function applyDesign(d) {
@@ -1190,7 +1191,7 @@
     if (d.depth) st.depth = d.depth;
     st.raised = d.raised !== false;
     st.key = d.key || null;
-    st.skin = null;                       // a mesh cannot travel in a code
+    st.sculpt = null;                     // a mesh cannot travel in a code
     st.skinFrom = d.prompt || '';
     if ($('kcDigit')) $('kcDigit').value = st.digit;
     if ($('kcBraille')) $('kcBraille').value = st.braille;

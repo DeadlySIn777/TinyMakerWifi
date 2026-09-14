@@ -561,7 +561,7 @@ const slicerRender=()=>{
    This is what lets a model reach the printer without a desktop slicer: a GLB
    read in the browser (web/parts/meshy-glb.js) hands its positions here and
    from that point on it is indistinguishable from a file the user picked. */
-window.slicerLoadMesh=function(positions,suggestedName,sizeBytes){
+window.slicerLoadMesh=function(positions,suggestedName,sizeBytes,opts){
   if(!slicerMod)return false;
   if(!positions||!positions.length||positions.length%9)return false;
   /* Senas rezultatas nuvalomas PRIES nauja modeli: kitaip jo duomenys
@@ -578,8 +578,21 @@ window.slicerLoadMesh=function(positions,suggestedName,sizeBytes){
   slicerFileName=suggestedName||'model';
   slicerFileBytes=sizeBytes||0;
   slicerBudget=slicerMod.detailBudget(slicerRaw);
-  const best=slicerMod.autoOrient(slicerRaw);      // padedam ant plokstumos iskart
-  slicerTr=best.tr;
+  /* AUTO-ORIENT IS RIGHT FOR A FILE AND WRONG FOR A KEYCAP. A dropped STL has
+     no intended pose, so standing it on its best face is the kindest thing to
+     do with it. A cap arriving from the keycap card has ALREADY been posed:
+     printPose() picked the lean that keeps the sculpt off the plate, the layer
+     clock counted that height, the plate was packed against that footprint and
+     the report told the owner the supports land on the leading edge. Turning it
+     again here throws every one of those away and prints something the card
+     never described - and silently, because the picture in the slicer is of the
+     re-oriented mesh and looks perfectly reasonable. */
+  if(opts&&opts.keepPose){
+    slicerTr={rx:0,rz:0,scale:1};
+  }else{
+    const best=slicerMod.autoOrient(slicerRaw);    // padedam ant plokstumos iskart
+    slicerTr=best.tr;
+  }
   slicerButtons(true);
   $('slicerName').value=String(suggestedName||'model')
     .replace(/\.(stl|glb|gltf|obj)$/i,'')
