@@ -445,6 +445,48 @@
     };
   }
 
+  /* A generation that was running when the page went away is still running on
+     Meshy's side and still billed. If one is outstanding, walk back into it
+     rather than making the owner pay twice for the same model. */
+  /* When the bytes are blocked but the model exists, the link is the product.
+     Rendered as a real anchor so it is one click, and target=_blank so the
+     design in progress is not navigated away from. */
+  function offerManualDownload(e, prefix) {
+    var n = $('kcGenNote');
+    if (!n) return;
+    if (!e || !e.modelUrl) { say('kcGenNote', (prefix || '') + (e ? e.message : 'failed'), 'bad'); return; }
+    n.className = 'hint warn';
+    n.textContent = (prefix || '') + e.message + ' ';
+    var a = document.createElement('a');
+    a.href = e.modelUrl;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.textContent = 'Download the model \u2192';
+    a.style.cssText = 'color:var(--link);font-weight:600;white-space:nowrap';
+    n.appendChild(a);
+  }
+
+  function resumeGeneration() {
+    if (!window.meshy || !window.meshy.pending || !window.meshy.pending()) return;
+    if (!window.meshyParseGLB) return;
+    var d = window.meshy.pending();
+    genBusy(true);
+    say('kcGenNote', 'a generation was still running - picking it up\u2026');
+    window.meshy.resume(function (m) { say('kcGenNote', m); })
+      .then(function (state) {
+        if (!state || !state.glb) { genBusy(false); return; }
+        var parsed = window.meshyParseGLB(state.glb);
+        takeMesh(parsed.positions, d.prompt || 'recovered generation');
+        say('kcGenNote', 'recovered the generation that was running when the page closed \u2014 ' +
+          (parsed.positions.length / 9).toLocaleString() + ' triangles, no credits spent twice');
+      })
+      .catch(function (e) {
+        offerManualDownload(e, 'could not recover the interrupted generation: ');
+      })
+      .then(function () { genBusy(false); });
+  }
+  setTimeout(resumeGeneration, 1200);
+
   $('kcGen').addEventListener('click', function () {
     var typed = ($('kcPrompt').value || '').trim();
     /* An icon picked from the drawn set doubles as a starting prompt. The
@@ -1155,7 +1197,27 @@
        from this card has one, and it is on the screen next to the button. */
     var ok = window.slicerLoadMesh(lay.positions, (caps.length > 1 ? 'keycaps' : caps[0].name) + '.stl',
                                    lay.positions.byteLength, { keepPose: true });
-    say('kcState', ok ? ('sent ' + lay.placed.length + ' cap' + (lay.placed.length > 1 ? 's' : '') + ' to the slicer')
+    /* AND THEN TAKE THE PERSON THERE. Create shows one tool at a time, and the
+       slicer lives in the OTHER one - so "Send to slicer" loaded the mesh into
+       a card with display:none and reported success into a room nobody was
+       looking at. The press appeared to do nothing. Splitting the rooms is what
+       introduced this; the hand-off has to follow.
+
+       The slicer's own accordion may also be shut, so open it, and then put it
+       on screen. Nothing here reaches into the slicer's state: it presses the
+       same toggle a person would. */
+    if (ok) {
+      var seg = document.querySelector(".stStageBar .stSeg button[data-st='model']");
+      if (seg) seg.click();
+      setTimeout(function () {
+        var t = $('slicerToggle');
+        if (t && window.slicerIsOpen && !window.slicerIsOpen()) t.click();
+        var card = $('slicerCard');
+        if (card && card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 60);
+    }
+    say('kcState', ok ? ('sent ' + lay.placed.length + ' cap' + (lay.placed.length > 1 ? 's' : '') +
+                         ' to the slicer — it is open below')
                       : 'the slicer would not take it', ok ? '' : 'bad');
   });
 

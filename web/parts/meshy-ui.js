@@ -79,11 +79,57 @@
     }, function (m) { say('meshyState', m); })
       .then(function (state) {
         last = { previewId: state.previewId, task: state.task, textured: false };
-        return loadIntoSlicer(state.glb, 'meshy');
+        return loadIntoSlicer(state.glb, 'meshy').then(function () {
+          /* IT GOES TO THE LIBRARY FROM HERE TOO. Only the keycap card was
+             filing generations, so anything made in this card lived in a
+             variable until the next one replaced it - a minute and real credits
+             thrown away by switching tools or reloading. */
+          keepInLibrary(prompt, state);
+        });
       })
-      .catch(function (e) { say('meshyState', ''); say('meshyInfo', e.message, true); })
+      .catch(function (e) { say('meshyState', ''); showFail(e); })
       .then(function () { busy(false); });
   });
+
+  /* Same reasoning as the keycap card: a model that finished and cannot be
+     fetched by script is still a model, and the link is what makes it one. */
+  function keepInLibrary(prompt, state) {
+    if (!window.keycapLibrary || !last || !last.positions) return;
+    var thumb = null;
+    try {
+      var c = document.getElementById('printPreviewCanvas');
+      if (c && c.width) {
+        var t = document.createElement('canvas');
+        t.width = 160; t.height = 160;
+        t.getContext('2d').drawImage(c, 0, 0, 160, 160);
+        thumb = t.toDataURL('image/jpeg', 0.72);
+      }
+    } catch (e) { /* a thumbnail is a nicety; the mesh is the point */ }
+    window.keycapLibrary.save({
+      name: (prompt || 'model').slice(0, 48),
+      prompt: prompt || '',
+      kind: 'model',
+      positions: last.positions,
+      thumb: thumb
+    }).then(function () {
+      say('meshyInfo', 'kept in the Library');
+    }).catch(function (err) {
+      say('meshyInfo', 'generated, but NOT saved to the Library: ' + err.message, true);
+    });
+  }
+
+  function showFail(e) {
+    var n = $('meshyInfo');
+    if (!n) { return; }
+    if (!e || !e.modelUrl) { say('meshyInfo', e ? e.message : 'failed', true); return; }
+    n.className = 'hint warn';
+    n.textContent = e.message + ' ';
+    var a = document.createElement('a');
+    a.href = e.modelUrl; a.target = '_blank'; a.rel = 'noopener';
+    a.textContent = 'Download the model \u2192';
+    a.style.cssText = 'color:var(--link);font-weight:600;white-space:nowrap';
+    n.appendChild(a);
+  }
 
   // ---- refine (texture) ---------------------------------------------------
   $('meshyRefine').addEventListener('click', function () {

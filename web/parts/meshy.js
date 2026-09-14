@@ -190,8 +190,26 @@
     if (!u) throw new Error('That Meshy task returned no ' + (which || 'glb') + ' file.');
     var url = PROXY ? (PROXY + '/asset?u=' + encodeURIComponent(u)) : u;
     return fetch(url).then(function (r) {
-      if (!r.ok) throw new Error('Could not download the model (' + r.status + '). If this is a CORS error, the Worker proxy is the fix.');
+      if (!r.ok) {
+        var e1 = new Error('Meshy refused the download (' + r.status + ').');
+        e1.modelUrl = u;
+        throw e1;
+      }
       return r.arrayBuffer();
+    }, function () {
+      /* THE MODEL EXISTS AND IS PAID FOR; only the last hop is blocked.
+         api.meshy.ai allows this origin, assets.meshy.ai sends no CORS header
+         at all, so a script cannot read the bytes - but a PERSON can open the
+         link, because CORS restricts what a script may read, not what a browser
+         may navigate to. Carry the URL out with the error so the card can offer
+         it instead of dead-ending on three words. */
+      var e2 = new Error('The model finished, but this browser is not allowed to ' +
+        'download it directly - Meshy\'s asset host sends no cross-origin header. ' +
+        'Nothing was wasted: open the link below, then bring the file back in ' +
+        'with "Open a .glb".');
+      e2.modelUrl = u;
+      e2.corsBlocked = true;
+      throw e2;
     });
   }
 
@@ -201,6 +219,55 @@
   }
 
   /* ---- the whole generation leg, as one call --------------------------- */
+  /* The task id, written down the instant it exists. See the file header:
+     the model finishes whether or not this page is still watching, and the
+     credits are spent either way. */
+  var PENDING = 'tmMeshyPending';
+  function remember(id, prompt, opts) {
+    try {
+      localStorage.setItem(PENDING, JSON.stringify(
+        { id: id, prompt: prompt, opts: opts || null, at: Date.now() }));
+    } catch (e) {}
+  }
+  function forget() { try { localStorage.removeItem(PENDING); } catch (e) {} }
+  function pending(maxAgeMs) {
+    var raw;
+    try { raw = localStorage.getItem(PENDING); } catch (e) { return null; }
+    if (!raw) return null;
+    var d;
+    try { d = JSON.parse(raw); } catch (e) { forget(); return null; }
+    if (!d || !d.id) { forget(); return null; }
+    /* A Meshy preview takes a couple of minutes and its signed URLs rot within
+       the hour. Past twenty minutes, forgetting is more honest than hanging a
+       spinner on a task that will never hand over a file. */
+    if (Date.now() - (d.at || 0) > (maxAgeMs || 20 * 60 * 1000)) { forget(); return null; }
+    return d;
+  }
+
+  /* Pick up a task that was already running. Deliberately the same waitFor and
+     fetchModel the live call uses - a second code path for the resume is a
+     second code path to keep correct. */
+  function resume(ui) {
+    var say = ui || function () {};
+    var d = pending();
+    if (!d) return Promise.resolve(null);
+    var state = { previewId: d.id, prompt: d.prompt, resumed: true };
+    say('picking up the generation that was running when the page closed\u2026');
+    return waitFor(d.id, function (st, p) {
+      say('Preview: ' + st.toLowerCase() + ' ' + (p || 0) + '% (resumed)');
+    }).then(function (t) {
+      state.preview = t; state.task = t;
+      say('Downloading the mesh\u2026');
+      return fetchModel(t, 'glb');
+    }).then(function (buf) {
+      state.glb = buf; forget();
+      return state;
+    }).catch(function (e) {
+      forget();
+      throw e;
+    });
+  }
+
   function generate(prompt, opts, ui) {
     var o = opts || {}, say = ui || function () {};
     var state = {};
@@ -208,6 +275,7 @@
     return createPreview(prompt, o).then(function (id) {
       if (!id) throw new Error('Meshy did not return a task id.');
       state.previewId = id;
+      remember(id, prompt, o);
       return waitFor(id, function (st, p) { say('Preview: ' + st.toLowerCase() + ' ' + (p || 0) + '%'); });
     }).then(function (t) {
       state.preview = t;
@@ -222,6 +290,7 @@
       say('Downloading the mesh…');
       return fetchModel(t, 'glb').then(function (buf) {
         state.glb = buf;
+        forget();                 // it is in hand; nothing left to recover
         return state;
       });
     });
@@ -310,7 +379,8 @@
     setProxy: function (p) { PROXY = p || null; },
     createPreview: createPreview, refine: refine, task: task, waitFor: waitFor,
     fetchModel: fetchModel, textureUrl: textureUrl,
-    generate: generate, intoSlicer: intoSlicer
+    generate: generate, intoSlicer: intoSlicer,
+    resume: resume, pending: pending, forgetPending: forget
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.meshy;
 })(typeof window !== 'undefined' ? window : globalThis);

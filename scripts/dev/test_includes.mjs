@@ -79,13 +79,24 @@ for (const [after, before] of deps) {
 }
 
 console.log('\nthe card markup carries every id its JS binds to');
-const card = fs.readFileSync(path.join(parts, 'keycap-card.html'), 'utf8');
+/* AGAINST THE WHOLE PAGE, not just the keycap card. The contract that matters
+   is "every id this JS binds to exists on the assembled dashboard" - the card
+   it happens to live in is an implementation detail, and the keycap card
+   legitimately reaches for the slicer's accordion when it hands a mesh over.
+   Checking one file flagged that as missing markup while the id was sitting in
+   slicer-card.html all along. This is the stricter test as well as the correct
+   one: an id that exists nowhere is still caught, and one that moves between
+   cards no longer produces a false alarm. */
+const everyCard = fs.readdirSync(parts)
+  .filter(f => f.endsWith('.html'))
+  .map(f => fs.readFileSync(path.join(parts, f), 'utf8'))
+  .join('\n') + '\n' + page;
 const ui = fs.readFileSync(path.join(parts, 'keycap-ui.js'), 'utf8');
 const wanted = new Set();
 const re3 = /\$\('([A-Za-z0-9_-]+)'\)/g;
 while ((m = re3.exec(ui))) wanted.add(m[1]);
-const missing = [...wanted].filter(id => !new RegExp(`id=['"]${id}['"]`).test(card));
-ok(`${wanted.size} ids referenced by keycap-ui.js`, missing.length === 0,
+const missing = [...wanted].filter(id => !new RegExp(`id=['"]${id}['"]`).test(everyCard));
+ok(`${wanted.size} ids referenced by keycap-ui.js exist on the page`, missing.length === 0,
    missing.length ? 'MISSING FROM MARKUP: ' + missing.join(', ') : 'all present');
 
 console.log(`\n${pass} passed, ${fail} failed`);
