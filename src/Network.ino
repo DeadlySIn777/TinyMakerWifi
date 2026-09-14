@@ -2424,6 +2424,62 @@ void handleApiPrintStart() {
 
 // POST /api/vat/empty -> the vat is empty. Same shape and same gate as
 // /api/vat/refilled; see vatMarkEmpty() for why this exists.
+// POST /api/move -> jog the build plate, mm signed (+ up, - down).
+// The gap this closes: the API could start, pause, stop and resume a print, but
+// never move the plate, so every "raise it so I can look" meant standing at the
+// machine. Guards live in apiMovePlate() (Motor.ino).
+void handleApiMove() {
+  if (rejectIfWebControlOff()) return;
+  if (rejectIfBusy()) return;
+  if (rejectIfResumePending()) return;
+  if (!server.hasArg("mm")) { sendApiError(400, "mm required"); return; }
+  float mm = server.arg("mm").toFloat();
+  String error;
+  if (!apiMovePlate(mm, error)) { sendApiError(409, error.c_str()); return; }
+  String out = "\"movedMm\":";
+  out += String(mm, 2);
+  out += ",\"homed\":";
+  out += zHomed ? "true" : "false";
+  sendApiOk(out);
+}
+
+/* POST /api/uv/test -> light the whole mask for N seconds.
+
+   The lamp check. Diagnosing "nothing is curing" needs one question answered
+   first - does light actually come out? - and the only way to ask it was the
+   menu's exposure test, which needs someone at the printer. This lights the
+   FULL mask (gfx1 white, same as screen 23111 does) so the answer is
+   unmistakable rather than a faint layer shape.
+
+   Deliberately NOT the 8-bar exposure test: that one is a calibration flow with
+   button waits and a result to pick, and it belongs on the screen. This is a
+   lamp check.
+
+   Bounded to 30 s, idle only, and the LED is cut in every exit path. */
+void handleApiUvTest() {
+  if (rejectIfWebControlOff()) return;
+  if (rejectIfBusy()) return;
+  if (rejectIfResumePending()) return;
+  long secs = formLong("secs", 5, 1, 30);
+  if (!uvLedEnabled) {
+    sendApiError(409, "dry run is on - the UV LED is disabled");
+    return;
+  }
+  gfx1->fillScreen(WHITE);
+  digitalWrite(FAN, HIGH);
+  digitalWrite(LED, HIGH);
+  unsigned long until = millis() + (unsigned long)secs * 1000UL;
+  while ((long)(until - millis()) > 0) {
+    delay(10);
+    network_service_http();   // keep the dashboard answering during the burn
+  }
+  digitalWrite(LED, LOW);
+  gfx1->fillScreen(BLACK);
+  String out = "\"litSecs\":";
+  out += String(secs);
+  sendApiOk(out);
+}
+
 void handleApiVatEmpty() {
   if (rejectIfWebControlOff()) return;
   vatMarkEmpty();
@@ -5086,6 +5142,8 @@ void network_setup() {
   server.on("/api/print/start", HTTP_POST, handleApiPrintStart);
   server.on("/api/vat/refilled", HTTP_POST, handleApiVatRefilled);
   server.on("/api/vat/empty", HTTP_POST, handleApiVatEmpty);
+  server.on("/api/move", HTTP_POST, handleApiMove);
+  server.on("/api/uv/test", HTTP_POST, handleApiUvTest);
   server.on("/api/vat/weight", HTTP_POST, handleApiVatWeight);   // 0.17 0-16
   server.on("/api/resin/calibrate", HTTP_POST, handleApiResinCalibrate);   // R-cal 0.17
   server.on("/api/update", HTTP_GET, handleApiUpdateGet);

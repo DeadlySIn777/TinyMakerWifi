@@ -1,3 +1,56 @@
+/* Move the plate a signed number of mm, for the API (09-13).
+   manual_lift() cannot serve this: it reads the global `screen` to decide its
+   step, so it only exists inside the jog menu. This is the same motion with the
+   distance passed in and the guards made explicit.
+
+   WHY IT EXISTS. Every time this session needed the plate moved - "raise it so I
+   can clean it", "get it clear of the vat" - the only answer was to talk the
+   person through a menu at the machine, because the HTTP API has print
+   start/pause/stop/resume and nothing for motion. That is a gap in the API, not
+   a limit of the hardware.
+
+   GUARDS, in order of how much they matter:
+   - never while the printer is busy: this shares the stepper with the print loop
+   - bounded per call, so a typo cannot drive the full travel
+   - going UP it still obeys the jog ceiling, exactly as the menu does
+   - going DOWN requires a homed Z. Without a reference "down 10 mm" means
+     nothing, and the thing below the plate is the FEP and then the LCD. */
+bool apiMovePlate(float mm, String &error) {
+  if (printerBusy()) { error = "printer busy"; return false; }
+  if (!(mm > -68.0f && mm < 68.0f) || mm == 0.0f) {
+    error = "move must be between -68 and 68 mm";
+    return false;
+  }
+  if (mm < 0 && !zHomed) {
+    error = "home the plate first - down has no meaning without a reference";
+    return false;
+  }
+
+  stepper.setMaxSpeed(Drop_Back_Feedrate * steps_mm / 60);
+  stepper.enableOutputs();
+  stepper.move((long)(mm * steps_mm));
+
+  if (zHomed && mm > 0) {
+    const long ceilingSteps = (long)(max_height * steps_mm);
+    if (stepper.targetPosition() > ceilingSteps) {
+      const long here = stepper.currentPosition();
+      stepper.moveTo(here > ceilingSteps ? here : ceilingSteps);
+    }
+  }
+
+  while (stepper.distanceToGo() != 0) {
+    stepper.run();
+#if ENABLE_NETWORK
+    // HTTP only - the caller is an HTTP handler and a long move must not make
+    // the dashboard look dead. Same rule as the homing loop.
+    static unsigned long svc = 0;
+    if (millis() - svc > 250) { svc = millis(); network_service_http(); }
+#endif
+  }
+  stepper.disableOutputs();
+  return true;
+}
+
 /**
  * @brief Manual Lift
  * Moves the build plate up based on selected distance.
