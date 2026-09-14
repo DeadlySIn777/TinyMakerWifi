@@ -35,12 +35,27 @@
 
   /* Millimetres, from the spec. Do not "improve" these. */
   var SPEC = {
-    dotDia:      1.44,   // base diameter of a dot
-    dotSpacing:  2.34,   // centre to centre within a cell, both axes
-    cellSpacing: 6.20,   // centre of dot 1 to centre of the next cell's dot 1
-    lineSpacing: 10.00,  // between rows of cells
+    /* WHAT MAY GROW AND WHAT MAY NOT. Dot SPACING is what a fingertip resolves
+       a cell by; move the dots apart and a reader's finger reads one cell as
+       two, so 2.34 and 6.20 are fixed and the engine will not scale them.
+
+       Dot DIAMETER and HEIGHT are a different matter - the standards
+       themselves disagree, which is the room to work in. The Library of
+       Congress specifies a 1.44 mm dot; ADA signage specifies 1.5 mm and
+       allows 0.6 to 0.9 mm of height. So this sits at the generous end of
+       what is still a specification rather than inventing a number: a bigger,
+       taller dot on a resin cap that gets handled, washed and worn.
+
+       The constraint that replaces "make it bigger" is the GAP between two
+       neighbouring dots - spacing minus diameter. At 1.55 mm that is 0.79 mm,
+       which a finger still reads as two dots. check() enforces it. */
+    dotDia:      1.55,   // ADA-side, up from the LoC 1.44
+    dotSpacing:  2.34,   // FIXED - centre to centre within a cell, both axes
+    cellSpacing: 6.20,   // FIXED - between cells
+    lineSpacing: 10.00,
+    dotGapMin:   0.60,   // edge to edge; below this two dots read as one ridge
     dotHeightMin: 0.48,  // Library of Congress minimum
-    dotHeight:   0.60    // default here: ADA range, sturdier on a printed cap
+    dotHeight:   0.75    // ADA allows 0.6-0.9; a printed cap wants the top end
   };
 
   /* Grade 1 (uncontracted) Unified English Braille. Values are dot numbers. */
@@ -115,7 +130,7 @@
     var cells = enc.cells;
     if (!cells.length) return null;
 
-    var r = SPEC.dotDia / 2;
+    var r = (o.dotDia == null ? SPEC.dotDia : o.dotDia) / 2;
     var totalW = textWidthMm(cells.length);
     var totalH = cellHeightMm();
 
@@ -178,6 +193,15 @@
     if (height < SPEC.dotHeightMin)
       issues.push('a ' + height.toFixed(2) + ' mm dot is below the ' + SPEC.dotHeightMin +
         ' mm minimum and will not be felt');
+    /* The real limit on making dots bigger: they close the gap to their
+       neighbours long before they run out of cell. */
+    var gap = SPEC.dotSpacing - (o.dotDia == null ? SPEC.dotDia : o.dotDia);
+    if (gap < SPEC.dotGapMin)
+      issues.push('a ' + (o.dotDia == null ? SPEC.dotDia : o.dotDia).toFixed(2) +
+        ' mm dot leaves only ' + gap.toFixed(2) + ' mm between neighbours - under ' +
+        SPEC.dotGapMin + ' mm they are felt as one ridge instead of two dots. ' +
+        'The spacing cannot be opened up to make room: that is what makes a cell readable.');
+    else notes.push('dots ' + gap.toFixed(2) + ' mm apart edge to edge');
 
     notes.push('dot ' + SPEC.dotDia + ' mm across = ' + (SPEC.dotDia / px).toFixed(1) + ' printer pixels');
     notes.push('dot ' + height.toFixed(2) + ' mm tall = ' + Math.round(height / 0.05) + ' layers at 0.05 mm');

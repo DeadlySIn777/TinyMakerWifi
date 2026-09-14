@@ -28,9 +28,21 @@ const truthy = (n, v, d) => {
 };
 
 console.log('\nthe dimensions are the spec, not a style');
-near('dot diameter', B.SPEC.dotDia, 1.44, 0.001);
+near('dot diameter sits at the ADA end, not the LoC end', B.SPEC.dotDia, 1.55, 0.001);
+truthy('which is still inside what a standard specifies',
+  B.SPEC.dotDia >= 1.44 && B.SPEC.dotDia <= 1.6, B.SPEC.dotDia + ' mm');
+/* The limit that replaces "make it bigger": the gap to the next dot. */
+near('and it leaves a readable gap', B.SPEC.dotSpacing - B.SPEC.dotDia, 0.79, 0.01);
+truthy('above the floor where two dots merge into a ridge',
+  B.SPEC.dotSpacing - B.SPEC.dotDia >= B.SPEC.dotGapMin);
+truthy('a dot fat enough to close that gap is refused',
+  !B.check('a', 13.7, 13.7, { dotDia: 1.85 }).ok);
+truthy('and it says the spacing cannot be opened to make room',
+  /spacing cannot be opened/.test(B.check('a', 13.7, 13.7, { dotDia: 1.85 }).issues.join(' ')));
 near('dot spacing within a cell', B.SPEC.dotSpacing, 2.34, 0.001);
 near('cell spacing', B.SPEC.cellSpacing, 6.20, 0.001);
+truthy('dots are taller than the bare minimum too', B.SPEC.dotHeight >= 0.7,
+  B.SPEC.dotHeight + ' mm, ADA allows up to 0.9');
 truthy('default dot height is at or above the LoC minimum',
   B.SPEC.dotHeight >= B.SPEC.dotHeightMin,
   B.SPEC.dotHeight + ' >= ' + B.SPEC.dotHeightMin);
@@ -52,10 +64,12 @@ ok('a full stop', B.cellsFor('.').cells.join('|'), '256');
 ok('an unknown glyph is reported, not dropped', B.cellsFor('a©b').unknown.join(''), '©');
 
 console.log('\nwhat fits a keycap - the number that decides everything');
-near('one cell is 3.78 mm wide', B.textWidthMm(1), 3.78, 0.01);
-near('two cells are 9.98 mm', B.textWidthMm(2), 9.98, 0.01);
-near('three are 16.18 mm', B.textWidthMm(3), 16.18, 0.01);
-near('a cell is 6.12 mm tall', B.cellHeightMm(), 6.12, 0.01);
+near('one cell is 3.89 mm wide', B.textWidthMm(1), 3.89, 0.01);
+near('two cells are 10.09 mm', B.textWidthMm(2), 10.09, 0.01);
+near('three are 16.29 mm', B.textWidthMm(3), 16.29, 0.01);
+near('a cell is 6.23 mm tall', B.cellHeightMm(), 6.23, 0.01);
+/* The dot CENTRES do not move - the radius cancels out of the origin -
+   so a fatter dot never shifts the pitch a finger reads. */
 ok('a 13.7 mm XDA top holds two cells', B.cellsThatFit(13.7), 2);
 ok('a 12.4 mm Cherry top also holds two', B.cellsThatFit(12.4), 2);
 ok('a 3 mm face holds none', B.cellsThatFit(3), 0);
