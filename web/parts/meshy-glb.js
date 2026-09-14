@@ -101,7 +101,18 @@
     var Arr = C[0], bytes = C[1];
     var out = new Float32Array(acc.count * n);
 
-    if (acc.bufferView == null) return out;      // sparse-only: zeros
+    /* AN ACCESSOR WITH NO bufferView IS NOT "ZEROS". This returned a
+       zero-filled array and called it sparse - and a Draco-compressed
+       primitive's accessors have exactly that shape, so a compressed mesh that
+       slipped past the extension check came back as a cloud of vertices all at
+       the origin: no error, no triangles anybody could see, just nothing. This
+       file's own header promises the opposite ("a reader that quietly produces
+       nonsense is worse than one that says 'not this format'"). A genuinely
+       sparse accessor is rare, is not what arrives here, and would need its
+       substitution applied rather than ignored - so say so and stop. */
+    if (acc.bufferView == null)
+      fail('accessor ' + index + ' has no bufferView - the mesh is almost ' +
+           'certainly compressed (Draco), which this reader does not decode');
     var bv = g.bufferViews[acc.bufferView];
     if (!bin) fail('GLB has no BIN chunk but an accessor needs one');
     var base = (bv.byteOffset || 0) + (acc.byteOffset || 0);
@@ -135,11 +146,35 @@
     var s = splitGLB(buf);
     var g = s.gltf, bin = s.bin;
 
-    var need = (g.extensionsRequired || []);
-    for (var i = 0; i < need.length; i++) {
-      if (/draco/i.test(need[i])) fail('this GLB is Draco-compressed - ask the generator for an uncompressed mesh or an STL');
-      if (/basisu|ktx2/i.test(need[i])) fail('this GLB uses KTX2 textures - geometry may still load, but ask for a plain PNG texture');
-    }
+    /* BOTH LISTS. A generator that writes Draco into extensionsUsed but not
+       extensionsRequired - which is legal, and means "you may ignore this if
+       you cannot read it" - got past a check that looked only at the required
+       list, and then every accessor came back with no bufferView. The reader
+       either has to decode it or say so by name; quietly producing a cloud of
+       vertices at the origin is the one thing this file promises not to do. */
+    /* TWO LISTS, TWO QUESTIONS - and conflating them refuses good models.
+
+       GEOMETRY compression (Draco, meshopt) is fatal to this reader wherever it
+       is declared: an accessor with no bufferView cannot be decoded, and a
+       generator may legally put Draco in extensionsUsed ONLY, meaning "ignore
+       this if you cannot read it" - which got past a check that looked at
+       extensionsRequired alone and left every vertex at the origin.
+
+       TEXTURE compression is a different matter. KTX2 in extensionsUsed is
+       ordinary and touches nothing this reader cares about; only a REQUIRED
+       KTX2 is worth stopping for, and even then it is the texture that is
+       missing, not the mesh. Scanning both lists for both things would reject
+       models that load perfectly well. */
+    var reqd = (g.extensionsRequired || []);
+    var used = reqd.concat(g.extensionsUsed || []);
+    for (var i = 0; i < used.length; i++)
+      if (/draco|meshopt/i.test(used[i]))
+        fail('this GLB is geometry-compressed (' + used[i] + ') - ask the ' +
+             'generator for an uncompressed mesh or an STL');
+    for (var j = 0; j < reqd.length; j++)
+      if (/basisu|ktx2/i.test(reqd[j]))
+        fail('this GLB requires KTX2 textures - the geometry may be fine, but ' +
+             'ask for a plain PNG texture');
     if (!g.meshes || !g.meshes.length) fail('GLB has no meshes');
 
     // Walk the scene so node transforms are honoured. A generator that puts a
@@ -167,10 +202,24 @@
         if (!uv) haveUV = false;
         var idx = (prim.indices != null) ? readAccessor(g, bin, prim.indices) : null;
         var count = idx ? idx.length : (pos.length / 3);
+        /* A MIRRORING NODE FLIPS EVERY TRIANGLE. apply() applies the world
+           matrix without asking what it does to handedness, so a node with
+           scale [-1,1,1] - or any matrix whose upper-left 3x3 has a negative
+           determinant - hands back geometry wound inside out. Nothing
+           downstream catches it: seat()'s ORDER swap exists to undo seat's own
+           z-negation and preserves whatever arrived, check() sees a closed mesh
+           and says fine, and the preview's weldNormals just produces inward
+           normals. The cap renders black and the slicer is told the solid is
+           the air around it. One determinant, one swap. */
+        var d3 = m[0] * (m[5] * m[10] - m[6] * m[9])
+               - m[4] * (m[1] * m[10] - m[2] * m[9])
+               + m[8] * (m[1] * m[6]  - m[2] * m[5]);
+        var flip = d3 < 0;
         for (var t = 0; t + 2 < count; t += 3) {
           var tri = { p: [], uv: [] };
           for (var k = 0; k < 3; k++) {
-            var vi = idx ? idx[t + k] : (t + k);
+            var kk = flip ? (2 - k) : k;
+            var vi = idx ? idx[t + kk] : (t + kk);
             var w = apply(m, pos[vi * 3], pos[vi * 3 + 1], pos[vi * 3 + 2]);
             tri.p.push(w);
             if (uv) tri.uv.push([uv[vi * 2], uv[vi * 2 + 1]]);
@@ -182,9 +231,25 @@
 
     var sceneIdx = (g.scene != null) ? g.scene : 0;
     var scene = (g.scenes && g.scenes[sceneIdx]) ? g.scenes[sceneIdx] : null;
-    if (scene && scene.nodes) scene.nodes.forEach(function (n) { visit(n, ident()); });
-    else if (g.nodes) g.nodes.forEach(function (_, i) { visit(i, ident()); });
-    else g.meshes.forEach(function (m) { collect(m, ident()); });
+    if (scene && scene.nodes) {
+      scene.nodes.forEach(function (n) { visit(n, ident()); });
+    } else if (g.nodes) {
+      /* VISIT ONLY THE ROOTS. visit() already recurses into node.children, so
+         walking every node as if it were a root walks every child TWICE - once
+         with its parent's world matrix and once more with the identity, which
+         strips its ancestors' translation, rotation and scale. The result is
+         doubled geometry with the second copy in the wrong place, and nothing
+         downstream can tell that from a model that genuinely has two of
+         something. `scenes` is optional in glTF 2.0, so this branch is not
+         exotic - an asset used as a node library has none. */
+      var isChild = Object.create(null);
+      g.nodes.forEach(function (nd) {
+        if (nd && nd.children) nd.children.forEach(function (c) { isChild[c] = true; });
+      });
+      g.nodes.forEach(function (_, i) { if (!isChild[i]) visit(i, ident()); });
+    } else {
+      g.meshes.forEach(function (m) { collect(m, ident()); });
+    }
 
     if (!tris.length) fail('GLB has no triangles (only points or lines?)');
 
