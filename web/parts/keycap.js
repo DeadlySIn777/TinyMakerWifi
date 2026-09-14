@@ -639,6 +639,44 @@
              totalLayers: runs.reduce(function (a, r) { return a + r.layers; }, 0) };
   }
 
+  /* ---- what it costs ----------------------------------------------------
+     The argument for making a cap instead of buying one is mostly this number,
+     so it is computed from the mesh rather than estimated from the bounding
+     box: the divergence theorem over a closed surface gives the exact volume,
+     and the cap is hollow, so a bounding-box guess would be out by a factor of
+     three or four.
+
+     Resin prices are per litre and vary enormously; the default here is a
+     mid-range tough resin. Supports and the raft are added as a fraction
+     because their volume depends on the slicer's settings, not on this mesh. */
+  function volumeMm3(positions) {
+    var v = 0;
+    for (var i = 0; i < positions.length; i += 9) {
+      var ax=positions[i],   ay=positions[i+1], az=positions[i+2],
+          bx=positions[i+3], by=positions[i+4], bz=positions[i+5],
+          cx=positions[i+6], cy=positions[i+7], cz=positions[i+8];
+      v += (ax*(by*cz - bz*cy) - ay*(bx*cz - bz*cx) + az*(bx*cy - by*cx)) / 6;
+    }
+    return Math.abs(v);
+  }
+
+  function costOf(cap, opts) {
+    var o = opts || {};
+    var perLitre = o.resinPerLitre == null ? 45 : o.resinPerLitre;   // currency per L
+    var mm3 = volumeMm3(cap.positions);
+    var supportFrac = (cap.printPlan && cap.printPlan.supports) ? (o.supportFrac == null ? 0.35 : o.supportFrac) : 0;
+    var ml = mm3 / 1000 * (1 + supportFrac);
+    return {
+      volumeMm3: +mm3.toFixed(1),
+      resinMl: +ml.toFixed(3),
+      supportsAdd: supportFrac,
+      cost: +(ml / 1000 * perLitre).toFixed(3),
+      perLitre: perLitre,
+      /* An artisan cap sells for a lot more than this, which is the point. */
+      note: 'resin only - the machine time is the other half'
+    };
+  }
+
   /* ---- the tuning print --------------------------------------------------
      A row of stems, each slot a little wider than the last. Print it, try a
      switch in each, keep the first that clicks on without force, then set
@@ -666,7 +704,7 @@
     MX: MX, PROFILES: PROFILES, UNIT: UNIT, DEPTH: DEPTH, BED: BED, PIXEL_MM: PIXEL_MM,
     capWidth: capWidth, build: build, orientForPrint: orientForPrint,
     validate: validate, fits: fits, tiltFit: tiltFit, perPlate: perPlate,
-    layout: layout, planSet: planSet,
+    layout: layout, planSet: planSet, volumeMm3: volumeMm3, costOf: costOf,
     stemTestComb: stemTestComb
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.keycap;

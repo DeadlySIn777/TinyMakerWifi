@@ -1,113 +1,144 @@
-<!-- Keycap card. Four steps, one at a time, the way a setup assistant works:
-     pick a key, style it, letter it, print it. The keyboard is step one because
-     the key you point at already answers three questions - its size, its row,
-     and whether this printer can make it at all. -->
+<!-- Keycaps.
+     The point of the card is that you are making the thing instead of buying
+     it, so the cap is photographed rather than diagrammed and the picker is
+     built out of caps rather than out of buttons.
+
+     Several ideas here came out of a design pass and survived an adversarial
+     one; they are marked KEPT where they sit. -->
 <section id='kcCard' class='card'>
   <div class='cardHead'>
     <h2>Keycaps</h2>
     <span id='kcState' class='hint'></span>
   </div>
 
-  <!-- the step rail -->
   <ol id='kcSteps' class='kcSteps'>
-    <li data-step='1' class='on'><b>1</b><span>Key</span></li>
-    <li data-step='2'><b>2</b><span>Shape</span></li>
-    <li data-step='3'><b>3</b><span>Legend</span></li>
-    <li data-step='4'><b>4</b><span>Print</span></li>
+    <li data-step='1' class='on'>Key</li>
+    <li data-step='2'>Shape</li>
+    <li data-step='3'>Art</li>
+    <li data-step='4'>Print</li>
   </ol>
 
-  <!-- ---- step 1: the board -------------------------------------------- -->
+  <!-- ---- step 1: the board is the hero -------------------------------- -->
   <div class='kcPane' data-pane='1'>
-    <div class='hint' style='margin-bottom:8px'>
-      Pick the key you want. Shading shows what this printer can do with it.
+    <!-- KEPT, and given something real to measure: the jaws open to how much
+         of the 40.8 mm bed this cap eats, so the tool answers the question the
+         bed actually asks rather than restating the cap's width. -->
+    <div class='kcCal' id='kcCal' style='--jaw:.44'>
+      <i class='kcJawA'></i><i class='kcJawB'></i>
+      <span class='kcCalBed'>40.8 mm bed</span>
+      <b id='kcJawVal'>18.00 mm</b>
     </div>
+
     <div id='kcBoard' class='kcBoard'></div>
-    <div class='kcKeyLegend hint'>
-      <span><i class='kcSw kcOk'></i>prints flat, no supports</span>
-      <span><i class='kcSw kcTilt'></i>prints leaning over, with supports</span>
-      <span><i class='kcSw kcNo'></i>will not fit the bed at any angle</span>
+
+    <div class='kcKeyLegend'>
+      <span><i class='kcSw'></i>prints flat</span>
+      <span><i class='kcSw t'></i>prints leaning, with supports</span>
+      <span><i class='kcSw n'></i>will not fit the bed</span>
     </div>
   </div>
 
-  <!-- ---- steps 2-4 share the zoomed key ------------------------------- -->
+  <!-- ---- steps 2-4 ----------------------------------------------------- -->
   <div class='kcPane' data-pane='2 3 4' hidden>
     <div class='kcSplit'>
-      <div class='kcPreview'>
-        <canvas id='kcTop' width='420' height='420'
-          aria-label='the cap in 3D - drag to turn it'></canvas>
-        <div class='kcInsets'>
-          <canvas id='kcFlat' width='200' height='200'
-            aria-label='the legend, seen straight down'></canvas>
-          <canvas id='kcSide' width='200' height='120'
-            aria-label='the cap seen from the front'></canvas>
+      <div class='kcStageWrap'>
+        <!-- KEPT: a seamless sweep - one gradient, no horizon, no floor plane -
+             with the canvas transparent on top, so the cap is photographed
+             rather than boxed. -->
+        <div class='kcStage'>
+          <canvas id='kcTop' width='420' height='420'
+            aria-label='the cap in 3D - drag to turn it'></canvas>
+          <span class='kcSpin'>drag to turn</span>
         </div>
-        <div id='kcDims' class='hint'></div>
+        <div id='kcDims' class='kcDims'></div>
+        <div class='kcInsets'>
+          <figure><canvas id='kcFlat' width='200' height='200'
+            aria-label='the legend, seen straight down'></canvas><figcaption>legend</figcaption></figure>
+          <figure><canvas id='kcSide' width='200' height='120'
+            aria-label='the cap seen from the front'></canvas><figcaption>section</figcaption></figure>
+        </div>
       </div>
 
       <div class='kcOptions'>
-        <!-- step 2 -->
         <div class='kcGroup' data-for='2'>
-          <label class='kcLbl'>Profile</label>
+          <p class='kcLbl'>Profile</p>
           <div id='kcProfiles' class='kcTiles'></div>
-          <div id='kcProfileNote' class='hint'></div>
-          <label class='kcLbl' style='margin-top:12px'>Row</label>
-          <div id='kcRows' class='kcTiles kcSmall'></div>
-          <div class='hint'>Sculpted profiles tilt each row. The board picked this one for you.</div>
+          <p id='kcProfileNote' class='hint'></p>
+          <p class='kcLbl'>Row</p>
+          <div id='kcRows' class='kcTiles sm'></div>
         </div>
 
-        <!-- step 3 -->
         <div class='kcGroup' data-for='3' hidden>
-          <label class='kcLbl'>Generate the artwork</label>
+          <p class='kcLbl'>Generate the art</p>
           <textarea id='kcPrompt' rows='2' maxlength='500'
-            placeholder='a military IFAK first aid pouch, medical cross patch'
-            style='width:100%;box-sizing:border-box;background:var(--tile);color:var(--text);
-                   border:1px solid var(--line2);border-radius:8px;padding:8px;font:inherit'></textarea>
-          <div class='calRow' style='margin-top:6px'>
+            placeholder='a military IFAK pouch, medical cross patch'></textarea>
+          <div class='calRow'>
             <button id='kcGen' type='button' style='flex:2 1 150px'>Generate</button>
-            <button id='kcGenClear' class='button secondary' type='button' style='flex:1 1 90px'
-              disabled>Clear</button>
+            <button id='kcGenClear' class='button secondary' type='button'
+              style='flex:1 1 90px' disabled>Clear</button>
           </div>
-          <div id='kcGenNote' class='hint'>
-            Meshy makes the artwork; the engine keeps the stem. Whatever comes back is
-            sampled into a relief on the top face - it never becomes the cap itself.
-            Needs the Meshy key from the Generate&nbsp;a&nbsp;model card.
+          <p id='kcGenNote' class='hint'>Meshy makes the art; the engine keeps the
+            stem. Whatever comes back becomes relief on the top face &mdash; it never
+            becomes the cap. Needs the key from the Generate&nbsp;a&nbsp;model card.</p>
+
+          <p class='kcLbl'>Or a drawn one</p>
+          <div id='kcIcons' class='kcTiles sm'></div>
+
+          <p class='kcLbl'>Braille</p>
+          <div class='calRow'>
+            <input id='kcBraille' maxlength='2' placeholder='a' class='kcMono'>
+            <span class='hint' style='flex:1 1 150px;margin:0'>one letter, or one
+              digit &mdash; two cells is all a 1u top holds at readable pitch</span>
           </div>
 
-          <label class='kcLbl' style='margin-top:14px'>Or use a drawn one</label>
-          <div id='kcIcons' class='kcTiles kcSmall'></div>
-          <label class='kcLbl' style='margin-top:12px'>Corner digit</label>
+          <p class='kcLbl'>Finish</p>
           <div class='calRow'>
-            <input id='kcDigit' maxlength='1' placeholder='none' style='flex:0 0 62px;text-align:center'>
-            <label style='display:flex;align-items:center;gap:6px;white-space:nowrap'>
-              <span class='hint'>Depth</span>
-              <input id='kcDepth' type='range' min='0.15' max='0.9' step='0.05' value='0.45' style='flex:1'>
-              <span id='kcDepthVal' class='hint' style='width:52px;text-align:right'>0.45 mm</span>
-            </label>
+            <label class='kcNum'><span>Corner</span>
+              <input id='kcDigit' maxlength='1' placeholder='&mdash;' class='kcMono'></label>
+            <label class='kcNum grow'><span>Relief</span>
+              <input id='kcDepth' type='range' min='0.15' max='6' step='0.05' value='0.55'>
+              <b id='kcDepthVal'>0.55</b></label>
           </div>
-          <label style='display:flex;align-items:center;gap:6px;margin-top:8px'>
-            <input id='kcRaised' type='checkbox'>
-            <span class='hint'>raised instead of engraved</span></label>
-          <div id='kcLegendWarn' class='hint'></div>
+          <!-- KEPT: a segmented control rather than a pill toggle. Two named
+               states with different printing consequences should both be
+               visible, not hidden behind a switch position. -->
+          <div class='kcSeg' id='kcFinish'>
+            <input type='checkbox' id='kcRaised' checked hidden>
+            <button type='button' data-raised='1' class='on'>Raised</button>
+            <button type='button' data-raised='0'>Engraved</button>
+          </div>
+          <p id='kcLegendWarn' class='hint'></p>
         </div>
 
-        <!-- step 4 -->
         <div class='kcGroup' data-for='4' hidden>
           <div id='kcReport' class='kcReport'></div>
-          <div class='calRow' style='margin-top:10px'>
+          <div class='calRow'>
             <button id='kcAdd' class='button secondary' type='button' style='flex:1 1 130px'>Add to plate</button>
             <button id='kcSlice' type='button' style='flex:2 1 150px'>Send to slicer</button>
           </div>
           <div class='calRow'>
-            <button id='kcStl' class='button secondary' type='button' style='flex:1 1 120px'>Export STL</button>
-            <button id='kcComb' class='button secondary' type='button' style='flex:1 1 180px'
+            <button id='kcShare' class='button secondary' type='button' style='flex:1 1 130px'
+              title='A picture of the cap plus a code that rebuilds it exactly - send it to whoever has to approve it'>Share for approval</button>
+            <button id='kcStl' class='button secondary' type='button' style='flex:1 1 110px'>Export STL</button>
+          </div>
+          <div class='calRow'>
+            <button id='kcComb' class='button secondary' type='button' style='flex:1 1 100%'
               title='A row of stems, each slot wider than the last. Print it once and keep the one that clicks.'>Stem fit test</button>
           </div>
-          <div id='kcPlate' class='hint'></div>
+          <p id='kcPlate' class='hint'></p>
+          <details class='kcOpen'>
+            <summary>Open a shared design</summary>
+            <div class='calRow'>
+              <input id='kcCode' placeholder='paste a design code' class='kcCodeIn'>
+              <button id='kcLoad' class='button secondary' type='button' style='flex:0 0 90px'>Load</button>
+            </div>
+            <p id='kcCodeNote' class='hint'></p>
+          </details>
         </div>
 
-        <div class='calRow' style='margin-top:14px;border-top:1px solid var(--line);padding-top:10px'>
-          <button id='kcBack' class='button secondary' type='button' style='flex:1 1 90px'>Back</button>
-          <button id='kcNext' type='button' style='flex:1 1 90px'>Next</button>
+        <div class='kcNav'>
+          <button id='kcBack' class='button secondary' type='button'>Back</button>
+          <button id='kcNext' type='button'>Next</button>
         </div>
       </div>
     </div>
@@ -115,98 +146,169 @@
 </section>
 
 <style>
-/* Scoped to the card - every colour comes from the dashboard's own tokens so
-   this follows the theme instead of pinning its own. */
-#kcCard .kcSteps{display:flex;gap:6px;list-style:none;margin:0 0 12px;padding:0}
-#kcCard .kcSteps li{flex:1;display:flex;align-items:center;gap:7px;padding:7px 10px;
-  border:1px solid var(--line);border-radius:8px;background:var(--tile);color:var(--muted2);
-  font-size:12px;transition:background .15s,color .15s,border-color .15s}
-#kcCard .kcSteps li b{display:grid;place-items:center;width:18px;height:18px;border-radius:50%;
-  background:var(--line2);color:var(--text);font-size:11px;font-weight:600}
-#kcCard .kcSteps li.on{border-color:var(--accent);color:var(--text);background:var(--card)}
-#kcCard .kcSteps li.on b{background:var(--accent);color:#fff}
-#kcCard .kcSteps li.done b{background:var(--good);color:#fff}
+/* Every colour resolves through a token that exists in BOTH themes. The cap
+   tones are literals per theme rather than mixes of adjacent surface tokens:
+   --btnsec over --tile INVERTS in light mode (the face ends up darker than the
+   skirt) and --card over --bg differs by half a percent of luminance in dark,
+   which is invisible. Depth here comes from the lip and the drop, not the
+   fill - measured, not assumed. */
+#kcCard{--kSkirt:#0f1116;--kFace:#1b1f27;--kLip:#333a47;--kWell:#07080a;
+  --kPlate:#0a0b0e;--kDrop:rgba(0,0,0,.55);--kSweep:#191d25;--kFloor:#0a0c10}
+[data-theme=light] #kcCard{--kSkirt:#c5ccd7;--kFace:#fff;--kLip:#fff;--kWell:#ccd3dc;
+  --kPlate:#dfe4ea;--kDrop:rgba(23,30,44,.20);--kSweep:#f4f6f9;--kFloor:#dde2e9}
+
+/* one rule, and it is most of why the card stops reading as a form: if it is a
+   word it is tracked uppercase, if it is a number it is tabular mono */
+#kcCard .kcLbl{margin:17px 0 8px;font:600 11px/1 ui-sans-serif,system-ui,sans-serif;
+  letter-spacing:.11em;text-transform:uppercase;color:var(--subh)}
+#kcCard .kcGroup>.kcLbl:first-child{margin-top:0}
+#kcCard .kcMono,#kcCard .kcDims,#kcCard .kcReport dd,#kcCard .kcCal b,#kcCard .kcNum b{
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+
+#kcCard .kcSteps{display:flex;gap:2px;list-style:none;margin:0 0 15px;padding:0;
+  border-bottom:1px solid var(--line)}
+#kcCard .kcSteps li{padding:9px 14px;cursor:pointer;color:var(--muted2);
+  font:600 12px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:.08em;
+  text-transform:uppercase;border-bottom:2px solid transparent;margin-bottom:-1px;
+  transition:color .14s,border-color .14s}
+#kcCard .kcSteps li:hover{color:var(--text)}
+#kcCard .kcSteps li.on{color:var(--text);border-bottom-color:var(--accent)}
 #kcCard .kcSteps li.done{color:var(--muted)}
 
-/* The board. Keys are drawn as keycaps rather than as rectangles - a top face
-   lifted off a visible side wall, a highlight along the top edge and a shadow
-   under the front lip - because this is a keycap designer and the picker is the
-   one place that ought to look like the thing being made. Pressing one moves it
-   down onto its own shadow.
+/* ---- the caliper ------------------------------------------------------- */
+#kcCard .kcCal{position:relative;height:34px;margin:0 2px 12px;border-bottom:1px solid var(--line2)}
+#kcCard .kcCal i{position:absolute;bottom:0;width:1px;height:14px;background:var(--muted2)}
+#kcCard .kcCal i::after{content:'';position:absolute;bottom:0;width:7px;height:1px;background:var(--muted2)}
+#kcCard .kcJawA{left:0}#kcCard .kcJawA::after{left:0}
+#kcCard .kcJawB{left:calc(var(--jaw)*100%);transition:left .25s cubic-bezier(.2,.7,.3,1)}
+#kcCard .kcJawB::after{right:0}
+#kcCard .kcCal b{position:absolute;bottom:16px;left:calc(var(--jaw)*50%);transform:translateX(-50%);
+  font-size:12px;color:var(--text);white-space:nowrap;transition:left .25s cubic-bezier(.2,.7,.3,1)}
+#kcCard .kcCalBed{position:absolute;right:0;bottom:2px;font:600 10px/1 ui-sans-serif,system-ui;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--ink3)}
 
-   The state language is deliberate. A dashed, amber, dimmed key reads as
-   DISABLED, and 2.25u Enter and Shift are not disabled - they print perfectly
-   well, they just have to lean over and take supports. So those keep the full
-   keycap treatment and carry a small corner wedge instead; only the spacebar,
-   which genuinely does not fit the bed at any angle, is struck through. */
-#kcCard{--kcTop:#2a2f38;--kcSide:#171a20;--kcLip:rgba(0,0,0,.45);--kcGloss:rgba(255,255,255,.10)}
-@media (prefers-color-scheme:light){#kcCard:not([data-theme="dark"]){
-  --kcTop:#fdfdfe;--kcSide:#c6ccd6;--kcLip:rgba(0,0,0,.16);--kcGloss:rgba(255,255,255,.9)}}
-#kcCard .kcBoard{display:flex;flex-direction:column;gap:6px;padding:14px 12px 16px;
-  border-radius:12px;border:1px solid var(--line);overflow-x:auto;
-  background:linear-gradient(180deg,var(--pv),var(--bg))}
-#kcCard .kcRow{display:flex;gap:5px}
-#kcCard .kcKey{position:relative;flex:0 0 auto;height:36px;padding:0 3px;overflow:visible;
-  border:0;border-radius:6px 6px 7px 7px;cursor:pointer;
-  background:linear-gradient(180deg,var(--kcTop),color-mix(in srgb,var(--kcTop) 82%,var(--kcSide)));
-  color:var(--muted);font:600 11px/1 ui-sans-serif,system-ui,sans-serif;
-  display:grid;place-items:center;
-  box-shadow:inset 0 1px 0 var(--kcGloss),0 3px 0 var(--kcSide),0 5px 7px var(--kcLip);
-  transition:transform .1s,box-shadow .1s,color .1s}
-#kcCard .kcKey:hover{transform:translateY(-2px);color:var(--text);
-  box-shadow:inset 0 1px 0 var(--kcGloss),0 5px 0 var(--kcSide),0 9px 12px var(--kcLip)}
-#kcCard .kcKey:active{transform:translateY(3px);
-  box-shadow:inset 0 1px 0 var(--kcGloss),0 0 0 var(--kcSide),0 1px 3px var(--kcLip)}
-#kcCard .kcKey.sel{color:#fff;
-  background:linear-gradient(180deg,var(--accent),color-mix(in srgb,var(--accent) 72%,#000));
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.22),
-             0 3px 0 color-mix(in srgb,var(--accent) 45%,#000),0 6px 10px var(--kcLip)}
-/* fits, but has to lean over: a corner wedge, not a warning */
-#kcCard .kcKey.tilt::after{content:'';position:absolute;top:3px;right:3px;
-  border-top:6px solid var(--warncol);border-left:6px solid transparent;border-radius:1px;opacity:.9}
-/* genuinely does not fit at any angle */
-#kcCard .kcKey.no{cursor:not-allowed;filter:grayscale(1);opacity:.38;
-  box-shadow:inset 0 1px 0 var(--kcGloss),0 2px 0 var(--kcSide)}
-#kcCard .kcKey.no::after{content:'';position:absolute;inset:0;border-radius:inherit;
-  background:linear-gradient(to top right,transparent calc(50% - 1px),
-             var(--dangertxt) calc(50% - 1px),var(--dangertxt) calc(50% + 1px),
-             transparent calc(50% + 1px))}
-#kcCard .kcKey.no:hover{transform:none}
-#kcCard .kcKeyLegend{display:flex;flex-wrap:wrap;gap:16px;margin-top:12px}
-#kcCard .kcKeyLegend span{display:flex;align-items:center;gap:7px}
-#kcCard .kcSw{position:relative;width:16px;height:14px;border-radius:3px 3px 4px 4px;
-  background:linear-gradient(180deg,var(--kcTop),var(--kcSide));
-  box-shadow:inset 0 1px 0 var(--kcGloss),0 2px 0 var(--kcSide)}
-#kcCard .kcSw.kcTilt::after{content:'';position:absolute;top:1px;right:1px;
-  border-top:5px solid var(--warncol);border-left:5px solid transparent}
-#kcCard .kcSw.kcNo{filter:grayscale(1);opacity:.38}
-#kcCard .kcSw.kcNo::after{content:'';position:absolute;inset:0;border-radius:inherit;
-  background:linear-gradient(to top right,transparent calc(50% - 1px),
-             var(--dangertxt) calc(50% - 1px),var(--dangertxt) calc(50% + 1px),
-             transparent calc(50% + 1px))}
+/* ---- the board: caps, not buttons -------------------------------------- */
+#kcCard .kcBoard{display:flex;flex-direction:column;gap:5px;padding:13px 11px 15px;
+  border-radius:11px;background:var(--kPlate);border:1px solid var(--line);overflow-x:auto}
+#kcCard .kcRow{display:flex;gap:4px}
+/* unit widths as flex, so a row summing to 15u fills any container with no
+   arithmetic and no media queries on the board */
+#kcCard .kcKey{position:relative;flex:var(--u,1) 0 0;min-width:0;height:38px;border:0;padding:0;
+  cursor:pointer;background:var(--kSkirt);border-radius:5px 5px 6px 6px;
+  box-shadow:0 2px 3px var(--kDrop);transition:box-shadow .08s}
+/* the top face, inset so five pixels of skirt survive along the bottom edge -
+   that exposed skirt is the whole reason these read as caps and not buttons */
+#kcCard .kcKey::before{content:'';position:absolute;inset:2px 2px 5px;border-radius:3px 3px 4px 4px;
+  background:var(--kFace);box-shadow:inset 0 1px 0 var(--kLip);transition:inset .08s,background .12s}
+#kcCard .kcKey span{position:relative;z-index:1;display:block;padding:0 3px;
+  font:600 10.5px/36px ui-sans-serif,system-ui,sans-serif;color:var(--muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color .12s}
+#kcCard .kcKey:hover span{color:var(--text)}
+/* selecting PRESSES the cap: it sits down on the plate rather than floating */
+#kcCard .kcKey:active::before,#kcCard .kcKey.sel::before{inset:4px 2px 3px}
+#kcCard .kcKey:active,#kcCard .kcKey.sel{box-shadow:0 1px 1px var(--kDrop)}
+#kcCard .kcKey.sel::before{background:var(--accent);box-shadow:inset 0 1px 0 rgba(255,255,255,.25)}
+#kcCard .kcKey.sel span{color:#fff}
+/* leaning: a machining hatch on the face. It stays a whole cap, because it IS
+   printable - it just leans over and takes supports. */
+#kcCard .kcKey.tilt::before{background:var(--kFace) repeating-linear-gradient(135deg,
+  var(--warn-soft) 0 3px,transparent 3px 7px)}
+#kcCard .kcKey.tilt span{color:var(--warncol)}
+/* impossible: the cap is simply NOT THERE - an empty switch socket with a lit
+   cross stem in it. Absence carries the information, and anyone who has ever
+   pulled a keycap reads it in under a second. */
+#kcCard .kcKey.no{background:var(--kWell);box-shadow:inset 0 2px 5px var(--kDrop);cursor:not-allowed}
+#kcCard .kcKey.no::before{display:none}
+#kcCard .kcKey.no::after{content:'';position:absolute;left:50%;top:50%;width:13px;height:13px;
+  transform:translate(-50%,-50%);
+  background:linear-gradient(var(--line2),var(--line2)) center/3px 100% no-repeat,
+             linear-gradient(var(--line2),var(--line2)) center/100% 3px no-repeat}
+#kcCard .kcKey.no span{color:var(--ink3);font-size:9px;letter-spacing:.05em;line-height:38px}
+#kcCard .kcKey.no:hover span{color:var(--ink3)}
 
-#kcCard .kcSplit{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
-@media (max-width:720px){#kcCard .kcSplit{grid-template-columns:1fr}}
-#kcCard .kcPreview canvas{width:100%;height:auto;display:block;border-radius:10px;
-  background:var(--pv);border:1px solid var(--line)}
-#kcCard #kcTop{cursor:grab;touch-action:none;aspect-ratio:1}
+#kcCard .kcKeyLegend{display:flex;flex-wrap:wrap;gap:18px;margin-top:13px;font-size:12px;color:var(--muted)}
+#kcCard .kcKeyLegend span{display:flex;align-items:center;gap:8px}
+#kcCard .kcSw{position:relative;width:19px;height:15px;flex:0 0 auto;background:var(--kSkirt);
+  border-radius:3px 3px 4px 4px;box-shadow:0 1px 2px var(--kDrop)}
+#kcCard .kcSw::before{content:'';position:absolute;inset:1px 1px 3px;border-radius:2px;
+  background:var(--kFace);box-shadow:inset 0 1px 0 var(--kLip)}
+#kcCard .kcSw.t::before{background:var(--kFace) repeating-linear-gradient(135deg,
+  var(--warn-soft) 0 3px,transparent 3px 7px)}
+#kcCard .kcSw.n{background:var(--kWell);box-shadow:inset 0 1px 3px var(--kDrop)}
+#kcCard .kcSw.n::before{display:none}
+#kcCard .kcSw.n::after{content:'';position:absolute;left:50%;top:50%;width:8px;height:8px;
+  transform:translate(-50%,-50%);
+  background:linear-gradient(var(--line2),var(--line2)) center/2px 100% no-repeat,
+             linear-gradient(var(--line2),var(--line2)) center/100% 2px no-repeat}
+
+/* ---- the stage --------------------------------------------------------- */
+#kcCard .kcSplit{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);
+  gap:26px;align-items:start}
+@media (max-width:760px){#kcCard .kcSplit{grid-template-columns:1fr;gap:18px}}
+#kcCard .kcStage{position:relative;aspect-ratio:1;border-radius:14px;overflow:hidden;
+  border:1px solid var(--line);
+  background:radial-gradient(128% 74% at 50% 99%,var(--kSweep),var(--kFloor) 64%)}
+#kcCard .kcStage::after{content:'';position:absolute;inset:0;pointer-events:none;z-index:2;
+  background:radial-gradient(78% 62% at 50% 44%,transparent 42%,var(--kDrop))}
+#kcCard #kcTop{position:absolute;inset:0;width:100%;height:100%;display:block;
+  cursor:grab;touch-action:none;z-index:1}
 #kcCard #kcTop:active{cursor:grabbing}
-#kcCard .kcInsets{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
-#kcCard .kcLbl{display:block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
-  color:var(--subh);margin-bottom:6px}
-#kcCard .kcTiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:6px}
-#kcCard .kcTiles.kcSmall{grid-template-columns:repeat(auto-fill,minmax(62px,1fr))}
-#kcCard .kcTile{padding:8px 6px;border:1px solid var(--line);border-radius:8px;background:var(--tile);
-  color:var(--muted);cursor:pointer;text-align:center;font-size:12px;line-height:1.3;
-  transition:border-color .12s,color .12s}
+#kcCard .kcSpin{position:absolute;left:13px;bottom:11px;z-index:3;pointer-events:none;
+  font:600 10px/1 ui-sans-serif,system-ui;letter-spacing:.11em;text-transform:uppercase;color:var(--ink3)}
+#kcCard .kcDims{margin-top:10px;font-size:12.5px;color:var(--muted)}
+#kcCard .kcInsets{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:11px}
+#kcCard .kcInsets figure{margin:0}
+#kcCard .kcInsets canvas{width:100%;height:auto;display:block;border-radius:9px;
+  background:var(--kFloor);border:1px solid var(--line)}
+#kcCard .kcInsets figcaption{margin-top:5px;font:600 10px/1 ui-sans-serif,system-ui;
+  letter-spacing:.11em;text-transform:uppercase;color:var(--ink3)}
+
+/* ---- controls ---------------------------------------------------------- */
+#kcCard .kcTiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:7px}
+#kcCard .kcTiles.sm{grid-template-columns:repeat(auto-fill,minmax(68px,1fr))}
+#kcCard .kcTile{padding:10px 7px;border:1px solid var(--line);border-radius:9px;
+  background:var(--tile);color:var(--muted);cursor:pointer;text-align:center;
+  font:600 12.5px/1.3 ui-sans-serif,system-ui,sans-serif;transition:border-color .12s,color .12s}
 #kcCard .kcTile:hover{border-color:var(--line2);color:var(--text)}
-#kcCard .kcTile.on{border-color:var(--accent);color:var(--text);background:var(--card)}
-#kcCard .kcTile small{display:block;color:var(--ink3);font-size:10px}
-#kcCard .kcTile[disabled]{opacity:.4;cursor:not-allowed}
-#kcCard .kcReport{font-size:12.5px;line-height:1.65}
-#kcCard .kcReport dl{display:grid;grid-template-columns:auto 1fr;gap:2px 14px;margin:0}
-#kcCard .kcReport dt{color:var(--muted2)}
-#kcCard .kcReport dd{margin:0;color:var(--text);font-variant-numeric:tabular-nums}
-#kcCard .kcReport .bad{color:var(--dangertxt)}
+#kcCard .kcTile.on{border-color:var(--accent);background:var(--accent-soft);color:var(--text)}
+#kcCard .kcTile small{display:block;margin-top:3px;font-weight:400;font-size:10.5px;color:var(--ink3)}
+#kcCard #kcPrompt{width:100%;box-sizing:border-box;background:var(--tile);color:var(--text);
+  border:1px solid var(--line2);border-radius:9px;padding:10px;font:inherit;resize:vertical}
+#kcCard #kcPrompt:focus{outline:0;border-color:var(--accent)}
+#kcCard .kcNum{display:flex;align-items:center;gap:8px;flex:0 1 auto}
+#kcCard .kcNum.grow{flex:1 1 180px}
+#kcCard .kcNum>span{font:600 10px/1 ui-sans-serif,system-ui;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--subh)}
+#kcCard .kcNum input[type=range]{flex:1;min-width:70px;accent-color:var(--accent)}
+#kcCard .kcNum b{min-width:36px;text-align:right;font-size:12.5px;color:var(--text)}
+#kcCard input.kcMono{width:54px;text-align:center;background:var(--tile);color:var(--text);
+  border:1px solid var(--line2);border-radius:8px;padding:8px 6px;font-size:13px;
+  font-family:ui-monospace,Menlo,Consolas,monospace}
+#kcCard .kcSeg{display:flex;margin-top:10px;border:1px solid var(--line2);border-radius:9px;overflow:hidden}
+#kcCard .kcSeg button{flex:1;padding:9px 6px;border:0;background:var(--tile);color:var(--muted);
+  cursor:pointer;font:600 11.5px/1 ui-sans-serif,system-ui;letter-spacing:.07em;text-transform:uppercase}
+#kcCard .kcSeg button.on{background:var(--accent-soft);color:var(--text);box-shadow:inset 0 -2px 0 var(--accent)}
+
+/* ---- the report -------------------------------------------------------- */
+#kcCard .kcReport dl{display:grid;grid-template-columns:auto 1fr;gap:0 16px;margin:0}
+#kcCard .kcReport dt{padding:6px 0;color:var(--muted2);font-size:12.5px;border-bottom:1px solid var(--line3)}
+#kcCard .kcReport dd{margin:0;padding:6px 0;text-align:right;color:var(--text);font-size:12.5px;
+  border-bottom:1px solid var(--line3)}
 #kcCard .kcReport .warn{color:var(--warncol)}
+#kcCard .kcReport .bad{color:var(--dangertxt)}
+/* the number the owner actually wants, lifted clear of the list */
+#kcCard .kcHero{display:flex;align-items:baseline;gap:11px;margin:0 0 13px;padding-bottom:13px;
+  border-bottom:1px solid var(--line)}
+#kcCard .kcHero b{font:250 38px/1 ui-sans-serif,system-ui,sans-serif;color:var(--text);
+  font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+#kcCard .kcHero span{font:600 10.5px/1 ui-sans-serif,system-ui;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--subh)}
+#kcCard .kcOpen{margin-top:14px}
+#kcCard .kcOpen summary{cursor:pointer;font:600 10.5px/1 ui-sans-serif,system-ui;
+  letter-spacing:.11em;text-transform:uppercase;color:var(--subh);padding:4px 0}
+#kcCard input.kcCodeIn{flex:1 1 170px;background:var(--tile);color:var(--text);
+  border:1px solid var(--line2);border-radius:8px;padding:9px;font-size:12px;
+  font-family:ui-monospace,Menlo,Consolas,monospace}
+#kcCard .kcNav{display:flex;gap:9px;margin-top:18px;padding-top:13px;border-top:1px solid var(--line)}
+#kcCard .kcNav button{flex:1}
 </style>

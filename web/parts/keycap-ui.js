@@ -45,7 +45,7 @@
 
   var st = { step: 1, key: null, profile: 'XDA', row: 'R3', sizeU: 1,
              icon: null, digit: '', depth: 0.55, raised: true, plate: [],
-             skin: null, skinFrom: '' };
+             skin: null, skinFrom: '', braille: '', name: '' };
   var built = null;
 
   function say(id, msg, cls) {
@@ -55,10 +55,13 @@
   }
 
   // ---- step 1: the board --------------------------------------------------
+  /* Widths are flex units, not pixels: a row of widths summing to 15u fills
+     whatever width the card has, at any size, with no arithmetic and no media
+     queries. The label lives in a span because the cap's top face is a
+     pseudo-element underneath it. */
   function drawBoard() {
     var el = $('kcBoard'); if (!el) return;
     el.innerHTML = '';
-    var U = 26;                                   // px per unit
     LAYOUT.forEach(function (row) {
       var r = document.createElement('div');
       r.className = 'kcRow';
@@ -66,19 +69,40 @@
         var b = document.createElement('button');
         b.type = 'button';
         b.className = 'kcKey';
-        b.style.width = (k[1] * U + (k[1] - 1) * 4) + 'px';
-        b.textContent = k[0];
+        b.style.setProperty('--u', k[1]);
+        var lab = document.createElement('span');
         var fit = K.fits(K.capWidth(k[1]), K.DEPTH, 9);
-        if (!fit.ok) { b.classList.add('no'); b.disabled = true;
-                       b.title = fit.why; }
-        else if (fit.tilt) { b.classList.add('tilt');
-                             b.title = k[1] + 'u - ' + fit.why; }
-        else b.title = k[1] + 'u, ' + K.capWidth(k[1]).toFixed(1) + ' mm - lies flat, no supports';
+        if (!fit.ok) {
+          b.classList.add('no'); b.disabled = true; b.title = fit.why;
+          /* No cap at all - an empty socket. The label states the reason in
+             the gap where the cap should be. */
+          lab.textContent = Math.round(K.capWidth(k[1])) + ' mm';
+        } else {
+          lab.textContent = k[0];
+          if (fit.tilt) { b.classList.add('tilt'); b.title = k[1] + 'u - ' + fit.why; }
+          else b.title = k[1] + 'u, ' + K.capWidth(k[1]).toFixed(1) + ' mm - prints flat, no supports';
+        }
+        b.appendChild(lab);
         b.addEventListener('click', function () { pickKey(k, b); });
         r.appendChild(b);
       });
       el.appendChild(r);
     });
+    caliper(st.sizeU);
+  }
+
+  /* The jaws open to the share of the bed this cap eats, so the tool answers
+     the question the bed actually asks. */
+  function caliper(sizeU) {
+    var cal = $('kcCal'); if (!cal) return;
+    var w = K.capWidth(sizeU);
+    var fit = K.fits(w, K.DEPTH, 9);
+    var used = fit.ok && fit.foot ? fit.foot.x : w;
+    cal.style.setProperty('--jaw', Math.max(0.06, Math.min(1, used / K.BED.x)).toFixed(3));
+    var v = $('kcJawVal');
+    if (v) v.textContent = fit.ok && fit.tilt
+      ? used.toFixed(1) + ' mm leaning'
+      : w.toFixed(2) + ' mm';
   }
 
   function pickKey(k, btn) {
@@ -86,6 +110,7 @@
       function (e) { e.classList.remove('sel'); });
     btn.classList.add('sel');
     st.key = k[0]; st.sizeU = k[1]; st.row = k[2];
+    caliper(st.sizeU);
     // a digit key gets its own digit for free; anything else starts blank
     st.digit = /^[0-9]$/.test(k[0]) ? k[0] : '';
     if ($('kcDigit')) $('kcDigit').value = st.digit;
@@ -220,6 +245,12 @@
      account. Both arrive here as the same kind of function, so nothing below
      this point knows or cares which it was. */
   function relief() {
+    /* Braille wins outright when it is set: it is a specification, and mixing
+       a decorative icon into it would put shapes a finger cannot distinguish
+       from dots next to dots. */
+    if (st.braille && window.keycapBraille) {
+      return window.keycapBraille.brailleRelief(st.braille, { dotHeight: Math.max(0.48, st.depth) });
+    }
     if (st.skin) {
       var f = window.keycapSkin.reliefFromField(st.skin,
         { depth: st.depth, raised: st.raised });
@@ -393,6 +424,7 @@
     var est = window.printSim ? window.printSim.estimate(PROFILE_ANY, layers) : null;
     var per = K.perPlate(st.sizeU);
 
+    var money = K.costOf(built);
     var rows = [
       ['Cap', st.profile + ' ' + st.row + ' · ' + st.sizeU + 'u' + (st.key ? ' (' + st.key + ')' : '')],
       ['Size', built.size.x.toFixed(1) + ' × ' + built.size.y.toFixed(1) + ' × ' + built.size.z.toFixed(2) + ' mm'],
@@ -402,9 +434,14 @@
       ['Supports', supports ? '<span class="warn">yes — on the leading edge</span>' : 'none'],
       ['Per plate', per.count + (per.count === 1 ? ' cap' : ' caps')],
       ['Layers', layers.toLocaleString() + ' at 0.05 mm'],
-      ['Time', est ? est.text + ' for a full plate' : '—']
+      ['Resin', money.resinMl.toFixed(2) + ' ml' + (money.supportsAdd ? ' incl. supports' : '')],
+      ['Cost', money.cost < 0.01 ? 'under a penny' : money.cost.toFixed(2) + ' in resin']
     ];
-    var html = '<dl>' + rows.map(function (r) {
+    /* The number that decides whether this is worth making, lifted clear of
+       the list rather than buried as its eighth row. */
+    var html = '<div class="kcHero"><b>' + (est ? est.text : '—') +
+               '</b><span>for a full plate of ' + per.count + '</span></div>';
+    html += '<dl>' + rows.map(function (r) {
       return '<dt>' + r[0] + '</dt><dd>' + r[1] + '</dd>';
     }).join('') + '</dl>';
 
@@ -479,16 +516,143 @@
       K.MX.crossWide + '.');
   });
 
+  // ---- the current design, as something that can be written down ---------
+  function designOf() {
+    return { profile: st.profile, row: st.row, sizeU: st.sizeU,
+             icon: st.icon || undefined, digit: st.digit || undefined,
+             braille: st.braille || undefined, depth: st.depth, raised: st.raised,
+             prompt: st.skin ? st.skinFrom : undefined,
+             key: st.key || undefined, name: st.name || undefined };
+  }
+  function applyDesign(d) {
+    if (d.profile && K.PROFILES[d.profile]) st.profile = d.profile;
+    if (d.row && K.PROFILES[st.profile].rows[d.row]) st.row = d.row;
+    else st.row = Object.keys(K.PROFILES[st.profile].rows)[0];
+    if (d.sizeU) st.sizeU = d.sizeU;
+    st.icon = d.icon || null;
+    st.digit = d.digit || '';
+    st.braille = d.braille || '';
+    if (d.depth) st.depth = d.depth;
+    st.raised = d.raised !== false;
+    st.key = d.key || null;
+    st.skin = null;                       // a mesh cannot travel in a code
+    st.skinFrom = d.prompt || '';
+    if ($('kcDigit')) $('kcDigit').value = st.digit;
+    if ($('kcBraille')) $('kcBraille').value = st.braille;
+    if ($('kcDepth')) $('kcDepth').value = st.depth;
+    if ($('kcDepthVal')) $('kcDepthVal').textContent = st.depth.toFixed(2);
+    if ($('kcPrompt') && d.prompt) $('kcPrompt').value = d.prompt;
+    setFinish(st.raised);
+    drawProfiles(); drawRows(); drawIcons(); caliper(st.sizeU); refresh();
+  }
+
+  // ---- share, and open what was shared ------------------------------------
+  $('kcShare') && $('kcShare').addEventListener('click', function () {
+    if (!built || !window.keycapShare) return;
+    var SH = window.keycapShare, design = designOf(), code = SH.encode(design);
+    var css = getComputedStyle(document.documentElement);
+    var tok = {};
+    ['text','muted','subh','card','line','accent','warncol'].forEach(function (k) {
+      tok[k] = css.getPropertyValue('--' + k).trim();
+    });
+    var cs = getComputedStyle($('kcCard'));
+    tok.sweep = cs.getPropertyValue('--kSweep').trim();
+    tok.floor = cs.getPropertyValue('--kFloor').trim();
+    var money = K.costOf(built);
+    var plan = built.printPlan;
+    var layers = Math.ceil((plan.tilt ? (plan.height || built.size.z) : built.size.z) / 0.05);
+    var est = window.printSim ? window.printSim.estimate(PROFILE_ANY, layers) : null;
+    var card;
+    try {
+      card = SH.shareCard({
+        canvas: $('kcTop'), tokens: tok, code: code,
+        title: st.name || (st.key ? st.key + ' · ' + st.profile + ' ' + st.row
+                                  : st.profile + ' ' + st.row + ' ' + st.sizeU + 'u'),
+        subtitle: SH.describe(design),
+        stats: [['size', built.size.x.toFixed(1) + ' × ' + built.size.y.toFixed(1) +
+                          ' × ' + built.size.z.toFixed(1) + ' mm'],
+                ['resin', money.resinMl.toFixed(2) + ' ml'],
+                ['time', est ? est.text : '—']],
+        /* Say it on the picture, not afterwards: a generated sculpt does not
+           come back the same, so approving this image approves THIS cap, not
+           whatever the code regenerates. */
+        warn: SH.isReproducible(design) ? '' :
+          'The art was generated. Re-opening this code makes the same cap with different art.'
+      });
+    } catch (e) { say('kcState', e.message, 'bad'); return; }
+
+    card.toBlob(function (blob) {
+      if (!blob) { say('kcState', 'could not make the picture', 'bad'); return; }
+      var file = null;
+      try { file = new File([blob], 'keycap.png', { type: 'image/png' }); } catch (e) {}
+      /* On a phone this opens the share sheet, which is the actual "send it to
+         someone" path. Everywhere else it saves the picture. */
+      if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file], text: code }).catch(function () {});
+        say('kcState', 'shared · code ' + code.slice(0, 18) + '…');
+      } else {
+        save(blob, 'keycap-' + (st.key || st.profile) + '.png');
+        say('kcState', 'saved the picture · code copied');
+      }
+      if (navigator.clipboard) navigator.clipboard.writeText(code).catch(function () {});
+      try { window.keycapShare.save(design, { name: st.name || SH.describe(design) }); }
+      catch (e) { say('kcState', e.message, 'bad'); }
+    }, 'image/png');
+  });
+
+  $('kcLoad') && $('kcLoad').addEventListener('click', function () {
+    var raw = ($('kcCode').value || '').trim();
+    if (!raw) { say('kcCodeNote', 'Paste a code first.', 'bad'); return; }
+    try {
+      var d = window.keycapShare.decode(raw);
+      applyDesign(d);
+      say('kcCodeNote', 'Opened: ' + window.keycapShare.describe(d) +
+        (window.keycapShare.isReproducible(d) ? ''
+          : ' — the art was generated, so press Generate to make it again; it will not be identical.'),
+        window.keycapShare.isReproducible(d) ? '' : 'bad');
+      go(2);
+    } catch (e) { say('kcCodeNote', e.message, 'bad'); }
+  });
+
   // ---- controls ----------------------------------------------------------
+  function setFinish(raised) {
+    st.raised = !!raised;
+    var box = $('kcRaised'); if (box) box.checked = st.raised;
+    var seg = $('kcFinish'); if (!seg) return;
+    Array.prototype.forEach.call(seg.querySelectorAll('button'), function (b) {
+      b.classList.toggle('on', (b.getAttribute('data-raised') === '1') === st.raised);
+    });
+  }
+  $('kcFinish') && Array.prototype.forEach.call($('kcFinish').querySelectorAll('button'),
+    function (b) {
+      b.addEventListener('click', function () {
+        setFinish(b.getAttribute('data-raised') === '1');
+        refresh();
+      });
+    });
+
+  $('kcBraille') && $('kcBraille').addEventListener('input', function () {
+    st.braille = (this.value || '').trim().slice(0, 2);
+    if (st.braille && window.keycapBraille) {
+      var pr = K.PROFILES[st.profile];
+      var chk = window.keycapBraille.check(st.braille,
+        K.capWidth(st.sizeU) - 2 * pr.topInset, K.DEPTH - 2 * pr.topInset,
+        { dotHeight: Math.max(0.48, st.depth) });
+      say('kcLegendWarn', chk.ok ? chk.notes[0] : '⚠ ' + chk.issues[0], chk.ok ? '' : 'bad');
+      // Braille must be raised; a recess is not readable
+      if (!st.raised) setFinish(true);
+    }
+    refresh();
+  });
+
   $('kcDigit').addEventListener('input', function () {
     st.digit = (this.value || '').trim().slice(0, 1); refresh();
   });
   $('kcDepth').addEventListener('input', function () {
     st.depth = parseFloat(this.value);
-    $('kcDepthVal').textContent = st.depth.toFixed(2) + ' mm';
+    $('kcDepthVal').textContent = st.depth.toFixed(2);
     refresh();
   });
-  $('kcRaised').addEventListener('change', function () { st.raised = this.checked; refresh(); });
   $('kcNext').addEventListener('click', function () { if (st.step < 4) go(st.step + 1); });
   $('kcBack').addEventListener('click', function () { go(Math.max(1, st.step - 1)); });
   Array.prototype.forEach.call($('kcSteps').children, function (li) {
@@ -498,8 +662,8 @@
     });
   });
 
-  $('kcRaised').checked = st.raised;
+  setFinish(st.raised);
   $('kcDepth').value = st.depth;
-  $('kcDepthVal').textContent = st.depth.toFixed(2) + ' mm';
+  $('kcDepthVal').textContent = st.depth.toFixed(2);
   drawBoard(); drawProfiles(); drawRows(); drawIcons(); go(1);
 })();
