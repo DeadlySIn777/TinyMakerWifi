@@ -7104,7 +7104,21 @@ const GS=[
  {k:'model',t:'Get a model onto the SD card',d:'Send from the slicer, upload in SD manager, or copy an .sl1/.zip to the card.',auto:()=>filesItems.some(i=>i.type==='model')},
  {k:'print',t:'Run your first print',d:'Pick the model in the Print menu or press Start here. While it prints, this page updates in short windows between moves - a brief pause with an amber <i>syncing</i> mark is normal, not a hang.',auto:()=>!!(statusData&&Number(statusData.lifetimePrintSecs)>0)},
  {k:'expo',t:'Calibrate exposure for your resin',d:"System &gt; Advanced &gt; Exposure test - pick the best bar and the printer sets the time. <a href='https://slibbinas.github.io/TinyMakerWifi/manual/#advanced' target='_blank' rel='noopener'>Manual</a>."},
- {k:'integr',t:'Optional: integrations',d:'Telegram, Home Assistant (MQTT) and TinyMaker Connect live in Settings.'}];
+ {k:'integr',t:'Optional: integrations',d:'Telegram, Home Assistant (MQTT) and TinyMaker Connect live in Settings.'},
+ /* The guide used to end at exposure, which meant a new owner walked the whole
+    onboarding without ever being told the keycap studio is here - and without
+    printing the fit comb, which is the only thing that turns slotClearance from
+    a guess into a measurement. A step nobody is told about is a step nobody
+    takes. `gsLib` and `gsKey` read real state; the comb cannot be detected at
+    all (the printer has no way to know a switch clicked on), so it stays a
+    manual tick and says plainly why it is worth the 2.8 ml. */
+ {k:'kckey',t:'Add a Meshy key to generate art',d:"Create &gt; Keycaps &gt; Art &gt; <i>Meshy API key</i>. Without it the studio still builds caps, braille and legends - the key is only for generated sculpts. It is stored in THIS browser, never on the printer.",auto:()=>{try{return !!(window.meshy&&window.meshy.hasKey&&window.meshy.hasKey());}catch(e){return false;}}},
+ {k:'kcfirst',t:'Design your first keycap',d:'Create &gt; Keycaps: pick a key, a profile, then art. Every generated model is kept in Library and comes back without spending another generation.',auto:()=>!!window.__tmHasDesigns},
+ {k:'kccomb',t:'Print the stem fit comb (do this first)',d:"Create &gt; Keycaps &gt; Print &gt; <b>Stem test</b> exports six coupons, 36 &times; 24 mm, about 2.8 ml. Put an MX switch in each, keep the first that clicks on without force, and that slot is your number. Until you have printed it the stem clearance is an estimate - and it is the one dimension that decides whether a cap fits at all."}];
+/* The shelf is read once at boot so the step above can answer without making
+   Getting started depend on IndexedDB being ready. */
+try{ if(window.keycapLibrary&&window.keycapLibrary.list)
+       window.keycapLibrary.list().then(r=>{window.__tmHasDesigns=!!(r&&r.length); renderGs();}).catch(()=>{}); }catch(e){}
 const gsDone=s=>(s.auto&&s.auto())||localStorage.getItem('tmGs_'+s.k)==='1';
 const renderGs=()=>{
   const hidden=localStorage.getItem('tmGsHidden')==='1';

@@ -379,5 +379,26 @@ truthy('and the stem in it is the SAME stem a cap gets', (function () {
          (cap.stemDepth > 3 && real.stemDepth > 3);
 })(), 'coupon stem is built by build(), not a copy');
 
+
+console.log('\nA PROFILE NAME FROM OUTSIDE IS NOT A KEY LOOKUP');
+/* PROFILES is an object literal, so PROFILES["constructor"] is truthy and has
+   no .rows. A saved session that said profile:"constructor" was waved through
+   a `if (PROFILES[name])` guard and then threw reading .rows[row] - and that
+   happened BEFORE drawBoard(), so the whole keycap card initialised to nothing
+   and every later refresh threw again. Share codes feed the same path, so a
+   code from somebody else could do it to you. Truthiness is not a membership
+   test on a plain object. */
+for (const bad of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__', 'isPrototypeOf']) {
+  let threw = false;
+  try { K.build({ profile: bad, row: 'R3', topGrid: 9 }); } catch (e) { threw = /unknown profile/.test(e.message); }
+  truthy('"' + bad + '" is refused, with the clear message', threw);
+}
+truthy('a genuinely unknown name still says the same thing', (() => {
+  try { K.build({ profile: 'NOPE' }); return false; } catch (e) { return /unknown profile/.test(e.message); }
+})());
+truthy('and the real profiles still build', K.build({ profile: 'DSA', row: 'R3', topGrid: 9 }).positions.length > 0);
+truthy('the hidden coupon is still reachable by name, for the comb',
+  K.build({ profile: 'TEST', widthMm: 11, depthMm: 11, topGrid: 9 }).positions.length > 0);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

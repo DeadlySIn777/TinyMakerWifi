@@ -260,8 +260,14 @@
   function build(opts) {
     var o = opts || {};
     var pname = (o.profile || 'CHERRY').toUpperCase();
-    var prof = PROFILES[pname];
-    if (!prof) throw new Error('keycap: unknown profile "' + pname + '"');
+    /* hasOwnProperty, not a truthiness check: PROFILES is an object literal, so
+       PROFILES["CONSTRUCTOR"] - or TOSTRING, or VALUEOF - comes back truthy and
+       the next line reads .rows off a function. The caller then gets a
+       TypeError from deep inside the engine instead of the clear message
+       below, which is how a bad saved session took out the whole card. */
+    var prof = Object.prototype.hasOwnProperty.call(PROFILES, pname)
+             ? PROFILES[pname] : null;
+    if (!prof || !prof.rows) throw new Error('keycap: unknown profile "' + pname + '"');
     var rname = o.row || (prof.uniform ? Object.keys(prof.rows)[0] : 'R3');
     var row = prof.rows[rname];
     if (!row) throw new Error('keycap: ' + pname + ' has no row ' + rname +

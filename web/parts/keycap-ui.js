@@ -197,15 +197,40 @@
       }));
     } catch (e) { /* private window, or storage off - not worth a message */ }
   }
+  /* ---- names that came from outside -------------------------------------
+     A profile name reaches this module from three places that are all outside
+     our control: the saved session, a share code somebody sent, and the URL.
+     PROFILES is an object literal, so `PROFILES[name]` is TRUTHY for
+     "constructor", "toString", "valueOf", "hasOwnProperty" and "__proto__" -
+     and the next line then reads .rows off the Object constructor and throws.
+     Truthiness is not a membership test on a plain object; hasOwnProperty is.
+
+     Hidden profiles are rejected here as well. PROFILES.TEST is the stem fit
+     coupon - an 11 mm block, not a keycap - and it is not a choice a design is
+     allowed to name. */
+  var OWN = Object.prototype.hasOwnProperty;
+  function knownProfile(name) {
+    return typeof name === 'string' && OWN.call(K.PROFILES, name) &&
+           K.PROFILES[name] && K.PROFILES[name].rows && !K.PROFILES[name].hidden
+           ? name : null;
+  }
+  function knownRow(profile, name) {
+    var pr = K.PROFILES[profile];
+    if (!pr || !pr.rows) return null;
+    return typeof name === 'string' && OWN.call(pr.rows, name) ? name
+         : Object.keys(pr.rows)[0];
+  }
+
   function restoreSession() {
     var raw;
     try { raw = localStorage.getItem(SESSION); } catch (e) { return; }
     if (!raw) return;
     var d;
     try { d = JSON.parse(raw); } catch (e) { return; }
-    if (!d || !d.profile || !K.PROFILES[d.profile]) return;
-    st.profile = d.profile;
-    st.row = K.PROFILES[d.profile].rows[d.row] ? d.row : Object.keys(K.PROFILES[d.profile].rows)[0];
+    var p = d && knownProfile(d.profile);
+    if (!p) return;
+    st.profile = p;
+    st.row = knownRow(p, d.row);
     st.sizeU = d.sizeU || 1;
     st.key = d.key || null;
     st.art = d.art || 'gen';
@@ -970,9 +995,10 @@
              key: st.key || undefined, name: st.name || undefined };
   }
   function applyDesign(d) {
-    if (d.profile && K.PROFILES[d.profile]) st.profile = d.profile;
-    if (d.row && K.PROFILES[st.profile].rows[d.row]) st.row = d.row;
-    else st.row = Object.keys(K.PROFILES[st.profile].rows)[0];
+    /* Fed by share codes, so this is the one an outsider can aim at. */
+    var dp = knownProfile(d.profile);
+    if (dp) st.profile = dp;
+    st.row = knownRow(st.profile, d.row);
     if (d.sizeU) st.sizeU = d.sizeU;
     st.icon = d.icon || null;
     st.digit = d.digit || '';
@@ -1121,7 +1147,14 @@
      into this module's internals, which is the thing that rots. */
   window.keycapUseSaved = useSaved;
   window.keycapRefresh = function () { try { refresh(); } catch (e) {} };
-  restoreSession();
+  /* restoreSession() runs before drawBoard(), so anything it throws takes the
+     entire card's initialisation with it and leaves an empty panel that says
+     nothing about why. A session is a convenience; the card is not. */
+  try { restoreSession(); }
+  catch (e) {
+    try { localStorage.removeItem(SESSION); } catch (e2) {}
+    say('kcState', 'the saved session was unreadable and has been cleared', 'bad');
+  }
   $('kcDepth').value = st.depth;
   $('kcDepthVal').textContent = st.depth.toFixed(2);
   drawBoard(); drawProfiles(); drawRows(); drawIcons(); go(1);

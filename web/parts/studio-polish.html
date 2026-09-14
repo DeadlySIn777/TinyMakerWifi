@@ -44,6 +44,25 @@ main.wrap{
 }
 @media(min-width:680px){ main.wrap{max-width:min(100%,1380px)} }
 
+/* ---- THE ROOMS ARE NOT COLUMNS OF THE OLD PAGE ------------------------
+   #homeView used to be the two-column home layout, and it still says so:
+
+     @media (min-width:1000px) #homeView:not(.hidden){
+       display:grid; grid-template-columns:1fr 1fr }
+
+   The rooms were appended into it, so above 1000 px every one of them became
+   a GRID ITEM and got exactly half the page - the whole studio squeezed into
+   a 626 px column of a 1380 px shell, with the other half empty. Below 1000 px
+   it is a plain block and looks right, which is precisely why it survived: the
+   pane I was checking in is 749 px wide, so I never once rendered the layout
+   the owner actually sees. Test at the width it is used at.
+
+   #homeLeft and #homeRight are emptied and switched off by studio.js, so the
+   two-column rule has nothing left to arrange. The rooms do their own. */
+@media(min-width:1000px){
+  #homeView:not(.hidden){display:block;grid-template-columns:none;gap:0}
+}
+
 /* ---- the masthead ---------------------------------------------------- */
 .wrap > .head{
   display:flex;align-items:flex-start;justify-content:space-between;gap:var(--st-4);
