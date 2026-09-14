@@ -3016,9 +3016,16 @@ unsigned long otaCheckedAt = 0;   // millis() of the last successful check
 // says so. USB flashing and "install from file" still work. Failing open is how
 // you flash someone else's code.
 
-// Certificates need a real clock, and ours arrives from SNTP in the background.
-// Before that, verification fails with a message that blames the wrong thing.
-static bool otaClockReady() { return time(nullptr) >= 1700000000L; }
+// NO CLOCK GUARD, on purpose. On Arduino-ESP32 2.0.14 mbedTLS is built without
+// MBEDTLS_HAVE_TIME_DATE (CONFIG_MBEDTLS_HAVE_TIME_DATE is unset, and
+// mbedtls/port/include/mbedtls/esp_config.h then #undef's it), so certificate
+// validity dates are never checked and verification works before SNTP has
+// synced. A guard here would defend against nothing and break real things: a
+// network that blocks NTP would lose self-update permanently, and the states it
+// produced were reported as "up to date" by the dashboard and "unknown" by the
+// LCD (maintainer review, PR #146). If a future core turns the option on, this
+// is the place - behind #ifdef MBEDTLS_HAVE_TIME_DATE, and states 0/4 plus the
+// install endpoint need handling at the same time.
 
 // The release directory on gh-pages - everything we are willing to flash lives
 // under it. Derived from OTA_VERSION_URL so there is one place to change.
@@ -3050,12 +3057,6 @@ void otaCheckLatest(uint16_t timeoutMs) {
   otaBinUrl = "";
   // No cache stamp here: this path is instant, so it costs nothing to retry.
   if (WiFi.status() != WL_CONNECTED) { otaState = 4; return; }
-  // "Not yet", not "failed". This must NOT become state 4: the cache above
-  // suppresses a repeat while state == 4, and at boot otaCheckedAt is still 0,
-  // so millis() - 0 is under a minute and the Update screen would answer
-  // "unknown" for the first 60 s of every boot without ever retrying. State 0
-  // is exactly what this is - we do not know yet - and the next call retries.
-  if (!otaClockReady()) { otaState = 0; return; }
 
   WiFiClientSecure client;
   client.setCACert(SLICER_CA_PEM);   // verified: this decides what code we run
@@ -3110,14 +3111,6 @@ void otaBootCheckMaybePrompt() {
   // about to start the print (screen 427 -> network_setup() -> print).
   if (resumeBootPending) return;
   if (!bootUpdateCheckEnabled || WiFi.status() != WL_CONNECTED) return;
-  /* Wait briefly for the clock before checking. The check now verifies a
-     certificate, and a certificate cannot be judged without a real date; NTP's
-     first packet leaves up to 5 s after configTime() while this runs a few
-     hundred ms later, so without this wait the boot prompt would lose nearly
-     every time and the feature would quietly stop existing.
-     Bounded at 3 s, and only here: this is the boot screen, nothing is moving,
-     and the alternative is a user who never learns an update exists. */
-  for (int i = 0; i < 30 && !otaClockReady(); i++) delay(100);
   otaCheckLatest(2500);
   if (otaHasUpdate()) screenBootUpdatePrompt();
 }
@@ -3226,12 +3219,6 @@ void otaFlashUrl(const String &url, const char *subtitle) {
   // rather than guess.
   if (!otaUrlTrusted(url)) {
     netMessage("Update refused", "not our release URL");
-    delay(1800);
-    restoreIdleScreen();
-    return;
-  }
-  if (!otaClockReady()) {
-    netMessage("Clock not synced", "try again in a minute");
     delay(1800);
     restoreIdleScreen();
     return;
