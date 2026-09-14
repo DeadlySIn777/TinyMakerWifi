@@ -81,5 +81,40 @@ truthy('names the size', /1.25u/.test(t));
 truthy('names the finish', /raised/.test(t));
 truthy('an engraved one says engraved', /engraved/.test(S.describe({ profile: 'DSA', raised: false, depth: 0.4 })));
 
+console.log('\nTHE LEGEND SWITCH TRAVELS, because a blank cap has to arrive blank');
+/* Turning Legend off does not clear the digit - the render path suppresses it
+   through legendOn() - so a code for a deliberately blank cap still carries
+   digit:'5'. Without a field for the switch, the far end had nothing to read
+   and rebuilt the cap WITH the 5 on it: the owner approves a blank cap and
+   prints a numbered one. */
+{
+  const blank = { profile: 'DSA', row: 'R3', sizeU: 1, digit: '5',
+                  depth: 0.55, raised: false, key: '5', legendOn: false };
+  const c = S.encode(blank);
+  const b = S.decode(c);
+  ok('the switch survives the round trip', b.legendOn, false);
+  ok('and the digit still travels beside it', b.digit, '5');
+
+  const on = S.decode(S.encode(Object.assign({}, blank, { legendOn: true })));
+  ok('and so does the other position', on.legendOn, true);
+
+  /* A code written before the field existed has no 'l'. It must decode as ON,
+     which is what those codes were made under - decoding them as blank would
+     silently strip the legend off every design anyone has already shared. */
+  const old = S.TAG + '-' + Buffer.from(JSON.stringify({
+    p: 'DSA', r: 'R3', u: 1, d: '5', h: 0.55, a: false, k: '5'
+  })).toString('base64url');
+  const o = S.decode(old);
+  truthy('an older code with no switch decodes as ON, not as blank',
+    o.legendOn === undefined || o.legendOn === true, JSON.stringify(o.legendOn));
+  ok('and the rest of it still opens', o.digit, '5');
+
+  /* The two codes have to DIFFER, or the field is not actually being carried
+     and both of these assertions would pass on an encoder that drops it. */
+  truthy('a blank cap and a legended one are not the same code',
+    S.encode(blank) !== S.encode(Object.assign({}, blank, { legendOn: true })),
+    S.encode(blank).length + ' vs ' + S.encode(Object.assign({}, blank, { legendOn: true })).length);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

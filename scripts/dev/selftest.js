@@ -220,6 +220,87 @@
     catch (e) { /* correct */ }
   }
 
+  /* A SCALED KEYCAP MAY NOT REACH THE PRINTER. The slicer's auto-fit shrinks
+     whatever runs off the plate, which is right for a miniature and fatal for a
+     cap: 19% off a 1.23 mm cross slot is a cap that will not go on a switch.
+     The keycap card hands its mesh over with noScale, and slicerButtons keeps
+     Send to printer off for anything that had to be shrunk. */
+  {
+    const send = $('slicerSend');
+    check('the slicer has a send button to guard', !!send);
+    if (send && typeof slicerLoadMesh === 'function') {
+      /* Drive the flag directly rather than slicing a deliberately oversized
+         plate - the point is that the BUTTON obeys it, and slicing a 46 mm
+         plate in a test would cost fifteen seconds to prove the same thing. */
+      const had = (typeof slicerScaleBlocked !== 'undefined') ? slicerScaleBlocked : null;
+      check('the guard exists at all', had !== null,
+            'slicerScaleBlocked is ' + (had === null ? 'undefined' : String(had)));
+      if (had !== null) {
+        /* The TITLE is the discriminator, not `disabled`. With no mesh
+           loaded the button is disabled anyway, so asserting on disabled
+           alone would pass whether the guard existed or not - and a check
+           that cannot fail is worse than no check. Only the scale guard
+           writes that sentence. */
+        slicerScaleBlocked = true;
+        slicerButtons(true);
+        check('a scaled part cannot be sent', send.disabled === true);
+        check('and the button says why, in the owner’s words',
+              /scaled/i.test(send.title || '') && /switch/i.test(send.title || ''),
+              JSON.stringify((send.title || '').slice(0, 70)));
+        slicerScaleBlocked = false;
+        slicerButtons(true);
+        check('and the refusal lifts when nothing was scaled',
+              !/scaled/i.test(send.title || ''),
+              JSON.stringify((send.title || '').slice(0, 70)));
+      }
+    } else {
+      notes.push('the slicer module is not loaded, so the scale guard was not exercised');
+    }
+  }
+
+  /* THE LIBRARY MEASURES THE CAP, NOT THE RAW FIGURE. A generated mesh arrives
+     in the generator's own units - typically a 1 x 1 x 1 box - and the card
+     used to print that as "1x1x1 mm / 0.00 ml" for a design that really makes
+     an 18 x 18 x 17.5 mm cap out of 1.54 ml. The seated cap's own numbers are
+     taken at save time and travel with the record. */
+  if (window.keycapLibrary) {
+    const tiny = new Float32Array([0,0,0, 1,0,0, 0,1,0]);   // one triangle, 1 unit across
+    let rec = null;
+    try {
+      rec = await window.keycapLibrary.save({
+        name: 'selftest-facts', prompt: 'selftest', kind: 'sculpt',
+        positions: tiny,
+        facts: { sizeMm: [18, 18, 17.5], resinMl: 1.54, profile: 'DSA', row: 'R3', sizeU: 1 }
+      });
+    } catch (e) { fails.push('the library would not save a record - ' + e.message); }
+    if (rec) {
+      const got = await window.keycapLibrary.get(rec.id).catch(() => null);
+      check('the caller\u2019s millimetres are kept', !!(got && got.facts && got.facts.sizeMm),
+            JSON.stringify(got && got.facts));
+      check('and they are the CAP, not the 1-unit mesh',
+            !!(got && got.facts && got.facts.sizeMm[0] === 18));
+      check('the resin figure is the cap\u2019s too',
+            !!(got && got.facts && got.facts.resinMl === 1.54));
+      check('and the raw extent is kept separately, unlabelled as mm',
+            !!(got && got.facts && got.facts.sizeRaw && got.facts.sizeRaw[0] === 1),
+            JSON.stringify(got && got.facts && got.facts.sizeRaw));
+      /* A record saved with no facts must not invent millimetres. */
+      let bare = null;
+      try {
+        bare = await window.keycapLibrary.save({
+          name: 'selftest-nofacts', prompt: 'selftest', kind: 'sculpt', positions: tiny });
+      } catch (e) {}
+      if (bare) {
+        const b2 = await window.keycapLibrary.get(bare.id).catch(() => null);
+        check('a record with no facts has no millimetres at all',
+              !!(b2 && b2.facts && b2.facts.sizeMm === undefined),
+              JSON.stringify(b2 && b2.facts));
+        await window.keycapLibrary.remove(bare.id).catch(() => {});
+      }
+      await window.keycapLibrary.remove(rec.id).catch(() => {});
+    }
+  }
+
   // ---- library ------------------------------------------------------------
   /* THE LIBRARY OPENS THE RIGHT TOOL. "Open in Create" changed rooms and left
      whichever tool was last used on screen - so with Models remembered, the
