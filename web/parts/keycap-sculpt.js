@@ -63,10 +63,19 @@
 
     var capW = cap.size.x, capD = cap.size.y;
     /* Artisans let a sculpt overhang the cap a little; the hard limit is the
-       key pitch, or it fouls its neighbour on the board. */
+       key pitch, or it fouls its neighbour on the board.
+
+       THE PITCH IS NOT 19.05 FOR EVERY KEY. It is 19.05 PER UNIT, so a 2.25u
+       Shift is allowed 42.86 mm and a 1u is allowed 19.05. Assuming the 1u
+       number everywhere squeezed a Shift-key sculpt down to 18.65 mm - less
+       than half the room it actually has - and for a scene with two figures on
+       it that is the difference between two characters and two blobs. Depth is
+       always one unit: keys are wider than 1u, never deeper. */
+    var pitchW = o.pitch || (19.05 * (cap.sizeU || 1));
+    var pitchD = o.pitchD || 19.05;
     var spread = o.spread == null ? 1.06 : o.spread;
-    var maxW = Math.min(capW * spread, (o.pitch || 19.05) - 0.4);
-    var maxD = Math.min(capD * spread, (o.pitch || 19.05) - 0.4);
+    var maxW = Math.min(capW * spread, pitchW - 0.4);
+    var maxD = Math.min(capD * spread, pitchD - 0.4);
     var maxH = o.heightMm == null ? capW * 0.85 : o.heightMm;
 
     var k = Math.min(maxW / sb.size[0], maxD / sb.size[1], maxH / sb.size[2]);
@@ -116,7 +125,9 @@
       totalHeightMm: +(cap.size.z + (sb.size[2]*k - seatDepth)).toFixed(2),
       footprintMm: { x: +Math.max(capW, fb.size[0]).toFixed(2),
                      y: +Math.max(capD, fb.size[1]).toFixed(2) },
-      overhangs: +(Math.max(0, fb.size[0] - capW) / 2).toFixed(2)
+      overhangs: +(Math.max(0, fb.size[0] - capW) / 2).toFixed(2),
+      pitchMm: { x: +pitchW.toFixed(2), y: +pitchD.toFixed(2) },
+      sizeU: cap.sizeU || 1
     };
   }
 
@@ -205,13 +216,17 @@
   /* Does the finished piece work - on a board, and in the machine? */
   function check(seated, opts) {
     var o = opts || {}, issues = [], notes = [];
-    var pitch = o.pitch || 19.05;
+    /* Same correction as seat(): the pitch is per unit, so a 2.25u key has
+       42.86 mm to play with and only its DEPTH is limited to one unit. */
+    var pitchW = o.pitch || (seated.pitchMm ? seated.pitchMm.x : 19.05);
+    var pitchD = o.pitchD || (seated.pitchMm ? seated.pitchMm.y : 19.05);
     var bed = o.bed || { x: 40.8, y: 30.6, zSupported: 52 };
 
-    if (seated.footprintMm.x > pitch || seated.footprintMm.y > pitch)
+    if (seated.footprintMm.x > pitchW || seated.footprintMm.y > pitchD)
       issues.push('it is ' + seated.footprintMm.x.toFixed(1) + ' × ' +
         seated.footprintMm.y.toFixed(1) + ' mm across the widest point, over the ' +
-        pitch + ' mm key pitch - it will foul the key next to it');
+        pitchW.toFixed(2) + ' × ' + pitchD.toFixed(2) +
+        ' mm this key is allowed - it will foul the key next to it');
     else if (seated.overhangs > 0.05)
       notes.push('the sculpt overhangs the cap by ' + seated.overhangs.toFixed(1) +
         ' mm a side, which is still inside the key pitch');
@@ -257,18 +272,53 @@
      on the skirt and the leading edge rather than on the sculpt. */
   function printPose(seated, cap, opts) {
     var o = opts || {};
-    var deg = o.tilt == null ? 55 : o.tilt;
-    var r = deg * Math.PI / 180;
+    var bed = o.bed || { x: 40.8, y: 30.6, zSupported: 52 };
     var L = Math.max(seated.footprintMm.x, cap.size.x);
+    var D = seated.footprintMm.y;
     var h = seated.totalHeightMm;
+
+    /* MIN_LEAN is the point of the exercise: below it the sculpt is still
+       pointing at the plate and the supports would land on the artwork. */
+    var MIN_LEAN = o.minTilt == null ? 40 : o.minTilt;
+    var MAX_LEAN = 88;
+
+    /* Search rather than assume. This was pinned at 55 degrees, and 55 is fine
+       for a 1u - but a 2.25u Shift with a scene on it is 41.8 mm long, and at
+       55 degrees it lands 43.5 mm across a 40.8 mm bed and simply does not fit.
+       Leaning FURTHER shrinks the footprint, so the answer was never "it does
+       not fit", it was "not at that angle". Take the shallowest lean that
+       clears, because every extra degree is more overhang and more support. */
+    var pick = null;
+    for (var t = MIN_LEAN; t <= MAX_LEAN; t += 0.5) {
+      var r = t * Math.PI / 180;
+      var fx = L * Math.cos(r) + h * Math.sin(r);
+      var fz = L * Math.sin(r) + h * Math.cos(r);
+      if (fx <= bed.x - 0.5 && D <= bed.y && fz <= bed.zSupported) {
+        pick = { deg: t, foot: fx, height: fz };
+        break;
+      }
+    }
+    if (o.tilt != null) {
+      var rr = o.tilt * Math.PI / 180;
+      pick = { deg: o.tilt, foot: L * Math.cos(rr) + h * Math.sin(rr),
+               height: L * Math.sin(rr) + h * Math.cos(rr) };
+    }
+    if (!pick) {
+      return { ok: false, tilt: null, supports: true,
+        foot: { x: null, y: D }, height: null, forcedBy: 'sculpt',
+        why: 'a ' + L.toFixed(1) + ' × ' + D.toFixed(1) + ' × ' + h.toFixed(1) +
+             ' mm piece does not clear the ' + bed.x + ' × ' + bed.y + ' × ' +
+             bed.zSupported + ' mm volume at any lean between ' + MIN_LEAN + ' and ' +
+             MAX_LEAN + ' degrees. Make the sculpt shorter, or the key narrower.' };
+    }
     return {
-      tilt: deg, supports: true,
-      foot: { x: +(L * Math.cos(r) + h * Math.sin(r)).toFixed(2), y: seated.footprintMm.y },
-      height: +(L * Math.sin(r) + h * Math.cos(r)).toFixed(2),
+      ok: true, tilt: +pick.deg.toFixed(1), supports: true,
+      foot: { x: +pick.foot.toFixed(2), y: D },
+      height: +pick.height.toFixed(2),
       forcedBy: 'sculpt',
       why: 'a cap with a figure on it cannot print face down - that buries the ' +
-           'sculpt against the plate - so it goes on its side at ' + deg +
-           '° with the supports on the skirt.'
+           'sculpt against the plate - so it goes on its side at ' +
+           pick.deg.toFixed(1) + '° with the supports on the skirt.'
     };
   }
 
