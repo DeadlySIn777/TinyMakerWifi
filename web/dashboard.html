@@ -407,6 +407,9 @@ progress::-moz-progress-bar{background:var(--live)}
   <button id='statsViewButton' type='button'>Statistics</button>
 </div>
 
+<!--#include parts/studio.html-->
+<!--#include parts/studio-polish.html-->
+
 <div id='statusMsg' class='hint'></div>
 
 <div id='homeView'>
@@ -8117,6 +8120,8 @@ try{const fwUpd=sessionStorage.getItem('tmFwUpd');if(fwUpd){sessionStorage.remov
   };
 
 /*#include parts/slicer-3d-bridge.js*/
+/*#include parts/studio-library.js*/
+/*#include parts/studio.js*/
 
   window.DBG3D=src;   // is konsoles matyti, kuri pakopa suveike
 })();

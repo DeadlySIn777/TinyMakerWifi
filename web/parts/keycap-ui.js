@@ -1112,6 +1112,15 @@
   setArt(st.art);
   drawShelf();
   setFinish(st.raised);
+
+  /* Two doors for the studio shell, and no more than two. It relocates this
+     card into the Create room and needs to (a) put a saved design back when
+     one is picked in the Library room and (b) tell the canvases to re-measure
+     after the stage they live in has been shown or resized. Both already
+     existed as private functions; exporting them beats the shell reaching
+     into this module's internals, which is the thing that rots. */
+  window.keycapUseSaved = useSaved;
+  window.keycapRefresh = function () { try { refresh(); } catch (e) {} };
   restoreSession();
   $('kcDepth').value = st.depth;
   $('kcDepthVal').textContent = st.depth.toFixed(2);

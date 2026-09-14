@@ -1,0 +1,254 @@
+<!-- ===================================================================
+     TinyMaker Studio - the shell.
+
+     WHAT WAS WRONG. The page was one scroll: a status card, a model
+     preview, a generator, a slicer, an SD manager and a keycap designer,
+     stacked, all the same weight, all the same card. Everything looked
+     equally important, so nothing was, and the thing the machine exists
+     for - the model - was a 282 px thumbnail two thirds of the way down.
+     Recolouring that would still have been one scroll.
+
+     SO IT IS FOUR ROOMS, and the model is the subject of one of them.
+       Monitor  - what the machine is doing, and its card.
+       Create   - a large persistent stage, and a compact panel beside it.
+       Library  - what you have already made, with what it cost.
+       Settings - everything you set once.
+
+     NOTHING IS REBUILT. Every section below is the section that was
+     already there: studio.js MOVES them into these rooms with appendChild,
+     which keeps every id, every listener, every confirm() and every
+     printer-state guard exactly as it was. The nav delegates to the
+     original view buttons rather than replacing them, so the code that
+     disables Settings mid-print still disables it. A redesign that
+     rewrote the wiring would be a redesign that had to re-earn all of it.
+     =================================================================== -->
+
+<nav id='stNav' class='stNav' role='tablist' aria-label='TinyMaker Studio'>
+  <button type='button' class='stTab' data-room='monitor' role='tab'>
+    <span class='stTabI' aria-hidden='true'>
+      <svg viewBox='0 0 20 20' width='17' height='17'><rect x='2.5' y='4' width='15' height='10' rx='2'
+        fill='none' stroke='currentColor' stroke-width='1.6'/><path d='M7 17h6' stroke='currentColor'
+        stroke-width='1.6' stroke-linecap='round'/></svg></span>
+    <span class='stTabT'>Monitor</span>
+    <span id='stTabDotM' class='stDot' hidden></span>
+  </button>
+  <button type='button' class='stTab' data-room='create' role='tab'>
+    <span class='stTabI' aria-hidden='true'>
+      <svg viewBox='0 0 20 20' width='17' height='17'><path d='M10 2.6 17 6.6v6.8L10 17.4 3 13.4V6.6Z'
+        fill='none' stroke='currentColor' stroke-width='1.6' stroke-linejoin='round'/>
+        <path d='M3 6.6 10 10.6 17 6.6M10 10.6v6.8' fill='none' stroke='currentColor'
+        stroke-width='1.3' stroke-linejoin='round'/></svg></span>
+    <span class='stTabT'>Create</span>
+  </button>
+  <button type='button' class='stTab' data-room='library' role='tab'>
+    <span class='stTabI' aria-hidden='true'>
+      <svg viewBox='0 0 20 20' width='17' height='17'><rect x='3' y='3.5' width='4' height='13' rx='1.3'
+        fill='none' stroke='currentColor' stroke-width='1.6'/><rect x='8.5' y='3.5' width='4' height='13'
+        rx='1.3' fill='none' stroke='currentColor' stroke-width='1.6'/><path d='M14.6 5.2l2.6.8-2.2 10.2'
+        fill='none' stroke='currentColor' stroke-width='1.6' stroke-linejoin='round'/></svg></span>
+    <span class='stTabT'>Library</span>
+    <span id='stLibCount' class='stCount' hidden></span>
+  </button>
+  <button type='button' class='stTab' data-room='settings' role='tab'>
+    <span class='stTabI' aria-hidden='true'>
+      <svg viewBox='0 0 20 20' width='17' height='17'><circle cx='10' cy='10' r='2.6' fill='none'
+        stroke='currentColor' stroke-width='1.6'/><path d='M10 2.4v2.1M10 15.5v2.1M17.6 10h-2.1M4.5 10H2.4
+        M15.4 4.6l-1.5 1.5M6.1 13.9l-1.5 1.5M15.4 15.4l-1.5-1.5M6.1 6.1 4.6 4.6' stroke='currentColor'
+        stroke-width='1.6' stroke-linecap='round'/></svg></span>
+    <span class='stTabT'>Settings</span>
+    <span id='stTabDotS' class='stDot' hidden></span>
+  </button>
+</nav>
+
+<div id='stSettingsNav' class='stSub' hidden>
+  <button type='button' class='stSubBtn' data-view='config'>Printer</button>
+  <button type='button' class='stSubBtn' data-view='stats'>Statistics</button>
+  <button type='button' class='stSubBtn' data-view='connect' hidden>Shop</button>
+</div>
+
+<style>
+/* ---- one scale, used everywhere ---------------------------------------
+   The page had eleven font sizes and nine paddings, most of them a pixel
+   or two apart and none of them derived from anything, which is what
+   "kinda low tech" looks like from a foot away: nothing lines up because
+   nothing was ever meant to. These are the only sizes the studio uses. */
+:root{
+  --st-1:4px; --st-2:8px; --st-3:12px; --st-4:16px; --st-5:24px; --st-6:32px;
+  --sf-xs:11px; --sf-sm:12.5px; --sf-md:14px; --sf-lg:16px; --sf-xl:20px; --sf-2xl:26px;
+  --st-r:12px;              /* the one radius for surfaces */
+  --st-r-sm:8px;            /* and the one for controls */
+  --st-stage:min(62vh,680px);
+  /* Neutral surfaces. Red stays the identity and stops being upholstery:
+     it marks the one thing you are meant to press and nothing else. */
+  --st-surface:#101216;
+  --st-raise:#161920;
+  --st-sunken:#0a0b0e;
+}
+:root[data-theme='light'], body.light{
+  --st-surface:#f7f8fa; --st-raise:#ffffff; --st-sunken:#eceef2;
+}
+
+/* ---- the room tabs ---------------------------------------------------- */
+.stNav{display:flex;gap:var(--st-1);margin:0 0 var(--st-4);padding:var(--st-1);
+  background:var(--st-sunken);border:1px solid var(--line);border-radius:var(--st-r);
+  overflow-x:auto;scrollbar-width:none}
+.stNav::-webkit-scrollbar{display:none}
+.stNav .stTab{flex:1 1 0;min-width:96px;width:auto;margin:0;display:flex;align-items:center;
+  justify-content:center;gap:var(--st-2);padding:10px var(--st-3);border:1px solid transparent;
+  border-radius:var(--st-r-sm);background:transparent;color:var(--muted);
+  font:600 var(--sf-md)/1 -apple-system,'Segoe UI',Roboto,sans-serif;cursor:pointer;
+  white-space:nowrap;transition:background .13s,color .13s,border-color .13s}
+.stNav .stTab:hover{color:var(--text);background:var(--st-raise)}
+.stNav .stTab.on{color:var(--text);background:var(--st-raise);border-color:var(--line2);
+  box-shadow:0 1px 0 rgba(0,0,0,.35)}
+.stNav .stTab.on .stTabI{color:var(--accent)}
+.stTabI{display:inline-flex;color:inherit}
+.stDot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:0 0 auto}
+.stCount{min-width:19px;padding:1px 5px;border-radius:9px;background:var(--st-sunken);
+  border:1px solid var(--line2);color:var(--muted);font:600 var(--sf-xs)/1.5 inherit}
+@media(max-width:520px){ .stNav .stTab{min-width:0;padding:10px 6px}
+  .stNav .stTabT{font-size:var(--sf-sm)} }
+
+/* ONE WAY TO HIDE A THING, and it is this class.
+   The hidden attribute loses to any rule that sets display, which is how the
+   settings pills came to sit under Monitor: .stSub says display:flex and
+   [hidden] says nothing louder. Chasing that with [hidden] overrides meant a
+   selector list long enough that one bad member would silently kill the
+   whole rule - so there is one selector instead, and everything the studio
+   shows or hides goes through it. */
+.stOff{display:none!important}
+.stSub{display:flex;gap:var(--st-2);margin:calc(var(--st-4) * -1 + 2px) 0 var(--st-4)}
+.stSub .stSubBtn{width:auto;margin:0;padding:7px var(--st-3);border-radius:99px;
+  border:1px solid var(--line);background:var(--st-surface);color:var(--muted);
+  font:600 var(--sf-sm)/1 inherit;cursor:pointer}
+.stSub .stSubBtn.on{background:var(--accent-soft);border-color:var(--accent-line);color:var(--text)}
+
+/* ---- the rooms -------------------------------------------------------- */
+
+/* CREATE. One tool at a time, and it gets the whole width.
+   #kcCard is its own container and splits into a 1.25fr preview and a 1fr
+   options column as soon as it is 700 px across - the large stage and the
+   compact panel were already in there, being starved of room by a 560 px
+   page. It is given the room instead of being taken apart. */
+#stCreate{display:grid;gap:var(--st-3);align-items:start}
+#stStage{display:grid;gap:var(--st-3);min-width:0}
+#stPanel{display:grid;gap:var(--st-4);min-width:0}
+#stModelTool{display:grid;gap:var(--st-4);align-items:start}
+@media(min-width:1000px){
+  #stModelTool{grid-template-columns:minmax(0,1.4fr) minmax(320px,1fr)}
+}
+#stModelTool > .stCol{display:grid;gap:var(--st-4);min-width:0;align-content:start}
+
+/* The stage picker. Two things can be on the stage - the cap you are
+   designing and the model that is going to be printed - and showing both
+   at once is how the old page ended up with two small pictures instead of
+   one big one. */
+.stStageBar{display:flex;align-items:center;gap:var(--st-2);
+  padding:var(--st-2) var(--st-3);background:var(--st-surface);
+  border:1px solid var(--line);border-radius:var(--st-r);flex-wrap:wrap}
+.stStageBar .stSeg{display:flex;gap:2px;padding:2px;background:var(--st-sunken);
+  border-radius:99px;border:1px solid var(--line)}
+.stStageBar .stSeg button{width:auto;margin:0;padding:6px 14px;border:0;border-radius:99px;
+  background:transparent;color:var(--muted);font:600 var(--sf-sm)/1 inherit;cursor:pointer}
+.stStageBar .stSeg button.on{background:var(--st-raise);color:var(--text);
+  box-shadow:0 1px 2px rgba(0,0,0,.3)}
+.stStageBar .stSpacer{flex:1 1 auto}
+.stStageBar .stMeta{color:var(--ink3);font:500 var(--sf-xs)/1.4 inherit;
+  font-variant-numeric:tabular-nums;text-align:right}
+
+/* Inside the studio a card is a surface, not a box with a border and a
+   shadow and a radius all shouting at once. */
+#stCreate .card,#stMonitor .card,#stLibrary .card{
+  background:var(--st-surface);border:1px solid var(--line);border-radius:var(--st-r);
+  box-shadow:none;margin:0}
+#stCreate .cardHead h2,#stMonitor .cardHead h2,#stLibrary .cardHead h2{
+  font:650 var(--sf-lg)/1.25 inherit;letter-spacing:-.01em}
+
+/* The preview earns its height at any width. 282 px was a thumbnail. */
+@media(min-width:1000px){
+  #stPanel #previewStage{min-height:var(--st-stage)}
+  #stPanel #kcCard .kcStage{min-height:var(--st-stage)}
+}
+
+/* MONITOR. The status card is the widest thing on the page here, because
+   on this screen it is the only thing you came to read. */
+#stMonitor{display:grid;gap:var(--st-4);align-items:start}
+@media(min-width:1000px){ #stMonitor{grid-template-columns:minmax(0,1.25fr) minmax(320px,1fr)} }
+#stMonitor > .stCol{display:grid;gap:var(--st-4);min-width:0}
+
+/* LIBRARY - laid out by studio-library.js, styled here. */
+#stLibrary{display:grid;gap:var(--st-4)}
+.stLibHead{display:flex;align-items:baseline;gap:var(--st-3);flex-wrap:wrap}
+.stLibHead h2{margin:0;font:650 var(--sf-xl)/1.2 inherit;letter-spacing:-.02em}
+.stLibHead .hint{margin:0}
+.stLibGrid{display:grid;gap:var(--st-3);
+  grid-template-columns:repeat(auto-fill,minmax(clamp(200px,22vw,268px),1fr))}
+.stLibCard{display:flex;flex-direction:column;background:var(--st-surface);
+  border:1px solid var(--line);border-radius:var(--st-r);overflow:hidden;
+  transition:border-color .13s}
+.stLibCard:hover{border-color:var(--line2)}
+.stLibCard.on{border-color:var(--accent-line);background:var(--accent-soft)}
+.stLibShot{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;
+  background:var(--st-sunken);border-bottom:1px solid var(--line)}
+.stLibShot.none{display:flex;align-items:center;justify-content:center;
+  color:var(--ink3);font:500 var(--sf-xs)/1 inherit}
+.stLibBody{padding:var(--st-3);display:grid;gap:var(--st-2)}
+.stLibName{margin:0;font:650 var(--sf-md)/1.3 inherit;color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stLibPrompt{margin:0;color:var(--muted);font:400 var(--sf-sm)/1.45 inherit;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.stLibFacts{display:grid;grid-template-columns:1fr 1fr;gap:2px var(--st-2);margin:0;
+  font-variant-numeric:tabular-nums}
+.stLibFacts div{display:flex;justify-content:space-between;gap:var(--st-2);
+  font:500 var(--sf-xs)/1.7 inherit;color:var(--ink3)}
+.stLibFacts b{color:var(--muted);font-weight:600}
+.stLibRow{display:flex;gap:var(--st-2);padding:0 var(--st-3) var(--st-3)}
+.stLibRow button{flex:1 1 0;width:auto;margin:0;padding:8px var(--st-2);
+  border-radius:var(--st-r-sm);font:600 var(--sf-sm)/1 inherit;cursor:pointer;
+  border:1px solid var(--line2);background:var(--st-raise);color:var(--text)}
+.stLibRow button.go{border-color:transparent;background:var(--accent);color:#fff}
+.stLibRow button.go:hover{background:var(--accent-deep)}
+.stLibRow button.del{flex:0 0 auto;color:var(--muted)}
+.stLibRow button.del:hover{color:var(--dangertxt);border-color:var(--dangertxt)}
+.stLibEmpty{padding:var(--st-6) var(--st-4);text-align:center;background:var(--st-surface);
+  border:1px dashed var(--line2);border-radius:var(--st-r)}
+.stLibEmpty h3{margin:0 0 var(--st-2);font:650 var(--sf-lg)/1.3 inherit;color:var(--text)}
+.stLibEmpty p{margin:0 auto;max-width:46ch;color:var(--muted);font:400 var(--sf-md)/1.6 inherit}
+.stLibBar{display:flex;align-items:center;gap:var(--st-3);flex-wrap:wrap;
+  padding:var(--st-3);background:var(--st-surface);border:1px solid var(--line);
+  border-radius:var(--st-r)}
+.stLibBar .grow{flex:1 1 auto}
+.stLibBar b{font-variant-numeric:tabular-nums}
+
+/* ---- the mark is an instrument ---------------------------------------
+   Three bars and an arc, and until now both were a picture. The bars are
+   the layer stack: they fill from the bottom as the print does, so the
+   header tells you where the job is from across the room. The arc is the
+   radio. Neither is new information - it is the information the status
+   card already had, put where your eye already goes. */
+#brandHome svg .bMark{transition:opacity .3s,fill .3s}
+#brandHome svg .bMark.lit{opacity:1}
+#brandHome svg .wMark{transition:stroke .3s,opacity .3s}
+#brandHome.printing svg .bMark.lit{animation:stPulse 2.4s ease-in-out infinite}
+@keyframes stPulse{0%,100%{opacity:1}50%{opacity:.62}}
+@media(prefers-reduced-motion:reduce){ #brandHome.printing svg .bMark.lit{animation:none} }
+
+/* ---- one forward action ------------------------------------------------
+   Inside the studio exactly one button per step wears the accent. The rest
+   are quiet, which is the only thing that makes the loud one mean
+   anything. This does not change what any button DOES - the handlers,
+   the confirms and the disabled states are untouched. */
+#stCreate .kcNav button#kcBack,#stCreate .kcNav button.secondary{
+  background:var(--st-raise);border:1px solid var(--line2);color:var(--text)}
+#stCreate #kcNext,#stCreate #kcGen{background:var(--accent);color:#fff;border:0}
+#stCreate #kcNext:hover,#stCreate #kcGen:hover{background:var(--accent-deep)}
+#stCreate #kcNext[disabled],#stCreate #kcGen[disabled]{background:var(--dis);color:var(--dis-t)}
+
+/* THE PAGE WAS 560 PX WIDE UNTIL 1000, then 1100, and that is the single
+   biggest reason it read as cramped on a real screen: an 800 px window got a
+   560 px column with 240 px of empty either side, and the keycap card's own
+   two-column split needs 700 px before it will open. So the width now grows
+   with the window instead of stepping twice, and the card gets its stage the
+   moment there is room for one. */
+@media(min-width:680px){ main.wrap{max-width:min(97vw,1520px)} }
+</style>

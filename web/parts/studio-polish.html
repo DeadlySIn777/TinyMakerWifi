@@ -1,0 +1,261 @@
+<style>
+/* ===================================================================
+   TinyMaker Studio - the finish.
+
+   studio.html decides where things live. This decides how they read, and
+   it is the half that was missing: the rooms were right and the page still
+   looked like a form somebody had themed. Four things were doing it.
+
+   IT WAS NOT CENTRED, it was left-aligned inside a column that was itself
+   too wide. 97vw with an 18 px page padding means the content touches the
+   glass on both sides, which reads as a web page from 2004 rather than an
+   application. It now sits in a measured column with real gutters that
+   grow with the window.
+
+   EVERY BOX HAD THE SAME WEIGHT. A 1 px border, a radius and a shadow on
+   every card, so nothing was foreground. Depth is spent once now: the
+   shell is flat, cards are a lighter surface with a hairline, and only the
+   thing under your hand lifts.
+
+   THE TYPE HAD NO RHYTHM. Eleven sizes, none derived; labels, values and
+   help text all within a point of each other. One scale, and the three
+   jobs - label, value, help - look like three different jobs.
+
+   NUMBERS MOVED WHEN THEY CHANGED. Layer counts, millimetres and
+   percentages in a proportional face jitter on every poll. All tabular
+   now, everywhere a figure can change.
+   =================================================================== */
+
+/* ---- the column ------------------------------------------------------
+   THE WHOLE PAGE WAS INSIDE A 2 px RED BOX. That one declaration was doing
+   more to make this look like a hobby project than anything else on the
+   screen: a saturated rectangle drawn around everything, at the same weight
+   as the button you are meant to press, so the accent meant nothing by the
+   time it reached the button. The identity is not the border - it is the red
+   on the one action, on the active tab, on the mark. The page itself is
+   graphite and gets a hairline. */
+main.wrap{
+  border:1px solid var(--line);
+  border-radius:18px;
+  background:var(--wrap);
+  margin-inline:auto;
+  padding:clamp(18px,2.6vw,34px) clamp(16px,4.2vw,56px) clamp(40px,6vw,72px);
+  max-width:min(100%,1380px);
+}
+@media(min-width:680px){ main.wrap{max-width:min(100%,1380px)} }
+
+/* ---- the masthead ---------------------------------------------------- */
+.wrap > .head{
+  display:flex;align-items:flex-start;justify-content:space-between;gap:var(--st-4);
+  padding-bottom:var(--st-4);margin-bottom:var(--st-4);
+  border-bottom:1px solid var(--line);
+}
+.wrap > .head h1{
+  display:flex;align-items:center;gap:var(--st-2);flex-wrap:wrap;
+  margin:0 0 6px;font:700 clamp(20px,2.1vw,27px)/1.1 -apple-system,'Segoe UI',Roboto,sans-serif;
+  letter-spacing:-.022em;
+}
+.wrap > .head h1 #brandHome{display:inline-flex;align-items:center;gap:var(--st-2)}
+.wrap > .head h1 svg{margin-right:0!important}
+/* The version badge and the signal bars are metadata, not headline. */
+.wrap > .head .fwBadge{font:600 var(--sf-xs)/1 inherit;letter-spacing:.04em;
+  text-transform:uppercase;opacity:.85}
+/* The link row was four blue links in a sentence. They are quiet chips now -
+   still links, still in the same order, no longer competing with the name. */
+.wrap > .head h1 + div,.wrap > .head .subh{
+  display:flex;flex-wrap:wrap;gap:var(--st-2) var(--st-3);align-items:center;
+  font:500 var(--sf-sm)/1.5 inherit;color:var(--muted2)}
+.wrap > .head a:not(.fwBadge){color:var(--muted);text-decoration:none}
+.wrap > .head a:not(.fwBadge):hover{color:var(--text)}
+
+/* ---- the room tabs, with more presence -------------------------------- */
+.stNav{padding:5px;gap:2px;border-radius:14px;
+  background:linear-gradient(var(--st-sunken),var(--st-sunken)) padding-box}
+.stNav .stTab{padding:11px var(--st-4);border-radius:10px;letter-spacing:-.005em}
+.stNav .stTab.on{
+  background:var(--st-raise);border-color:var(--line2);
+  box-shadow:0 1px 2px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.04)}
+.stNav .stTab.on .stTabT{color:var(--text)}
+
+/* ---- surfaces --------------------------------------------------------- */
+#stMonitor .card,#stCreate .card,#stLibrary .card,
+#stMonitor section.card,#stCreate section.card{
+  padding:clamp(16px,1.5vw,22px);
+  border-radius:14px;
+  background:var(--st-surface);
+  border:1px solid var(--line);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.025);
+}
+#stMonitor .cardHead,#stCreate .cardHead,#stLibrary .cardHead{
+  margin-bottom:var(--st-3);padding-bottom:var(--st-3);
+  border-bottom:1px solid var(--line3);gap:var(--st-3)}
+#stMonitor .cardHead h2,#stCreate .cardHead h2,#stLibrary .cardHead h2,
+#stMonitor .card > h2,#stCreate .card > h2{
+  font:650 clamp(15px,1.35vw,18px)/1.25 inherit;letter-spacing:-.015em;color:var(--text)}
+
+/* Every figure that can change is tabular, so the layout stops twitching. */
+#stMonitor .card,#stCreate .card,#stLibrary{font-variant-numeric:tabular-nums}
+
+/* Help text is help text: one size, one colour, real leading. */
+#stMonitor .hint,#stCreate .hint,#stLibrary .hint{
+  font:400 var(--sf-sm)/1.55 inherit;color:var(--muted2);margin:6px 0 0}
+
+/* ---- the tool bar ----------------------------------------------------- */
+.stStageBar{padding:6px 6px 6px var(--st-2);border-radius:14px;gap:var(--st-3)}
+.stStageBar .stSeg{padding:3px;border-radius:11px}
+.stStageBar .stSeg button{padding:8px 18px;border-radius:8px;letter-spacing:-.005em}
+.stStageBar .stMeta{font-size:var(--sf-sm);color:var(--muted2);padding-right:var(--st-2)}
+
+/* ---- the keycap card, in its new room --------------------------------- */
+/* #kcCard's own rules are id-scoped, so anything meant to beat them has to
+   be at least as specific. #stPanel in front does it without touching the
+   card's own stylesheet. */
+#stPanel #kcCard{padding:clamp(16px,1.5vw,24px)}
+#stPanel #kcCard .kcSplit{gap:clamp(16px,2vw,28px)}
+
+/* The four steps were four words in small caps. A stepper says how far
+   along you are without being read. */
+#stPanel #kcCard .kcSteps{
+  display:flex;gap:0;margin:0 0 var(--st-4);padding:0;list-style:none;
+  border-bottom:1px solid var(--line3)}
+#stPanel #kcCard .kcSteps li{
+  flex:1 1 0;position:relative;display:flex;align-items:center;justify-content:center;
+  gap:7px;padding:0 6px 12px;margin:0;border:0;background:none;
+  font:600 var(--sf-sm)/1 inherit;letter-spacing:.01em;text-transform:none;
+  color:var(--ink3);cursor:pointer}
+#stPanel #kcCard .kcSteps li::before{
+  content:counter(sti);counter-increment:sti;
+  display:inline-flex;align-items:center;justify-content:center;
+  width:20px;height:20px;border-radius:50%;flex:0 0 auto;
+  border:1px solid var(--line2);background:var(--st-sunken);
+  font:700 10.5px/1 inherit;color:var(--ink3)}
+#stPanel #kcCard .kcSteps{counter-reset:sti}
+#stPanel #kcCard .kcSteps li::after{
+  content:'';position:absolute;left:12%;right:12%;bottom:-1px;height:2px;
+  border-radius:2px;background:transparent}
+#stPanel #kcCard .kcSteps li.done{color:var(--muted)}
+#stPanel #kcCard .kcSteps li.done::before{
+  border-color:var(--accent-line);background:var(--accent-soft);color:var(--accent)}
+#stPanel #kcCard .kcSteps li.on{color:var(--text)}
+#stPanel #kcCard .kcSteps li.on::before{
+  border-color:transparent;background:var(--accent);color:#fff}
+#stPanel #kcCard .kcSteps li.on::after{background:var(--accent)}
+#stPanel #kcCard .kcSteps li:hover{color:var(--text)}
+@media(max-width:560px){
+  #stPanel #kcCard .kcSteps li{font-size:var(--sf-xs);gap:5px;padding-bottom:10px}
+}
+
+/* Field labels read as labels. */
+#stPanel #kcCard .kcLbl{
+  font:600 var(--sf-xs)/1.4 inherit;letter-spacing:.075em;text-transform:uppercase;
+  color:var(--ink3)}
+
+/* One forward action. Back is quiet, Next is the only red thing in the
+   panel, and the mode pills stop pretending to be buttons. */
+#stPanel #kcCard .kcNav{display:flex;gap:var(--st-2);margin-top:var(--st-4)}
+#stPanel #kcCard .kcNav button{height:44px;margin:0;border-radius:10px;
+  font:650 var(--sf-md)/1 inherit;letter-spacing:-.005em}
+#stPanel #kcCard #kcBack{flex:1 1 34%;background:var(--st-raise);
+  border:1px solid var(--line2);color:var(--text)}
+#stPanel #kcCard #kcNext{flex:2 1 60%;background:var(--accent);border:0;color:#fff;
+  box-shadow:0 1px 2px rgba(0,0,0,.4)}
+#stPanel #kcCard #kcNext:hover:not([disabled]){background:var(--accent-deep)}
+
+/* The caliper is an instrument: give it room and quiet the furniture. */
+#stPanel #kcCard .kcCal{margin-bottom:var(--st-3)}
+#stPanel #kcCard .kcCalBed{font:600 var(--sf-xs)/1 inherit;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--ink3)}
+
+/* The board is the hero of step one. */
+#stPanel #kcCard .kcBoard{padding:clamp(10px,1.1vw,16px);border-radius:12px;
+  background:var(--st-sunken);border:1px solid var(--line)}
+#stPanel #kcCard .kcKeyLegend{margin-top:var(--st-3);
+  font:500 var(--sf-xs)/1.4 inherit;color:var(--ink3)}
+
+/* The stage. A model-first page gives the model the height. */
+#stPanel #kcCard .kcStage{border-radius:12px;background:var(--st-sunken);
+  border:1px solid var(--line);overflow:hidden}
+@media(min-width:1000px){ #stPanel #kcCard .kcStage{min-height:min(56vh,560px)} }
+
+/* The tool bar already says "Keycaps" two centimetres above this, so the
+   card's own title was the word printed twice. The state line that shares
+   its row is not - that one stays. */
+#stPanel #kcCard > .cardHead{border:0;padding:0;margin:0;min-height:0}
+#stPanel #kcCard > .cardHead > h2{display:none}
+#stPanel #kcCard > .cardHead #kcState:not(:empty){display:block;margin-bottom:var(--st-2)}
+
+/* ---- forms, once ------------------------------------------------------ */
+#stCreate input[type=text],#stCreate input[type=number],#stCreate textarea,
+#stCreate select,#stLibrary input[type=text]{
+  border-radius:10px;border:1px solid var(--line2);background:var(--st-sunken);
+  color:var(--text);font:500 var(--sf-md)/1.45 inherit}
+#stCreate input:focus-visible,#stCreate textarea:focus-visible,#stCreate select:focus-visible,
+#stCreate button:focus-visible,#stNav .stTab:focus-visible,#stLibrary button:focus-visible{
+  outline:2px solid var(--accent);outline-offset:2px}
+
+/* ---- monitor ---------------------------------------------------------- */
+#stMonitor{gap:clamp(16px,1.6vw,24px)}
+#stMonitor .stCol{gap:clamp(16px,1.6vw,24px)}
+
+/* ---- library ---------------------------------------------------------- */
+#stLibrary .stLibHead h2{font-size:clamp(19px,1.9vw,25px)}
+#stLibrary .stLibCard{box-shadow:inset 0 1px 0 rgba(255,255,255,.025)}
+
+/* ---- the wordmark -----------------------------------------------------
+   Two words, two jobs. "TinyMaker" is the machine and keeps the red; "Smart
+   Studio" is what this software is, and it is set in the page's own ink at a
+   lighter weight so it reads as a subtitle rather than a second brand
+   shouting over the first. One accent on the page, still. */
+.wrap > .head h1 #brandHome{gap:10px;text-decoration:none}
+.wrap > .head h1 .bmA{color:var(--accent);font-weight:800;letter-spacing:-.026em}
+.wrap > .head h1 .bmB{color:var(--text);font-weight:300;letter-spacing:-.012em;
+  opacity:.92;margin-left:.36em}
+@media(max-width:430px){ .wrap > .head h1 .bmB{display:none} }
+
+/* The signal comes up next to the name where it is read, and at a size you
+   can actually read it at. The version is metadata and goes last. */
+.wrap > .head h1{gap:var(--st-3)}
+.wrap > .head h1 #brandHome{order:1}
+.wrap > .head h1 .wbars{order:2;margin-left:0}
+.wrap > .head h1 #fwBuild{order:3}
+.wrap > .head h1 .fwBadge{order:4;margin-left:0;opacity:.7;
+  font-size:10.5px;padding:2px 8px;text-transform:none;letter-spacing:.06em}
+.wrap > .head h1 .wbars{gap:3px;align-items:flex-end;padding:0 2px}
+.wrap > .head h1 .wbars i{width:5px;border-radius:1.5px}
+.wrap > .head h1 .wbars i:nth-child(1){height:9px}
+.wrap > .head h1 .wbars i:nth-child(2){height:15px}
+.wrap > .head h1 .wbars i:nth-child(3){height:21px}
+/* Green for "connected" was the only green on the page and it fought the
+   mark next to it. The signal is the mark's own blue. */
+.wrap > .head h1 .wbars i{background:var(--line2)}
+.wrap > .head h1 .wbars i.on{background:var(--live)}
+
+/* The mark itself is the size of the words beside it. */
+.wrap > .head h1 #brandHome svg{width:1.15em;height:1.15em}
+
+/* ---- the masthead links are metadata ---------------------------------- */
+.wrap > .head .fw{
+  display:flex;flex-wrap:wrap;align-items:center;gap:0 var(--st-2);
+  font:500 var(--sf-sm)/1.6 inherit;color:var(--muted2);margin:0}
+.wrap > .head .fw a{color:var(--muted2);text-decoration:none;padding:1px 0}
+.wrap > .head .fw a:hover{color:var(--text);text-decoration:underline}
+.wrap > .head .wbars{margin-left:2px}
+
+/* ---- the toast stops sitting on top of what you are reading -----------
+   #statusMsg is position:fixed and was centred in the viewport, so every
+   "printer not answering" landed square across the middle of whatever card
+   you were working in - and on this machine that message is not rare. It
+   belongs at the top edge, out of the way, where a notification goes. */
+#statusMsg{
+  top:calc(var(--st-3) + env(safe-area-inset-top,0px))!important;
+  bottom:auto!important;
+  max-width:min(94vw,640px);
+  border-radius:12px;
+  box-shadow:0 10px 30px rgba(0,0,0,.45)}
+
+/* ---- motion ----------------------------------------------------------- */
+@media(prefers-reduced-motion:no-preference){
+  #stMonitor,#stCreate,#stLibrary{animation:stIn .18s ease-out}
+}
+@keyframes stIn{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+</style>
