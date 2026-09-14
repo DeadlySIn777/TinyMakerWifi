@@ -168,34 +168,75 @@
     return reliefFromField(heightField(positions, opts), opts);
   }
 
-  /* ---- prompts ----------------------------------------------------------
-     A generator asked for "an IFAK" returns a hero prop with straps and
-     shadows; asked for a shallow front-facing relief it returns something that
-     survives being flattened onto a 13 mm square. These say so explicitly.
-     Untested against the real service - nobody here has a key yet. */
-  var PROMPT_TAIL = ', front facing, shallow bas relief, flat back, bold simple ' +
-    'shapes, no thin details, centered, game item icon, clean silhouette';
+  /* ---- prompts ---------------------------------------------------------
+     ⚠️ THESE USED TO ASK FOR THE WRONG THING, and it is worth saying why
+     rather than quietly fixing it. They were written for the height-field
+     path, so every one of them ended "shallow bas relief, flat back" - which
+     is right when the model is about to be flattened onto the cap's top face
+     and completely wrong now that it is seated as a real sculpt. The Generate
+     button was asking for a flat relief and then standing it up as an object.
+
+     What a prompt has to carry now is the PRINTER, not the picture. The cap is
+     18 mm across and the sculpt gets maybe 14 of them; the mask pixel is 127.5
+     microns, so anything under about half a millimetre on the finished part
+     simply is not there. A generator asked for "a detailed dragon" returns
+     something whose scales are 40 microns at this size - invisible - and whose
+     wings are 0.2 mm thick, which snaps off in the wash. Asking for chunky
+     shapes is not a style preference, it is the only thing that survives.
+
+     And it must SIT ON SOMETHING. keycap-sculpt refuses a piece that touches
+     nothing, because a figure the generator left hovering looks perfect on
+     screen and prints as a separate object in mid air. Saying "standing on a
+     base, feet touching it" up front is cheaper than failing the check. */
+
+  var SCULPT_TAIL =
+    ', full 3D figurine, standing on a small flat base with everything touching ' +
+    'the base, chunky stylised proportions, thick sturdy limbs, no thin or ' +
+    'fragile parts, no wires or antennae, bold readable shapes at small size, ' +
+    'solid closed form, single connected object';
+
+  /* Kept for the legend path, which really does want a flattened relief. */
+  var RELIEF_TAIL =
+    ', front facing, shallow bas relief, flat back, bold simple shapes, ' +
+    'no thin details, centered, clean silhouette';
+
   var PROMPTS = {
-    ifak:     'a military IFAK first aid pouch, grey camouflage nylon, zipper, ' +
-              'medical cross patch sewn on the front' + PROMPT_TAIL,
-    afak:     'a black MOLLE nylon first aid pouch with horizontal webbing straps ' +
-              'and a pull tab' + PROMPT_TAIL,
-    salewa:   'a hard plastic first aid kit case with a carry handle and a medical ' +
-              'cross on the lid' + PROMPT_TAIL,
-    bandage:  'a rolled gauze bandage with a loose tail hanging from it' + PROMPT_TAIL,
-    hemostat: 'a foil hemostatic powder sachet with a serrated tear top' + PROMPT_TAIL,
-    splint:   'a perforated aluminium finger splint, a flat bar with round holes' + PROMPT_TAIL,
-    pills:    'a pharmaceutical blister pack of round pills' + PROMPT_TAIL,
-    creeper:  'a Minecraft creeper face, blocky pixel squares, flat' + PROMPT_TAIL
+    ifak:     'a military IFAK first aid pouch with a medical cross patch',
+    afak:     'a black MOLLE nylon first aid pouch with webbing straps',
+    salewa:   'a hard plastic first aid case with a carry handle and a cross',
+    bandage:  'a rolled gauze bandage with a loose tail',
+    hemostat: 'a foil hemostatic powder sachet with a torn top',
+    splint:   'a perforated aluminium finger splint',
+    pills:    'a blister pack of round pills',
+    creeper:  'a Minecraft creeper head, blocky cube, square pixel face'
   };
-  function promptFor(name, extra) {
-    var p = PROMPTS[name] || (String(name || '') + PROMPT_TAIL);
-    return extra ? (p + ', ' + extra) : p;
+
+  /* mode: 'sculpt' (default - a real object on the cap) or 'relief'. */
+  function promptFor(name, extra, mode) {
+    var base = PROMPTS[name] || String(name || '');
+    var tail = (mode === 'relief') ? RELIEF_TAIL : SCULPT_TAIL;
+    return base + (extra ? ', ' + extra : '') + tail;
+  }
+
+  /* What the generator cannot know and the printer decides. Handed to the card
+     so the size advice is about THIS cap rather than a generic one. */
+  function printableAdvice(capWidthMm, pixelMm) {
+    var w = capWidthMm || 18, px = pixelMm || (40.8 / 320);
+    var sculpt = w * 0.8;
+    var floor = px * 4;
+    return {
+      sculptMm: +sculpt.toFixed(1),
+      smallestFeatureMm: +floor.toFixed(2),
+      note: 'the sculpt is about ' + sculpt.toFixed(0) + ' mm across, so anything ' +
+            'finer than ' + floor.toFixed(2) + ' mm on the finished cap is below ' +
+            'the mask and will not appear'
+    };
   }
 
   root.keycapSkin = {
     heightField: heightField, reliefFromField: reliefFromField,
-    skinFromMesh: skinFromMesh, PROMPTS: PROMPTS, promptFor: promptFor
+    skinFromMesh: skinFromMesh, PROMPTS: PROMPTS, promptFor: promptFor,
+    printableAdvice: printableAdvice, SCULPT_TAIL: SCULPT_TAIL, RELIEF_TAIL: RELIEF_TAIL
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.keycapSkin;
 })(typeof window !== 'undefined' ? window : globalThis);

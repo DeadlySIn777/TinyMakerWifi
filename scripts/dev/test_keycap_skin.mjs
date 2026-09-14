@@ -119,8 +119,25 @@ ok('a model with no thickness on two axes', threw, 'flat');
 
 console.log('\nprompts');
 truthy('every drawn icon has a prompt to replace it', Object.keys(S.PROMPTS).length >= 8);
-truthy('they ask for a shallow relief, not a hero prop', /bas relief/.test(S.promptFor('ifak')));
-truthy('an unknown name still gets the tail', /bas relief/.test(S.promptFor('a rubber duck')));
+/* The tail used to say "shallow bas relief, flat back" for everything, which
+   was right while a model was flattened onto the face and wrong the moment it
+   started being seated as a real sculpt - the button was asking for a flat
+   relief and then standing it up. */
+truthy('a sculpt prompt asks for a 3D object', /full 3D figurine/.test(S.promptFor('ifak')));
+truthy('and NOT for a flat relief', !/bas relief/.test(S.promptFor('ifak')));
+truthy('an unknown name still gets the tail', /full 3D figurine/.test(S.promptFor('a rubber duck')));
+/* Anchoring is cheaper to ask for than to fix: keycap-sculpt refuses a piece
+   touching nothing, and a hovering figure looks perfect on screen. */
+truthy('it asks for everything to touch the base', /touching the base/.test(S.promptFor('x')));
+truthy('and warns the generator off thin parts', /no thin or fragile/.test(S.promptFor('x')));
+/* The legend path still wants the flattened kind. */
+truthy('relief mode still asks for a relief', /bas relief/.test(S.promptFor('ifak', null, 'relief')));
+
+console.log('\nthe advice is about THIS cap, not a generic one');
+const adv = S.printableAdvice(18);
+truthy('it sizes the sculpt to the cap', adv.sculptMm > 10 && adv.sculptMm < 18, adv.sculptMm + ' mm');
+truthy('and names the smallest feature the mask can hold',
+  adv.smallestFeatureMm > 0.3 && adv.smallestFeatureMm < 0.8, adv.smallestFeatureMm + ' mm');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

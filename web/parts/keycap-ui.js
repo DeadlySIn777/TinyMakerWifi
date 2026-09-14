@@ -312,10 +312,12 @@
 
   $('kcGen').addEventListener('click', function () {
     var typed = ($('kcPrompt').value || '').trim();
-    /* An icon picked from the drawn set doubles as a starting prompt - the
-       wording that asks for a shallow front-facing relief rather than a hero
-       prop is the difference between something that flattens onto a 13 mm
-       square and something that does not. */
+    /* An icon picked from the drawn set doubles as a starting prompt. The
+       wording matters more than the subject: the tail asks for a chunky closed
+       figure standing on a base, because the seat refuses a piece that touches
+       nothing and the mask cannot hold a limb thinner than half a millimetre.
+       (This comment used to claim the opposite - it described the tail from the
+       height-field days, which asked for a flat relief and then stood it up.) */
     var prompt = typed || (st.icon ? window.keycapSkin.promptFor(st.icon) : '');
     if (!prompt) { say('kcGenNote', 'Type what you want, or pick a drawn icon to start from.', 'bad'); return; }
     if (!window.meshy || !window.meshy.hasKey()) {
@@ -349,7 +351,16 @@
         st.skin = null;
         st.skinFrom = prompt;
         var tris = parsed.positions.length / 9;
-        say('kcGenNote', 'seated a ' + tris.toLocaleString() + ' triangle model on the cap');
+        /* The triangle count flatters the result - 30k triangles on a 14 mm
+           sculpt is far more detail than a 127.5 micron mask can print. Saying
+           what the printer can actually hold, on the note that was already
+           there, is the difference between a happy preview and a happy part. */
+        var adv = window.keycapSkin.printableAdvice
+                ? window.keycapSkin.printableAdvice(
+                    K.capWidth(st.sizeU) - 2 * K.PROFILES[st.profile].topInset)
+                : null;
+        say('kcGenNote', 'seated a ' + tris.toLocaleString() + ' triangle model on the cap' +
+          (adv ? ' · ' + adv.note : ''));
         refresh();
         /* Filed immediately. A generation costs credits and takes a minute, so
            losing it to a page reload - which is what used to happen - is the
