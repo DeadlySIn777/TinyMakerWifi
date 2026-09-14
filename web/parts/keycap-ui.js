@@ -41,6 +41,8 @@
     slowLiftFeedrate: 40, fastLiftFeedrate: 50, dropBackFeedrate: 50
   };
 
+  var hero = null;          // the 3D view, attached lazily on first use
+
   var st = { step: 1, key: null, profile: 'XDA', row: 'R3', sizeU: 1,
              icon: null, digit: '', depth: 0.55, raised: true, plate: [],
              skin: null, skinFrom: '' };
@@ -245,17 +247,33 @@
       built.relief = rel;
       built.name = (st.key || 'cap') + '-' + (st.icon || 'plain');
     } catch (e) { built = null; err = e.message; }
+    drawHero();
     drawTop(rel);
     drawSide();
     if (err) { say('kcState', err, 'bad'); } else say('kcState', '');
     dims(); legendWarn(rel); report();
   }
 
-  /* Top view, lit. A flat plateau shades exactly like the flat cap beside it,
-     so height carries part of the tone - otherwise raised artwork renders as
-     line art and you cannot tell raised from engraved at a glance. */
+  /* The hero: the actual cap mesh, in 3D, spinnable. A keycap is an object and
+     the flat heightfield never showed you one - not the profile, not the row
+     angle, not the skirt. */
+  function drawHero() {
+    var c = $('kcTop'); if (!c || !window.keycapView3d) return;
+    if (!hero) {
+      hero = window.keycapView3d.attach(c, { az: -0.62, el: 0.52, dist: 3.0, spin: false });
+      /* One slow turn on first sight, stopped by the first touch. Enough to
+         read it as an object; not so much that it is annoying to aim at. */
+      hero.autoSpin(true);
+      setTimeout(function () { if (hero) hero.autoSpin(false); }, 5200);
+    }
+    if (built) hero.setMesh(built.positions); else hero.setMesh(null);
+  }
+
+  /* The flat top-down view survives as a DETAIL inset: at 13 mm across, the
+     relief on the 3D cap is a fraction of a millimetre and legend edges do not
+     read. This is where you actually judge the artwork. */
   function drawTop(rel) {
-    var c = $('kcTop'); if (!c) return;
+    var c = $('kcFlat'); if (!c) return;
     var g = c.getContext('2d'), W = c.width, H = c.height;
     var img = g.createImageData(W, H);
     var pr = K.PROFILES[st.profile], dd = pr.dishDepth;

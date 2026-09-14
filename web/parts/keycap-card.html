@@ -33,8 +33,14 @@
   <div class='kcPane' data-pane='2 3 4' hidden>
     <div class='kcSplit'>
       <div class='kcPreview'>
-        <canvas id='kcTop' width='420' height='420' aria-label='top of the cap'></canvas>
-        <canvas id='kcSide' width='420' height='120' aria-label='cap seen from the front'></canvas>
+        <canvas id='kcTop' width='420' height='420'
+          aria-label='the cap in 3D - drag to turn it'></canvas>
+        <div class='kcInsets'>
+          <canvas id='kcFlat' width='200' height='200'
+            aria-label='the legend, seen straight down'></canvas>
+          <canvas id='kcSide' width='200' height='120'
+            aria-label='the cap seen from the front'></canvas>
+        </div>
         <div id='kcDims' class='hint'></div>
       </div>
 
@@ -144,7 +150,9 @@
 @media (max-width:720px){#kcCard .kcSplit{grid-template-columns:1fr}}
 #kcCard .kcPreview canvas{width:100%;height:auto;display:block;border-radius:10px;
   background:var(--pv);border:1px solid var(--line)}
-#kcCard #kcSide{margin-top:8px}
+#kcCard #kcTop{cursor:grab;touch-action:none;aspect-ratio:1}
+#kcCard #kcTop:active{cursor:grabbing}
+#kcCard .kcInsets{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
 #kcCard .kcLbl{display:block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
   color:var(--subh);margin-bottom:6px}
 #kcCard .kcTiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:6px}
