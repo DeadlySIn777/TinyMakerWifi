@@ -683,7 +683,14 @@
      leading edge of the cap and never inside the stem cavity. */
   function tiltFit(len, depth, h, opts) {
     var o = opts || {};
-    var margin = o.margin == null ? 1.0 : o.margin;
+    /* A lean means supports, so the room a lean needs is the whole reserve:
+       the plate's edge allowance, the raft's border and a support foot. This
+       used to be `BED.x - 1.0` - the edge allowance alone - which left the
+       pad and the feet unaccounted for, and the slicer then scaled the part
+       down to make them fit. `margin` stays as extra slack a caller can ask
+       for on top. */
+    var margin = o.margin == null ? 0 : o.margin;
+    var leanLimit = usableBed().x - margin;
     var zLimit = o.zLimit || BED.zSupported;
     if (depth > BED.y) return { ok: false };
     var lo = null, hi = null;
@@ -691,7 +698,10 @@
       var r = t / 10 * Math.PI / 180;
       var fx = len * Math.cos(r) + h * Math.sin(r);
       var fz = len * Math.sin(r) + h * Math.cos(r);
-      if (fx <= BED.x - margin && fz <= zLimit) { if (lo === null) lo = t/10; hi = t/10; }
+      /* A lean means supports, so the room a lean needs is the full reserve.
+         `margin` was 1.0 - the slicer's edge allowance alone - which left the
+         pad and the feet unaccounted for. */
+      if (fx <= leanLimit && fz <= zLimit) { if (lo === null) lo = t/10; hi = t/10; }
     }
     if (lo === null) return { ok: false };
     /* Take the shallowest angle that clears: less tilt is less overhang, less
@@ -704,9 +714,17 @@
 
   function fits(w, d, h, opts) {
     h = h || 9.0;
-    if (w <= BED.x && d <= BED.y)
+    /* AGAINST THE USABLE AREA, NOT THE BED. This asked `w <= BED.x` and so
+       called a 2u cap printable while perPlate - which now reserves the
+       raft's border - put zero of them on a plate. One of those two was
+       going to be a surprise at the printer, and it was: the slicer scales
+       whatever it cannot fit, and a scaled keycap does not go on a switch.
+       Flat means no supports, so the reserve here is the edge plus the pad.
+       A lean adds feet, and tiltFit's own margin below accounts for them. */
+    var flat = usableBed();
+    if (w <= flat.x && d <= flat.y)
       return { ok: true, tilt: 0, rotate: false, supports: false, foot: { x: w, y: d }, height: h };
-    if (d <= BED.x && w <= BED.y)
+    if (d <= flat.x && w <= flat.y)
       return { ok: true, tilt: 0, rotate: true, supports: false, foot: { x: d, y: w }, height: h };
     var t = tiltFit(w, d, h, opts);
     if (t.ok) return { ok: true, tilt: t.deg, tiltRange: [t.degMin, t.degMax], rotate: false,
@@ -771,6 +789,65 @@
      plate the owner was about to print. Hand it the plan instead. */
   /* One pair of numbers for both packers. layout() opens the gap when anything
      on the plate needs supports, because supports are wider than the part. */
+  /* THE BED IS NOT THE USABLE AREA. The slicer puts a raft pad under the part
+     with a 1.6 mm border, and support feet with a 1.5 mm radius, and both of
+     those live OUTSIDE anything the model measures. Packing to BED.x meant the
+     real footprint - the one the slicer measures after it has built them - ran
+     off the plate, and the slicer then did exactly what it is built to do:
+     sliced again, smaller, and said so in one line.
+
+     Measured, on the printer, not reasoned about: two DSA R3 1u caps,
+     engraved, flat, laid out at 37.5 x 18.0 mm on a 40.8 x 30.6 mm bed. The
+     slicer built 33 pillars and a pad around them and reported
+
+         Scaled down 19.1% - the supports reached past the plate, and they
+         still do. Scale the model down by hand before printing.
+
+     For most models a 19% reduction is a disappointment. For a keycap it is a
+     19% reduction in the CROSS SLOT, and the cap will not go on a switch at
+     all - the entire point of the object, destroyed silently, because two
+     components each did their job correctly. Reserve the room here, where the
+     packing is decided.
+
+     The honest cost: 34.6 x 24.4 mm of usable area means a 1u plate holds ONE
+     cap and not two. A worse number, and the true one. */
+  /* The three terms, each from slicer-wasm.js and each per side:
+       EDGE  1.0  the plate is bolted on with play, so a part can stand about
+                  a millimetre from where it is expected (KRASTO_ATSARGA_MM)
+       PAD   1.6  the raft's border, added around whatever it carries
+       FOOT  1.5  a support foot's radius, and only where supports stand
+     The slicer measures the REAL footprint after building those and refuses
+     anything past PLATE/2 - EDGE. So what the model itself may occupy is the
+     plate less twice the terms that apply - which depends on whether this
+     plate needs supports, so it is asked rather than assumed. */
+  var EDGE_MM = 1.0, PAD_MM = 1.6, FOOT_MM = 1.5;
+
+  /* WHAT IS RESERVED, AND WHAT IS NOT.
+
+     EDGE 1.0 and PAD 1.6 always apply: the plate is bolted on with play, and
+     the raft carries a border around whatever sits on it. Both are geometry
+     that exists before a single support is placed, and packing to BED.x
+     ignored them.
+
+     FOOT 1.5 is NOT reserved here, deliberately. A support foot only exists
+     where a support stands, and slicer-wasm.js says in as many words that
+     subtracting it from the whole model was the old approach and that it left
+     the part 68% of the plate - it measures the real footprint after building
+     the supports instead. Reserving it again here would be the same mistake at
+     one remove, and it costs real caps: an SA R1 with a figure on it is 22.50
+     mm deep posed, and a blanket reserve leaves 22.40.
+
+     Which leaves the case this was all found by - two 1u caps whose supports
+     did run off the plate. That is not fixed by guessing a bigger number. It
+     is fixed by refusing to print a SCALED keycap at all, which is what
+     slicer.js now does: the slicer measures the truth, and a cap that has been
+     shrunk to fit is a cap that no longer fits a switch. */
+  var EDGE_MM = 1.0, PAD_MM = 1.6;
+  function usableBed() {
+    var r = EDGE_MM + PAD_MM;
+    return { x: BED.x - 2 * r, y: BED.y - 2 * r, reserveMm: +r.toFixed(2) };
+  }
+
   var FLAT_GAP = 1.5, SUPPORT_GAP = 3.5;
 
   function perPlate(sizeU, gap, h, plan) {
@@ -780,7 +857,8 @@
     if (!f.ok && f.ok !== undefined) return { count: 0, sizeU: sizeU, why: f.why };
     if (!f.foot) return { count: 0, sizeU: sizeU, why: 'no footprint in the plan' };
     var a = f.foot.x, b = f.foot.y;
-    var cols = Math.floor((BED.x + gap) / (a + gap)), rows = Math.floor((BED.y + gap) / (b + gap));
+    var bed = usableBed();             // not BED - see usableBed()
+    var cols = Math.floor((bed.x + gap) / (a + gap)), rows = Math.floor((bed.y + gap) / (b + gap));
     return { count: Math.max(0, cols) * Math.max(0, rows), cols: cols, rows: rows,
              sizeU: sizeU, tilt: f.tilt, supports: f.supports, capMm: f.foot };
   }
@@ -825,18 +903,28 @@
        fill instead of leaving a strip of dead bed under every short cap. */
     var order = items.slice().sort(function (a, b) { return b.d - a.d; });
 
+    var usable = usableBed();
     var placed = [], left = [], parts = [], total = 0;
     var cx = 0, cy = 0, rowD = 0, maxH = 0;
     order.forEach(function (t) {
       if (!t.ok) { left.push(t.c); return; }
       // turn a cap 90 degrees if that is the only way it lands
       var w = t.w, d = t.d, turned = false;
-      if (w > BED.x && d <= BED.x && w <= BED.y) { w = t.d; d = t.w; turned = true; }
-      if (w > BED.x || d > BED.y) { left.push(t.c); return; }
-      if (cx > 0 && cx + w > BED.x + 1e-6) { cx = 0; cy += rowD + gap; rowD = 0; }
-      if (cy + d > BED.y + 1e-6) { left.push(t.c); return; }
+      /* PACKED INTO WHAT IS FREE, not into the bed - see usableBed(). The
+         slicer's pad and support feet occupy the rest of it, and when they
+         run off the plate it scales the whole model down to compensate. */
+      /* TURN IT WHENEVER THAT IS WHAT LANDS IT, not only when it is too WIDE.
+         A leaning cap grows along the direction it leans, so a 1u cap with a
+         28 mm figure is 18.6 across and 32.5 deep - inside the usable width
+         and well past the usable depth. This asked only about the width, saw
+         18.6 was fine, never considered turning, and dropped the cap. */
+      if ((w > usable.x || d > usable.y) && d <= usable.x && w <= usable.y)
+        { w = t.d; d = t.w; turned = true; }
+      if (w > usable.x || d > usable.y) { left.push(t.c); return; }
+      if (cx > 0 && cx + w > usable.x + 1e-6) { cx = 0; cy += rowD + gap; rowD = 0; }
+      if (cy + d > usable.y + 1e-6) { left.push(t.c); return; }
 
-      var dx = cx + w / 2 - BED.x / 2, dy = cy + d / 2 - BED.y / 2;
+      var dx = cx + w / 2 - usable.x / 2, dy = cy + d / 2 - usable.y / 2;
       var p = t.c.positions, out = new Float32Array(p.length);
       for (var k = 0; k < p.length; k += 3) {
         var px = p[k], py = p[k + 1];
@@ -1063,7 +1151,7 @@
   root.keycap = {
     MX: MX, PROFILES: PROFILES, UNIT: UNIT, DEPTH: DEPTH, BED: BED, PIXEL_MM: PIXEL_MM,
     capWidth: capWidth, build: build, orientForPrint: orientForPrint,
-    seatedVolumeMm3: seatedVolumeMm3,
+    seatedVolumeMm3: seatedVolumeMm3, usableBed: usableBed,
     gridForFace: gridForFace,
     orientAsPrinted: orientAsPrinted, mouthDown: mouthDown,
     validate: validate, fits: fits, tiltFit: tiltFit, perPlate: perPlate,

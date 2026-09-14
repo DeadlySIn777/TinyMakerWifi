@@ -87,8 +87,15 @@ const slicerStep=()=>{
    if(fitNow)fitNow.style.display=netelpa?'':'none';
    if(send){
      send.style.display=(sliced&&!sliceRunning)?'':'none';
-     send.disabled=!!(save&&save.disabled)||spausdina;
-     send.title=spausdina?'Not while the printer is working':'';
+     /* slicerScaleBlocked is checked HERE and not once at slice time, because
+        this function reruns on every status poll and would have undone a
+        single assignment within the second. */
+     send.disabled=!!(save&&save.disabled)||spausdina||slicerScaleBlocked;
+     send.title=spausdina?'Not while the printer is working'
+       :(slicerScaleBlocked
+         ?'This was scaled down to fit, and a keycap that has been scaled no '
+          +'longer fits a switch. Take a cap off the plate and slice again.'
+         :'');
    }
    /* Varda galima irasyti, vos tik yra ka pavadinti - jis nustatymas, ne veiksmas. */
    {const nm=$('slicerName'); if(nm)nm.disabled=!loaded||spausdina;}
@@ -587,6 +594,10 @@ window.slicerLoadMesh=function(positions,suggestedName,sizeBytes,opts){
      again here throws every one of those away and prints something the card
      never described - and silently, because the picture in the slicer is of the
      re-oriented mesh and looks perfectly reasonable. */
+  /* Whose size may not move. Cleared here as well as set, so loading an
+     ordinary model after a refused keycap does not inherit the refusal. */
+  slicerNoScale=!!(opts&&opts.noScale);
+  slicerScaleBlocked=false;
   if(opts&&opts.keepPose){
     slicerTr={rx:0,rz:0,scale:1};
   }else{
@@ -837,6 +848,27 @@ $('slicerRotX').addEventListener('click',()=>{if(slicerRaw){slicerPlaceNote(null
 $('slicerRotZ').addEventListener('click',()=>{if(slicerRaw){slicerPlaceNote(null,null);slicerTr.rz++;slicerRender();}});
 /* Pjaustymas ir issaugojimas. Archyvas keliauja ESAMU ikelimo keliu - tuo
    paciu, kuriuo ateina PrusaSlicer siuntiniai; printeriui naujo kodo nereikia. */
+/* ⚠️ A SCALED KEYCAP IS A BROKEN KEYCAP.
+
+   The slicer's auto-fit is right for nearly everything it prints: a miniature
+   that comes out 19% smaller is a miniature. A keycap that comes out 19%
+   smaller has a 0.99 mm cross slot where a switch needs 1.23, so it does not go
+   on a keyboard at all - the one thing the object exists to do, gone, with a
+   line of grey text as the only sign.
+
+   Measured on this printer, 2026-09-14: two DSA R3 1u caps, engraved, flat.
+       Sliced in 15.5 s - 119 layers - ~1.0 ml
+       Scaled down 19.1% - the supports reached past the plate, and they still do.
+
+   keycap.js's usableBed() stops the plate overflowing in the first place. This
+   is the backstop for what it cannot foresee - a support tree that splays
+   further than expected, a sculpt with an arm out, a change to the raft - and
+   it applies only to parts whose caller said a dimension must not move.
+
+   noScale is what the caller asked for; scaleBlocked is what happened. Both
+   outlive a single slice, because the refusal has to stand until the owner
+   changes the plate. */
+let slicerNoScale=false, slicerScaleBlocked=false;
 let slicerOut=null;   // supjaustytas rezultatas, laukiantis sprendimo
 
 /* Tikra sluoksnio kauke. 3D vaizdas glotnina pavirsiu, tad plona 0.4 mm supporto
@@ -1388,6 +1420,10 @@ $('slicerGo').addEventListener('click',async()=>{
        nes kitaip slankiklis rodytu 100 %, o faile gultu 96 %: valdiklis meluotu, ir
        kitas jo bakstelejimas modeli issprogdintu atgal uz plokstes. */
     let mazNote='';
+    /* A part whose caller said its size must not move, that the slicer then
+       had to shrink, does not go to the printer. See slicerNoScale. */
+    if(slicerNoScale&&r.sumazinta&&r.sumazinta.mastelis>0&&r.sumazinta.mastelis<1)
+      slicerScaleBlocked=true;
     if(r.sumazinta&&r.sumazinta.mastelis>0&&r.sumazinta.mastelis<1){
       slicerTr.scale*=r.sumazinta.mastelis;
       /* Ne `\n`: eilute gyvena `<span class='hint'>` be `white-space: pre-line`,

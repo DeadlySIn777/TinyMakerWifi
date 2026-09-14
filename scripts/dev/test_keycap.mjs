@@ -113,11 +113,37 @@ truthy('and it warns', r4.warnings.some(w => /stem is/.test(w)));
 ok('a tall row keeps the full stem', K.build({ profile: 'SA', row: 'R1' }).stemDepth, K.MX.crossDepth);
 
 console.log('\nwhat fits the bed - the thing that decides what is printable');
+/* ⚠️ THE BED IS NOT THE USABLE AREA, and these assertions were written as
+   though it were. The slicer lays a raft under every part with a 1.6 mm border,
+   and the plate is bolted on with about a millimetre of play, so 2.6 mm a side
+   is spoken for before any support exists. Packing to 40.8 x 30.6 therefore
+   produced plates the slicer could not print - it scales whatever runs off,
+   and on 2026-09-14 it scaled a two-cap plate by 19.1% and said so:
+
+       Scaled down 19.1% - the supports reached past the plate, and they still
+       do. Scale the model down by hand before printing.
+
+   For most models that is a disappointment; for a keycap it is a 19% smaller
+   CROSS SLOT and a cap that will not go on a switch. usableBed() is 35.6 x
+   25.4, and these now ask about that. */
+const U = K.usableBed();
+ok('the usable area reserves the raft border and the plate play', U.reserveMm, 2.6);
 ok('1u lies flat, no supports', K.fits(K.capWidth(1), 18, 9).supports, false);
-ok('2u lies flat', K.fits(K.capWidth(2), 18, 9).tilt, 0);
+truthy('1u is comfortably inside the usable width', K.capWidth(1) < U.x,
+  K.capWidth(1) + ' of ' + U.x.toFixed(1));
+/* 2u is 37.1 mm and the usable width is 35.6, so it CANNOT lie flat - with the
+   raft it would be 40.3 mm on a plate that allows 38.8, and the slicer would
+   shrink it. It leans instead, which costs supports and is the honest trade. */
+truthy('2u no longer lies flat - the raft does not fit beside it',
+  K.fits(K.capWidth(2), 18, 9).tilt > 0, 'tilt ' + K.fits(K.capWidth(2), 18, 9).tilt);
+truthy('and it still fits, leaning', K.fits(K.capWidth(2), 18, 9).ok);
 const f225 = K.fits(K.capWidth(2.25), 18, 9);
 truthy('2.25u does not lie flat but does fit tilted', f225.ok && f225.tilt > 0);
-truthy('2.25u tilt is a real angle under 45', f225.tilt > 25 && f225.tilt < 45);
+truthy('2.25u leans further than 2u, as a wider cap must',
+  f225.tilt > K.fits(K.capWidth(2), 18, 9).tilt,
+  f225.tilt + ' vs ' + K.fits(K.capWidth(2), 18, 9).tilt);
+truthy('2.25u tilt is still a workable angle', f225.tilt > 25 && f225.tilt < 60,
+  String(f225.tilt));
 truthy('2.25u needs supports', f225.supports);
 const f275 = K.fits(K.capWidth(2.75), 18, 9);
 truthy('2.75u fits tilted', f275.ok);
@@ -126,7 +152,12 @@ ok('6.25u spacebar fits at NO angle', K.fits(K.capWidth(6.25), 18, 9).ok, false)
 truthy('and it says why', /spacebar/.test(K.fits(K.capWidth(6.25), 18, 9).why));
 
 console.log('\nhow many per plate - print time is height-only, so this is the yield');
-ok('1u caps per plate', K.perPlate(1).count, 2);
+/* ONE, not two. Two 18 mm caps and a 1.5 mm gap is 37.5 mm, the usable width
+   is 35.6, and the printer settled the argument: it sliced that exact plate and
+   scaled it down 19.1%. A worse yield and a true one. */
+ok('1u caps per plate', K.perPlate(1).count, 1);
+truthy('and two of them would not have fitted', 2 * K.capWidth(1) + 1.5 > K.usableBed().x,
+  (2 * K.capWidth(1) + 1.5).toFixed(1) + ' > ' + K.usableBed().x.toFixed(1));
 ok('1.5u caps per plate', K.perPlate(1.5).count, 1);
 ok('spacebar per plate', K.perPlate(6.25).count, 0);
 
@@ -164,15 +195,26 @@ const two = [
   { ...K.build({ profile: 'DSA', sizeU: 1 }), name: 'b' }
 ];
 const plate = K.layout(two);
-ok('both caps placed', plate.placed.length, 2);
-ok('none left over', plate.leftOver, 0);
-truthy('they do not overlap', Math.abs(plate.placed[0].x - plate.placed[1].x) >= 18);
+/* Same arithmetic as perPlate, and the same printed evidence: one lands, one
+   waits for the next run, and layout SAYS so rather than handing back a plate
+   the slicer will quietly shrink. */
+ok('one cap placed', plate.placed.length, 1);
+ok('and one left over', plate.leftOver, 1);
+truthy('and it says so in words', (plate.issues || []).some(i => /did not fit/.test(i)),
+  JSON.stringify(plate.issues));
+/* With one cap on the plate there is no pair to overlap, so the question
+   becomes the one that still means something: a SECOND plate, run for the
+   leftover, has to place it - a cap that fits must never be dropped twice. */
+const second = K.layout([two[1]]);
+ok('the leftover cap fits on a plate of its own', second.placed.length, 1);
 let px = [Infinity, -Infinity];
 for (let i = 0; i < plate.positions.length; i += 3) {
   if (plate.positions[i] < px[0]) px[0] = plate.positions[i];
   if (plate.positions[i] > px[1]) px[1] = plate.positions[i];
 }
-truthy('the plate stays inside the bed', px[1] - px[0] <= K.BED.x + 1e-6);
+truthy('the plate stays inside the USABLE width, raft border included',
+  px[1] - px[0] <= K.usableBed().x + 1e-6,
+  (px[1] - px[0]).toFixed(2) + ' of ' + K.usableBed().x.toFixed(2));
 
 console.log('\nnesting packs by the footprint a cap PRINTS at, not the one it sits at');
 /* The bug this replaced: an artisan cap with raised relief has to lean over,
@@ -207,7 +249,12 @@ truthy('against the supported limit, which is lower than the flat one',
   entPlate.zLimitMm === K.BED.zSupported && K.BED.zSupported < K.BED.zFlat,
   entPlate.zLimitMm + ' mm');
 truthy('and turns that into layers', entPlate.layers > 0, entPlate.layers + ' at 0.05 mm');
-ok('a plate that fits says so', flatPair.ok, true);
+/* flatPair is two 1u caps, which no longer share a plate - 37.5 mm of caps
+   and gap against 35.6 mm of usable width. The claim worth keeping is that the
+   verdict MATCHES the placing, whichever way it goes: a plate that reports ok
+   has to have placed everything it was given. */
+ok('the verdict matches what was placed', flatPair.ok, flatPair.leftOver === 0);
+ok('and the pair does not fit one plate any more', flatPair.leftOver, 1);
 
 console.log('\na tall artisan sculpt still nests');
 /* The Meshy case: a generated sculpt protrudes far more than a 0.55 mm legend,
@@ -223,7 +270,14 @@ ok('and it is still watertight', globalThis.meshHealth(artisan.positions).watert
 truthy('the stem is untouched by it',
   Math.abs(artisan.slotWidth - (K.MX.crossWide + K.MX.slotClearance)) < 1e-6);
 const artPlate = K.layout([{ ...artisan, name: 'a' }, { ...artisan, name: 'b' }]);
-truthy('two of them still nest', artPlate.placed.length === 2, artPlate.issues.join('; ') || 'both placed');
+/* The point of this one was never the number two - it was that a TALL cap is
+   packed by the footprint it prints at rather than by its height. One lands
+   and one waits, and the reason given is the plate's width, not the sculpt. */
+truthy('a sculpted cap still lands', artPlate.placed.length >= 1,
+  artPlate.issues.join('; ') || 'placed');
+truthy('and the leftover is reported rather than dropped',
+  artPlate.placed.length + (artPlate.leftOver || 0) === 2,
+  artPlate.placed.length + ' placed, ' + artPlate.leftOver + ' left');
 truthy('the plate is as tall as the sculpt makes it',
   artPlate.plateHeightMm >= artisan.size.z - 0.01,
   artPlate.plateHeightMm + ' mm');
@@ -241,7 +295,10 @@ function overlaps(p) {
 const six = K.layout(['a','b','c','d','e','f'].map(n =>
   ({ ...K.build({ profile: 'XDA', row: 'R3', sizeU: 1, topGrid: 13 }), name: n })));
 ok('six 1u caps overlap nowhere', overlaps(six.placed), null);
-truthy('two fit per run, so six is three runs', six.placed.length === 2 && six.leftOver === 4,
+/* One per run now - see usableBed(). The invariant that matters is that the
+   six are accounted for, none silently lost. */
+truthy('one fits per run, and the rest are accounted for',
+  six.placed.length === 1 && six.placed.length + six.leftOver === 6,
   six.placed.length + ' placed, ' + six.leftOver + ' left over');
 let inside = true;
 for (let i = 0; i < six.positions.length; i += 3) {
@@ -253,7 +310,7 @@ ok('and every one is inside the bed', inside, true);
 console.log('\nplanning a whole set');
 const set = K.planSet(['1','2','3','4','5','6'].map(n =>
   ({ ...K.build({ profile: 'XDA', row: 'R3', sizeU: 1, topGrid: 13 }), name: n })));
-ok('six caps take three runs', set.runs, 3);
+ok('six caps take six runs', set.runs, 6);
 ok('none stranded', set.stranded, 0);
 truthy('and it totals the layers across them', set.totalLayers > 0, set.totalLayers + ' layers');
 
@@ -300,8 +357,17 @@ function plateOf(cap) {
     { positions: cap.positions, size: cap.size, name: 'b', printPlan: cap.printPlan }]);
 }
 const engPlate = plateOf(engCap), upPlate = plateOf(upCap);
-ok('two engraved caps share a plate', engPlate.placed.length, 2);
-ok('a raised one takes the plate to itself', upPlate.placed.length, 1);
+/* Both plates hold one cap now - 1u caps no longer pair, see usableBed() -
+   so the claim moves to what still separates the two cases: an engraved cap
+   lies flat and a raised one leans, which is a different gap, a different
+   ceiling, and a different number of layers. The count is no longer the
+   thing that tells them apart, and pretending otherwise would leave a test
+   that passes on both. */
+ok('an engraved cap lands', engPlate.placed.length, 1);
+ok('so does a raised one', upPlate.placed.length, 1);
+truthy('and the engraved one lies flat while the raised one leans',
+  !engCap.printPlan.tilt && upCap.printPlan.tilt > 0,
+  engCap.printPlan.tilt + ' vs ' + upCap.printPlan.tilt);
 truthy('the gap opens for its supports', upPlate.gapMm > engPlate.gapMm,
   upPlate.gapMm + ' vs ' + engPlate.gapMm + ' mm');
 ok('measured against the supported ceiling', upPlate.zLimitMm, K.BED.zSupported);

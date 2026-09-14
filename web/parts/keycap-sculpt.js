@@ -701,7 +701,17 @@
      on the skirt and the leading edge rather than on the sculpt. */
   function printPose(seated, cap, opts) {
     var o = opts || {};
-    var bed = o.bed || { x: 40.8, y: 30.6, zSupported: 52 };
+    /* THE SAME USABLE AREA AS THE PACKER, or the two disagree and the owner
+       finds out at the slicer. This held its own copy of the bed - the bare
+       40.8 x 30.6 - so it picked the shallowest lean whose footprint fit THAT,
+       and layout(), which reserves the raft's border and the support feet,
+       then refused the very cap printPose had just approved. Ask keycap.js for
+       the number; fall back to the bare bed only when it is not loaded, which
+       in this product it always is. */
+    var bed = o.bed || (function () {
+      var u = root.keycap && root.keycap.usableBed && root.keycap.usableBed();
+      return u ? { x: u.x, y: u.y, zSupported: 52 } : { x: 40.8, y: 30.6, zSupported: 52 };
+    })();
     var L = Math.max(seated.footprintMm.x, cap.size.x);
     var D = seated.footprintMm.y;
     var h = seated.totalHeightMm;
@@ -748,8 +758,18 @@
     var pick = null;
     for (var t = MIN_LEAN; t <= MAX_LEAN; t += 0.5) {
       var c0 = at(t);
-      if (c0.foot <= bed.x - 0.5 && c0.depth <= bed.y && c0.height <= bed.zSupported) {
+      /* EITHER WAY ROUND. A lean grows the part along ONE axis, and this
+         asked only whether that axis was the bed's x - so a 1u cap with a
+         28 mm figure on it, which needs 32.5 mm in the direction it leans,
+         was refused against the 22.4 mm of usable depth while 32.6 mm of
+         usable width sat unused beside it. layout() already turns a part
+         90 degrees when that is what makes it land; printPose only had to
+         stop ruling it out first. */
+      var landsFlat   = c0.foot <= bed.x - 0.5 && c0.depth <= bed.y;
+      var landsTurned = c0.depth <= bed.x - 0.5 && c0.foot <= bed.y;
+      if ((landsFlat || landsTurned) && c0.height <= bed.zSupported) {
         pick = c0;
+        pick.turned = !landsFlat;
         break;
       }
     }

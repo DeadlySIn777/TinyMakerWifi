@@ -1460,7 +1460,11 @@
        A dropped file has no intended pose and should be auto-oriented; a cap
        from this card has one, and it is on the screen next to the button. */
     var ok = window.slicerLoadMesh(lay.positions, (caps.length > 1 ? 'keycaps' : caps[0].name) + '.stl',
-                                   lay.positions.byteLength, { keepPose: true });
+                                   lay.positions.byteLength,
+                                   /* noScale: a keycap's cross slot is 1.23 mm and
+                                      the slicer's auto-fit would shrink it without
+                                      being asked. See slicerNoScale. */
+                                   { keepPose: true, noScale: true });
     /* AND THEN TAKE THE PERSON THERE. Create shows one tool at a time, and the
        slicer lives in the OTHER one - so "Send to slicer" loaded the mesh into
        a card with display:none and reported success into a room nobody was
