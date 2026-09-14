@@ -93,6 +93,19 @@
                 style='flex:1 1 90px' disabled>Clear</button>
             </div>
             <p id='kcGenNote' class='hint'></p>
+            <!-- THE WAY ROUND A BLOCKED NETWORK. Generating was the only way to
+                 get a model onto a cap, so one remote call was a single point
+                 of failure for the whole product: a blocker extension, a phone
+                 on the printer's own AP, a Meshy outage, and the artisan
+                 workflow simply stopped with "Failed to fetch". Anything you
+                 already have - generated on meshy.ai in a normal tab, bought,
+                 downloaded, sculpted yourself - goes straight on the cap from
+                 here, and the stage takes a drop as well. -->
+            <label class='kcOpen' id='kcOpenWrap'>
+              <span>Open a .glb or .stl</span>
+              <input type='file' id='kcFile' accept='.glb,.stl,model/gltf-binary'
+                style='display:none'>
+            </label>
           </div>
 
           <div data-art='lib' hidden>
@@ -374,6 +387,14 @@
   font:600 11px/1 ui-sans-serif,system-ui;cursor:pointer;opacity:0;transition:opacity .12s}
 #kcCard .kcShelfItem:hover .kcShelfDel{opacity:1}
 #kcCard .kcShelfDel:hover{color:var(--dangertxt)}
+/* The file door, and the drop target it shares with the stage. */
+#kcCard .kcOpen{display:flex;align-items:center;justify-content:center;gap:8px;
+  margin-top:10px;padding:11px 14px;border:1px dashed var(--line2);border-radius:10px;
+  color:var(--muted);font:600 clamp(11.5px,1.05cqw,13.5px)/1 ui-sans-serif,system-ui;
+  cursor:pointer;transition:border-color .13s,color .13s,background .13s}
+#kcCard .kcOpen:hover{border-color:var(--accent-line);color:var(--text);
+  background:var(--accent-soft)}
+#kcCard .kcStage.kcDrop{outline:2px dashed var(--accent);outline-offset:-6px}
 #kcCard .kcAdv{margin-top:clamp(12px,1.5cqw,20px);border-top:1px solid var(--line);
   padding-top:clamp(9px,1.1cqw,15px)}
 #kcCard .kcAdv summary{cursor:pointer;font:600 clamp(10px,1.05cqw,14px)/1 ui-sans-serif,system-ui;

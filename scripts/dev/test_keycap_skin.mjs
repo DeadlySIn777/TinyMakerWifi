@@ -139,5 +139,36 @@ truthy('it sizes the sculpt to the cap', adv.sculptMm > 10 && adv.sculptMm < 18,
 truthy('and names the smallest feature the mask can hold',
   adv.smallestFeatureMm > 0.3 && adv.smallestFeatureMm < 0.8, adv.smallestFeatureMm + ' mm');
 
+
+console.log('\nTHE PROMPT KNOWS WHAT SIZE THE CAP IS');
+/* The generator cannot see the cap. Asked for "a dragon" it composes for a
+   screen and returns 0.2 mm whiskers - three quarters of a mask pixel, so they
+   simply do not exist on the part. And a 2.25u Shift is 42 mm wide by 19 deep,
+   so an upright figure has to be shrunk to the DEPTH and throws away more than
+   half the width the key actually has. */
+const oneU = { wMm: 19.08, dMm: 18.65, hMm: 13, minFeatureMm: 0.51 };
+const shift = { wMm: 42.46, dMm: 18.65, hMm: 13, minFeatureMm: 0.51 };
+truthy('a 1u prompt states the print size', /sized to print at about 19 by 19/.test(S.promptFor('pikachu', null, 'sculpt', oneU)));
+truthy('and the smallest feature the mask can hold', /finer than 0.51 mm/.test(S.promptFor('pikachu', null, 'sculpt', oneU)));
+truthy('a 1u cap is NOT told to compose across the width',
+  !/ACROSS the width/.test(S.promptFor('pikachu', null, 'sculpt', oneU)));
+truthy('a 2.25u Shift IS', /ACROSS the width/.test(S.promptFor('two figures', null, 'sculpt', shift)));
+truthy('and it says why - a scene, not one upright figure',
+  /side by side/.test(S.promptFor('two figures', null, 'sculpt', shift)));
+truthy('the sculpt tail survives alongside the size sentence',
+  /full 3D figurine/.test(S.promptFor('pikachu', null, 'sculpt', oneU)));
+ok('no cap spec, no size sentence - the old callers still work',
+  /sized to print/.test(S.promptFor('pikachu')), false);
+ok('capSentence says nothing about nothing', S.capSentence(null), '');
+
+/* The bug this was written for: the Generate handler read
+   `typed || (st.icon ? promptFor(st.icon) : '')`, so ANY typed prompt went to
+   Meshy raw and the tail only applied to a branch whose picker had been deleted
+   from the markup. Free text has to come back tailed. */
+truthy('free text is composed, not passed through',
+  S.promptFor('a rubber duck', null, 'sculpt', oneU).length > 'a rubber duck'.length + 100);
+truthy('and it still starts with what was typed',
+  S.promptFor('a rubber duck', null, 'sculpt', oneU).indexOf('a rubber duck') === 0);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

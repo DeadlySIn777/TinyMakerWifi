@@ -211,11 +211,39 @@
     creeper:  'a Minecraft creeper head, blocky cube, square pixel face'
   };
 
-  /* mode: 'sculpt' (default - a real object on the cap) or 'relief'. */
-  function promptFor(name, extra, mode) {
+  /* WHAT THE GENERATOR CANNOT SEE is the cap. It is given a sentence and asked
+     for a model, with no idea that the model has to end up 18.6 mm across on a
+     machine whose pixel is 127.5 microns - so it returns something composed for
+     a screen, with scales and whiskers and a 0.2 mm sword that is three quarters
+     of a mask pixel wide and simply will not exist.
+
+     Worse for a Shift key: 42.5 mm wide and 18.6 deep is two and a third times
+     wider than it is deep, and a generator asked for "a Pikachu" returns an
+     upright figure that has to be shrunk to the DEPTH to fit - throwing away
+     more than half the width the key actually has. Telling it the shape of the
+     space changes what it composes.
+
+     These numbers come from seat()'s real envelope, not from the cap's nominal
+     size, so the sentence describes the room the sculpt will genuinely get. */
+  function capSentence(c) {
+    if (!c || !c.wMm) return '';
+    var s = ', sized to print at about ' + c.wMm.toFixed(0) + ' by ' +
+            c.dMm.toFixed(0) + ' by ' + c.hMm.toFixed(0) + ' mm';
+    if (c.wMm > c.dMm * 1.6)
+      s += ', which is far wider than it is deep, so compose it ACROSS the width - ' +
+           'a scene or several figures side by side rather than one upright figure';
+    if (c.minFeatureMm)
+      s += ', with no detail finer than ' + c.minFeatureMm.toFixed(2) +
+           ' mm because anything smaller will not print at that size';
+    return s;
+  }
+
+  /* mode: 'sculpt' (default - a real object on the cap) or 'relief'.
+     cap: the optional envelope from capSentence() above. */
+  function promptFor(name, extra, mode, cap) {
     var base = PROMPTS[name] || String(name || '');
     var tail = (mode === 'relief') ? RELIEF_TAIL : SCULPT_TAIL;
-    return base + (extra ? ', ' + extra : '') + tail;
+    return base + (extra ? ', ' + extra : '') + tail + capSentence(cap);
   }
 
   /* What the generator cannot know and the printer decides. Handed to the card
@@ -236,6 +264,7 @@
   root.keycapSkin = {
     heightField: heightField, reliefFromField: reliefFromField,
     skinFromMesh: skinFromMesh, PROMPTS: PROMPTS, promptFor: promptFor,
+    capSentence: capSentence,
     printableAdvice: printableAdvice, SCULPT_TAIL: SCULPT_TAIL, RELIEF_TAIL: RELIEF_TAIL
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.keycapSkin;

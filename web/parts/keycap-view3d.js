@@ -255,21 +255,48 @@
     var p = this.pos, nn = this.nrm, tris = p.length / 9;
     var a = [0,0,0], b = [0,0,0], d = [0,0,0], i;
 
-    // ---- contact shadow: the silhouette flattened onto the ground ---------
-    g.save();
-    g.globalAlpha = 0.30;
-    g.filter = 'blur(' + Math.round(Math.min(W, H) * 0.022) + 'px)';
-    g.fillStyle = css.shadow || 'rgba(0,0,0,0.9)';
-    g.beginPath();
+    /* ---- contact shadow: the silhouette flattened onto the ground ---------
+
+       ⚠️ THIS DREW NOTHING, and "nothing" is not a figure of speech: the net
+       filled area was measured at exactly zero. Every triangle of a closed mesh
+       is added to one path and filled with the default nonzero winding rule -
+       and a closed mesh has as much area winding one way as the other, so the
+       front faces and the back faces cancel to the pixel. The cap has been
+       floating on a flat sweep this whole time, which is most of why it read as
+       a render rather than a photograph: nothing grounds an object like the
+       dark line where it meets the surface.
+
+       Keeping only the front-winding triangles makes the path the silhouette
+       union instead of a signed sum. And one blur cannot do the job a contact
+       shadow does - the tight dark line under the skirt and the soft ambient
+       spread are different distances - so it fills twice off one path. */
+    var sil = (typeof Path2D === 'function') ? new Path2D() : null;
+    var kept = 0;
     for (i = 0; i < tris; i++) {
       var q = i * 9;
       project(p[q],   p[q+1],   0, a);
       project(p[q+3], p[q+4],   0, b);
       project(p[q+6], p[q+7],   0, d);
-      g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.lineTo(d[0], d[1]);
+      /* Screen-space signed area. Back-winding triangles are the underside of
+         the same silhouette and subtract exactly what the top adds. */
+      if ((b[0]-a[0]) * (d[1]-a[1]) - (b[1]-a[1]) * (d[0]-a[0]) <= 0) continue;
+      kept++;
+      if (sil) { sil.moveTo(a[0], a[1]); sil.lineTo(b[0], b[1]); sil.lineTo(d[0], d[1]); sil.closePath(); }
+      else { g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.lineTo(d[0], d[1]); }
     }
-    g.fill();
-    g.restore();
+    if (kept) {
+      g.save();
+      g.fillStyle = css.shadow || 'rgba(0,0,0,0.55)';
+      var m = Math.min(W, H);
+      /* wide and faint first, then tight and dark on top of it */
+      g.globalAlpha = 0.16;
+      g.filter = 'blur(' + Math.max(2, Math.round(m * 0.024)) + 'px)';
+      if (sil) g.fill(sil); else g.fill();
+      g.globalAlpha = 0.34;
+      g.filter = 'blur(' + Math.max(1, Math.round(m * 0.007)) + 'px)';
+      if (sil) g.fill(sil); else g.fill();
+      g.restore();
+    }
 
     // ---- the cap ----------------------------------------------------------
     var img = g.getImageData(0, 0, W, H);

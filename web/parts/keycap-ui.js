@@ -336,12 +336,106 @@
     }).catch(function (e) { say('kcShelfNote', e.message, 'bad'); });
   }
 
+  // ---- a model you already have ------------------------------------------
+  /* Same destination as a generation, none of the network. Whatever comes in
+     goes through the identical seat/reseat/check path, so a dropped file is not
+     a lesser citizen - it gets the floating-piece check, the print pose and the
+     library entry exactly like a generated one. */
+  function takeMesh(positions, label) {
+    if (!positions || positions.length < 9) throw new Error('No usable triangles in that file.');
+    var tris = positions.length / 9;
+    /* 30k is what a generation asks for; much past that and the software
+       rasteriser in this page starts costing the status poll its timeslot,
+       which is the bug that produced "printer busy" all afternoon. */
+    if (tris > 400000)
+      throw new Error(tris.toLocaleString() + ' triangles is too many to spin in the ' +
+        'browser. Decimate it to about 30,000 first.');
+    st.sculpt = positions;
+    st.skin = null;
+    st.icon = null;
+    st.skinFrom = label || '';
+    st.art = 'gen';
+    paintArt('gen');
+    var adv = window.keycapSkin && window.keycapSkin.printableAdvice
+            ? window.keycapSkin.printableAdvice(
+                K.capWidth(st.sizeU) - 2 * K.PROFILES[st.profile].topInset)
+            : null;
+    say('kcGenNote', 'seated ' + tris.toLocaleString() + ' triangles from ' +
+      (label || 'the file') + (adv ? ' \u00b7 ' + adv.note : ''));
+    refresh();
+    setTimeout(function () { keepCurrent(label || 'opened model'); }, 600);
+  }
+
+  function openModelFile(file) {
+    if (!file) return;
+    if (!window.stlRead) { say('kcGenNote', 'The model reader is missing from this build.', 'bad'); return; }
+    if (file.size > 60 * 1024 * 1024) {
+      say('kcGenNote', 'That file is ' + (file.size / 1048576).toFixed(0) +
+        ' MB. Anything past about 60 MB will not fit in the page.', 'bad');
+      return;
+    }
+    say('kcGenNote', 'reading ' + file.name + '\u2026');
+    file.arrayBuffer().then(function (buf) {
+      var r = window.stlRead.readModelFile(buf, file.name);
+      takeMesh(r.positions, file.name.replace(/\.[^.]+$/, ''));
+    }).catch(function (e) {
+      say('kcGenNote', e.message, 'bad');
+    });
+  }
+
+  $('kcFile') && $('kcFile').addEventListener('change', function (e) {
+    var f = e.target.files && e.target.files[0];
+    openModelFile(f);
+    e.target.value = '';                 // so the same file can be re-opened
+  });
+
+  /* Dropping onto the picture is what people try first. */
+  (function () {
+    var stage = $('kcCard') && $('kcCard').querySelector('.kcStage');
+    if (!stage) return;
+    ['dragenter', 'dragover'].forEach(function (ev) {
+      stage.addEventListener(ev, function (e) {
+        if (!e.dataTransfer || Array.prototype.indexOf.call(e.dataTransfer.types || [], 'Files') < 0) return;
+        e.preventDefault(); e.stopPropagation();
+        e.dataTransfer.dropEffect = 'copy';
+        stage.classList.add('kcDrop');
+      });
+    });
+    ['dragleave', 'dragend'].forEach(function (ev) {
+      stage.addEventListener(ev, function () { stage.classList.remove('kcDrop'); });
+    });
+    stage.addEventListener('drop', function (e) {
+      if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+      e.preventDefault(); e.stopPropagation();
+      stage.classList.remove('kcDrop');
+      openModelFile(e.dataTransfer.files[0]);
+    });
+  })();
+
   // ---- the Meshy route ---------------------------------------------------
   function genBusy(on) {
     ['kcGen', 'kcGenClear', 'kcNext', 'kcBack'].forEach(function (id) {
       var e = $(id); if (e) e.disabled = !!on;
     });
     if (!on) $('kcGenClear').disabled = !(st.skin || st.sculpt);
+  }
+
+  /* seat()'s own envelope, so the sentence describes the room the sculpt will
+     actually get rather than the cap's nominal size. Keep these in step with
+     keycap-sculpt.seat() - they are the same three lines. */
+  function capSpec() {
+    var pr = K.PROFILES[st.profile];
+    if (!pr) return null;
+    var capW = K.capWidth(st.sizeU);
+    var spread = 1.06;
+    var adv = window.keycapSkin && window.keycapSkin.printableAdvice
+            ? window.keycapSkin.printableAdvice(capW - 2 * pr.topInset) : null;
+    return {
+      wMm: Math.min(capW * spread, 19.05 * st.sizeU - 0.4),
+      dMm: Math.min(K.DEPTH * spread, 19.05 - 0.4),
+      hMm: Math.max(6, st.depth > 1 ? st.depth * 5 : 13),
+      minFeatureMm: adv ? adv.smallestFeatureMm : 0
+    };
   }
 
   $('kcGen').addEventListener('click', function () {
@@ -352,7 +446,21 @@
        nothing and the mask cannot hold a limb thinner than half a millimetre.
        (This comment used to claim the opposite - it described the tail from the
        height-field days, which asked for a flat relief and then stood it up.) */
-    var prompt = typed || (st.icon ? window.keycapSkin.promptFor(st.icon) : '');
+    /* ⚠️ THE TAIL WAS NEVER REACHING A REAL GENERATION. This line read
+         typed || (st.icon ? promptFor(st.icon) : '')
+       so the moment anybody typed anything - which is every generation anyone
+       has ever run - the text went to Meshy raw. No "full 3D figurine", no
+       "standing on a base with everything touching it", no "no thin or fragile
+       parts". The entire prompt rewrite applied only to the branch that fires
+       when the box is EMPTY and a built-in icon is selected, and the picker
+       that set st.icon was removed from the markup, so that branch is dead
+       code. Meshy has been answering "pikachu" with whatever it felt like.
+
+       Everything goes through promptFor now, and it is handed the cap's real
+       print envelope so the generator is told the shape of the space it is
+       composing for. */
+    var subject = typed || st.icon || '';
+    var prompt = subject ? window.keycapSkin.promptFor(subject, null, 'sculpt', capSpec()) : '';
     if (!prompt) { say('kcGenNote', 'Type what you want, or pick a drawn icon to start from.', 'bad'); return; }
     if (!window.meshy || !window.meshy.hasKey()) {
       say('kcGenNote', 'No Meshy key yet - add it under "Meshy API key" in the Generate a model card, then come back.', 'bad');
@@ -668,10 +776,35 @@
   /* The hero: the actual cap mesh, in 3D, spinnable. A keycap is an object and
      the flat heightfield never showed you one - not the profile, not the row
      angle, not the skirt. */
+  /* One place that turns the stylesheet into the numbers the rasteriser wants,
+     so the hero, the insets and the share card cannot drift apart. */
+  function viewTokens() {
+    var cs = getComputedStyle($('kcCard'));
+    function rgb(name, fallback) {
+      var v = (cs.getPropertyValue(name) || '').trim();
+      var m = v.match(/^#([0-9a-f]{6})$/i);
+      if (m) return [parseInt(m[1].slice(0, 2), 16), parseInt(m[1].slice(2, 4), 16),
+                     parseInt(m[1].slice(4, 6), 16)];
+      m = v.match(/rgba?\(([^)]+)\)/);
+      if (m) { var n = m[1].split(',').map(parseFloat); return [n[0], n[1], n[2]]; }
+      return fallback;
+    }
+    var light = document.documentElement.getAttribute('data-theme') === 'light';
+    return {
+      base: rgb('--kCap', light ? [222, 216, 206] : [196, 188, 176]),
+      shadow: light ? 'rgba(24,26,32,0.42)' : 'rgba(0,0,0,0.62)'
+    };
+  }
+
   function drawHero() {
     var c = $('kcTop'); if (!c || !window.keycapView3d) return;
     if (!hero) {
-      hero = window.keycapView3d.attach(c, { az: -0.62, el: 0.52, dist: 3.0, spin: false });
+      /* The rasteriser fell back to a hardcoded warm grey and a near-black
+         shadow in BOTH themes, because nothing ever handed it the page's
+         tokens - so on the light theme the cap sat in a black puddle. The
+         share-card path already reads these; the hero never did. */
+      hero = window.keycapView3d.attach(c, { az: -0.62, el: 0.52, dist: 3.0,
+                                             spin: false, tokens: viewTokens() });
       /* One slow turn on first sight, stopped by the first touch. Enough to
          read it as an object; not so much that it is annoying to aim at. */
       hero.autoSpin(true);

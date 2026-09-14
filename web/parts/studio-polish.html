@@ -191,9 +191,29 @@ main.wrap{
 #stPanel #kcCard .kcKeyLegend{margin-top:var(--st-3);
   font:500 var(--sf-xs)/1.4 inherit;color:var(--ink3)}
 
-/* The stage. A model-first page gives the model the height. */
-#stPanel #kcCard .kcStage{border-radius:12px;background:var(--st-sunken);
-  border:1px solid var(--line);overflow:hidden}
+/* THE STAGE IS A CYCLORAMA, NOT A BOX, and my own polish had flattened it:
+   `background:var(--st-sunken)` painted a single near-black rectangle over the
+   sweep the card already defined in --kSweep/--kFloor. On a flat black floor a
+   dark contact shadow is invisible by construction - you can render it
+   perfectly and still see nothing - so fixing the shadow in the rasteriser
+   bought nothing until the floor came back.
+
+   A pool of lighter graphite under where the cap stands, falling off to near
+   black at the edges: the object then sits IN something, its shadow has
+   somewhere to fall, and the silhouette separates from the surround. This is
+   the difference between a render and a product shot, and it costs one
+   gradient. */
+#stPanel #kcCard .kcStage{
+  border-radius:12px;border:1px solid var(--line);overflow:hidden;
+  background:
+    radial-gradient(ellipse 62% 42% at 50% 74%,
+      var(--kSweep) 0%, rgba(0,0,0,0) 72%),
+    linear-gradient(180deg,
+      var(--kFloor) 0%, var(--kSweep) 58%, var(--kFloor) 100%)}
+:root[data-theme='light'] #stPanel #kcCard .kcStage{
+  background:
+    radial-gradient(ellipse 62% 42% at 50% 74%, #ffffff 0%, rgba(255,255,255,0) 72%),
+    linear-gradient(180deg, #e7e9ee 0%, #f6f7f9 58%, #dfe2e8 100%)}
 @media(min-width:1000px){ #stPanel #kcCard .kcStage{min-height:min(56vh,560px)} }
 
 /* The tool bar already says "Keycaps" two centimetres above this, so the
