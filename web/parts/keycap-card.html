@@ -143,6 +143,10 @@
               <b id='kcDepthVal'>0.55</b></label>
             <label class='kcNum'><span>Corner</span>
               <input id='kcDigit' maxlength='1' placeholder='&mdash;' class='kcMono'></label>
+            <!-- Every key fills its own legend in now, so there has to be a way
+                 to say no without clearing a box you did not type in. -->
+            <label class='kcNum kcSwitch'><span>Legend</span>
+              <input id='kcLegendOn' type='checkbox' checked></label>
           </div>
           </details>
           <p id='kcLegendWarn' class='hint'></p>
@@ -395,6 +399,10 @@
 #kcCard .kcOpen:hover{border-color:var(--accent-line);color:var(--text);
   background:var(--accent-soft)}
 #kcCard .kcStage.kcDrop{outline:2px dashed var(--accent);outline-offset:-6px}
+/* A switch, not a text box, so it does not read as another field to fill. */
+#kcCard .kcSwitch{align-items:center}
+#kcCard .kcSwitch input{width:auto;min-width:0;margin:0;accent-color:var(--accent);
+  transform:scale(1.15);cursor:pointer}
 #kcCard .kcAdv{margin-top:clamp(12px,1.5cqw,20px);border-top:1px solid var(--line);
   padding-top:clamp(9px,1.1cqw,15px)}
 #kcCard .kcAdv summary{cursor:pointer;font:600 clamp(10px,1.05cqw,14px)/1 ui-sans-serif,system-ui;

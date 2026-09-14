@@ -317,6 +317,39 @@
     var lx = -0.44, ly = 0.34, lz = -0.83;
     var LL = Math.hypot(lx, ly, lz); lx/=LL; ly/=LL; lz/=LL;
 
+    /* ---- a lighting rig, instead of one lamp -----------------------------
+       One lambert term and a flat 0.24 ambient is why the cap read as grey
+       plastic: everything facing away from the single light collapses to the
+       same dead value, so the whole shadow side is one flat patch with no form
+       in it. A photograph of a small object almost never looks like that.
+
+       Three terms, which is the least that reads as a material:
+
+       KEY - the existing lamp, upper left and in front.
+       FILL - a dimmer, cooler lamp from the opposite side. It does not
+         pretend to be a second light source; it is what a white sweep bounces
+         back, and it is the difference between a shadow side that has shape
+         and one that is a silhouette.
+       HEMISPHERE AMBIENT - ambient is not one number. Light arriving from
+         above is the cool sky of the stage; light from below is warm bounce
+         off the sweep the cap is standing on. Blending the two by the
+         surface's up-facing component is what ties the object to the floor it
+         was just given, and it costs one lerp.
+
+       The specular is broadened from pow 40 to pow 18 and tinted towards the
+       key rather than pure white, because cured resin is satin, not chrome -
+       a tight white pinpoint on a matte object is the other half of the
+       plastic look. */
+    var fx = 0.52, fy = -0.20, fz = 0.83;
+    var FL = Math.hypot(fx, fy, fz); fx/=FL; fy/=FL; fz/=FL;
+
+    var KEY = 0.60, FILL = 0.26, AMB = 0.30;
+    /* Tints as per-channel multipliers around 1.0, so the base colour still
+       decides what the cap IS and these only say where the light came from. */
+    var SKY = css.sky || [0.88, 0.95, 1.10];      // cool, from above
+    var GND = css.ground || [1.10, 1.02, 0.90];   // warm bounce, from below
+    var FILLT = [0.90, 0.96, 1.08];               // the fill is the cool one
+
     var va = [0,0,0], vb = [0,0,0], vc = [0,0,0];
     var na = [0,0,0], nb = [0,0,0], nc = [0,0,0];
 
@@ -359,13 +392,19 @@
           var nL = 1 / (Math.hypot(nx, ny, nz) || 1);
           nx *= nL; ny *= nL; nz *= nL;
           var lam = nx*lx + ny*ly + nz*lz; if (lam < 0) lam = 0;
-          var rim = 1 - Math.abs(nz); rim = rim*rim*rim*0.22;
-          var spec = Math.pow(lam, 40) * 0.34;
-          var sh = 0.24 + 0.68*lam + rim;
+          var fil = nx*fx + ny*fy + nz*fz; if (fil < 0) fil = 0;
+          /* Screen y grows downward, so -ny is how much the surface faces up. */
+          var hemi = 0.5 - 0.5*ny; if (hemi < 0) hemi = 0; else if (hemi > 1) hemi = 1;
+          var rim = 1 - Math.abs(nz); rim = rim*rim*rim*0.20;
+          var spec = Math.pow(lam, 18) * 0.26;
+          var key = KEY*lam + rim;
           var k4 = o*4;
-          data[k4]   = Math.min(255, base[0]*sh + spec*255);
-          data[k4+1] = Math.min(255, base[1]*sh + spec*255);
-          data[k4+2] = Math.min(255, base[2]*sh + spec*255);
+          data[k4]   = Math.min(255, base[0]*(AMB*(SKY[0]*hemi + GND[0]*(1-hemi))
+                                              + key + FILL*fil*FILLT[0]) + spec*252);
+          data[k4+1] = Math.min(255, base[1]*(AMB*(SKY[1]*hemi + GND[1]*(1-hemi))
+                                              + key + FILL*fil*FILLT[1]) + spec*250);
+          data[k4+2] = Math.min(255, base[2]*(AMB*(SKY[2]*hemi + GND[2]*(1-hemi))
+                                              + key + FILL*fil*FILLT[2]) + spec*246);
           data[k4+3] = 255;
         }
       }

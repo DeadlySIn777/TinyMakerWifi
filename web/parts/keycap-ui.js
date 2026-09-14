@@ -198,7 +198,8 @@
         key: st.key, sizeU: st.sizeU, profile: st.profile, row: st.row,
         art: st.art, icon: st.icon, digit: st.digit, braille: st.braille,
         depth: st.depth, raised: st.raised, touchedFinish: !!st.touchedFinish,
-        libId: st.libId || null, prompt: st.skinFrom || '', step: st.step
+        libId: st.libId || null, prompt: st.skinFrom || '', step: st.step,
+        legendOn: st.legendOn !== false
       }));
     } catch (e) { /* private window, or storage off - not worth a message */ }
   }
@@ -246,6 +247,9 @@
        setArt: the full one would re-apply the mode defaults over the depth and
        finish this session is restoring. */
     st.art = d.art || 'gen';
+    st.legendOn = d.legendOn !== false;
+    if ($('kcLegendOn')) $('kcLegendOn').checked = st.legendOn;
+    if ($('kcDigit')) $('kcDigit').disabled = !st.legendOn;
     st.icon = d.icon || null;
     st.digit = d.digit || '';
     st.braille = d.braille || '';
@@ -610,6 +614,13 @@
 
   /* Real type where the browser can draw it, the hand-plotted polylines only
      as a fallback. Placed in the corner at a quarter of the face. */
+  /* One switch, read everywhere the corner legend is used. Default on, because
+     the board knows the key and putting its own character on it is what you
+     want nine times out of ten - but a Tarkov cap or a bare artisan blank
+     wants nothing on it, and clearing a box you never typed in is a strange
+     way to ask for that. */
+  function legendOn() { return st.legendOn !== false; }
+
   function digitRelief(raised) {
     if (!st.digit) return null;
     var g = ICO.glyphRelief ? ICO.glyphRelief(st.digit,
@@ -631,6 +642,9 @@
        from dots next to dots. */
     /* With a model seated on the cap the relief field carries only the corner
        digit, if any - the sculpt is real geometry, not a displacement. */
+    if (!legendOn()) {
+      if (st.sculpt || st.art === 'none') return null;
+    }
     if (st.sculpt) return digitRelief(false);
     if (st.art === 'none') return digitRelief(st.raised);
     if (st.art === 'braille') {
@@ -642,12 +656,12 @@
        abandoned: a height field can only extrude a 2D shape, which is why a
        generated creeper came out as three spikes and why keycap-sculpt seats
        the real mesh instead. Gone rather than left as a trap. */
-    if (!st.icon && !st.digit) return null;
-    if (!st.icon) return digitRelief(st.raised);
+    if (!st.icon && (!st.digit || !legendOn())) return null;
+    if (!st.icon) return legendOn() ? digitRelief(st.raised) : null;
     /* Icon and digit at their own depths, combined by whichever stands
        furthest proud - the icon may be deep, the digit must not follow it. */
     var ic = ICO.makeRelief({ icon: st.icon }, { depth: st.depth, raised: st.raised });
-    if (!st.digit) return ic;
+    if (!st.digit || !legendOn()) return ic;
     var dg = digitRelief(st.raised);
     var both = function (u, v, w, h) {
       var a = ic(u, v, w, h), b = dg(u, v, w, h);
@@ -669,10 +683,20 @@
      "Printer busy - waiting for it to answer": the status poll's fetch could
      not run while this was blocking, the poll timed out, and the page drew the
      obvious conclusion about a printer that was in fact sitting idle. */
-  var pending = 0;
+  var pending = 0, sharpen = 0;
   function refresh() {
     clearTimeout(pending);
+    clearTimeout(sharpen);
+    drawTop.sharp = false;
     pending = setTimeout(refreshNow, 110);
+    /* Once it has been still for long enough that nothing is being dragged,
+       redraw the legend inset at the size it is shown. */
+    sharpen = setTimeout(function () {
+      drawTop.sharp = true;
+      var rel = null;
+      try { rel = relief(); } catch (e) { return; }
+      try { drawTop(rel); } catch (e) {}
+    }, 520);
   }
   /* One place that builds a cap, at whichever resolution the caller needs. */
   function capFor(mode, rel) {
@@ -834,7 +858,27 @@
        next to a 3D view, not the thing that gets printed - the printability
        check rasterises the field properly at 127.5 microns elsewhere - and at
        200x200 it cost about a million SDF evaluations per keystroke. */
-    var g = c.getContext('2d'), W = 100, H = 100;
+    /* A 100 PX RENDER SHOWN AT 324 IS A 3.2x UPSCALE, and that is the whole
+       reason the letter looked soft - not the field, the resampling. But the
+       obvious fix is the one that caused the worst bug in this card's history:
+       this is five relief evaluations a pixel, so 200x200 is 200,000 SDF calls
+       on the main thread, the status poll cannot run, and the dashboard starts
+       announcing "Printer busy" about an idle printer.
+
+       So it renders twice. Cheap and immediate while anything is moving, then
+       once everything has been still for a moment, again at the size it is
+       actually displayed. Dragging the depth slider costs exactly what it cost
+       before; the picture you end up looking at is sharp. Nobody judges a
+       letter mid-drag. */
+    var hi = drawTop.sharp;
+    var W = 100, H = 100;
+    if (hi) {
+      var box = c.getBoundingClientRect();
+      var want = Math.round(Math.min(320, Math.max(100,
+                   box.width * (window.devicePixelRatio || 1))));
+      W = H = want;
+    }
+    var g = c.getContext('2d');
     c.width = W; c.height = H;
     var img = g.createImageData(W, H);
     var pr = K.PROFILES[st.profile], dd = pr.dishDepth;
@@ -1382,6 +1426,12 @@
       // Braille must be raised; a recess is not readable
       if (!st.raised) setFinish(true);
     } else { brailleNote = ''; brailleBad = false; }
+    refresh();
+  });
+
+  $('kcLegendOn') && $('kcLegendOn').addEventListener('change', function () {
+    st.legendOn = this.checked;
+    if ($('kcDigit')) $('kcDigit').disabled = !this.checked;
     refresh();
   });
 
