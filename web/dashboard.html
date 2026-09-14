@@ -1244,6 +1244,11 @@ const setShareUI=(id,ready,shared)=>{const b=$(id);if(!b)return;
   if(b.dataset.icon)b.style.visibility=ready?'':'hidden'; else show(id,ready);};
 const enc=v=>encodeURIComponent(v||'').replace(/'/g,'%27');
 const esc=v=>String(v||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+/* Exported because parts/ scripts cannot see it otherwise: this is a
+   top-level `const` in a classic script, so it never lands on window, and
+   sd-batch.js's `if (typeof root.api === 'function')` guard could never pass -
+   every batch delete quietly used its own thinner fallback instead of the
+   helper that carries the timeout and the X-TinyMaker header. */
 const api=async(path,opt,timeoutMs)=>{
   const o=Object.assign({cache:'no-store'},opt||{});let timer=null,ctrl=null;
   // #95: irodymas, kad uzklausa is musu pulto - be jos printeris rasymo
@@ -2705,6 +2710,12 @@ const applyStatus=s=>{
     const justConnected=!firstStatusSeen&&!!(s&&s.ok);
     if(justConnected){firstStatusSeen=true;setPageWaiting(false);}
     const was=statusData&&statusData.busy; statusData=s;
+    /* The keycap card was quoting layers "at 0.05 mm" - a constant written into
+       the report - while the machine downstairs is set to whatever the owner
+       chose. statusData is a top-level const and parts/ scripts cannot see it,
+       so the one field they need is published. Read-only by convention: the
+       card uses it, nothing writes it back. */
+    window.tmStatus=s;
     // 1-32/1-33: busy may mean an SD job (delete/import), not a print - the
     // print UI must not appear then (its Stop/Pause would target nothing).
     const sdJob=s.sdJob||'', busyPrint=!!s.busy&&!sdJob;
@@ -7058,6 +7069,7 @@ $('vatEmptyButton').addEventListener('click',async()=>{if(!await uiConfirm('Tell
 $('cfgWifiEnabled').addEventListener('change',confirmNetworkToggle);
 $('cfgWebDashboardEnabled').addEventListener('change',confirmNetworkToggle);
 $('cfgMqttEnabled').addEventListener('change',updateMqttFields);
+window.api=api;
 /*#include parts/meshy-glb.js*/
 /*#include parts/stl-read.js*/
 /*#include parts/mesh-health.js*/

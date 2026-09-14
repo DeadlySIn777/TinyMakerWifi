@@ -186,7 +186,15 @@
         o.classList.toggle('on', o.dataset.view === last);
       });
     } else {
-      clickOld('homeViewButton');
+      /* ONLY WHEN THE PAGE IS NOT ALREADY HOME. Monitor, Create and Library all
+         live inside #homeView, so switching between them needs nothing from the
+         page's own view machinery - but this clicked #homeViewButton every
+         time, including on the tab that was already active. openView('home')
+         bumps fetchSlicesSeq, which aborts a layer fetch in progress, clears
+         the boot-animation previews and repaints the dashboard preview. Going
+         to Library - which needs nothing from the printer at all - was killing
+         a slice load running in another card. */
+      if (!$('homeViewButton').classList.contains('active')) clickOld('homeViewButton');
       mMon.classList.toggle('stOff', next !== 'monitor');
       mCre.classList.toggle('stOff', next !== 'create');
       mLib.classList.toggle('stOff', next !== 'library');
@@ -207,7 +215,14 @@
 
   Array.prototype.forEach.call(nav.querySelectorAll('.stTab'), function (t) {
     t.addEventListener('click', function () { go(t.dataset.room); });
+    /* role=tablist without aria-controls tells a screen reader these are tabs
+       and then refuses to say what they open. */
+    var panel = { monitor: 'stMonitor', create: 'stCreate',
+                  library: 'stLibrary', settings: 'stSettingsNav' }[t.dataset.room];
+    if (panel) t.setAttribute('aria-controls', panel);
+    t.setAttribute('tabindex', '0');
   });
+  [mMon, mCre, mLib].forEach(function (r) { r.setAttribute('role', 'tabpanel'); });
 
   if (sub) {
     Array.prototype.forEach.call(sub.querySelectorAll('.stSubBtn'), function (b) {
@@ -221,8 +236,20 @@
       });
     });
     /* The Shop tab only exists when the page decided it does. */
+    /* THIS RACED THE CONFIG LOAD. #connectViewButton starts hidden and
+       loadConfig() unhides it later, when it learns whether the shop is even
+       enabled - and this read the class once, at startup, and never again. So
+       the pill's visibility was decided by which of the two happened to run
+       first. Watch the button instead of sampling it. */
     var cvb = $('connectViewButton'), shop = sub.querySelector("[data-view='connect']");
-    if (shop && cvb) shop.classList.toggle('stOff', cvb.classList.contains('hidden'));
+    if (shop && cvb) {
+      var syncShop = function () {
+        shop.classList.toggle('stOff', cvb.classList.contains('hidden'));
+      };
+      syncShop();
+      if (window.MutationObserver)
+        new MutationObserver(syncShop).observe(cvb, { attributes: true, attributeFilter: ['class'] });
+    }
   }
 
   /* The old toolbar stays in the DOM and stops being visible. It is the
@@ -243,8 +270,14 @@
         if (!b.classList.contains('active')) return;
         if (pair[1] === 'settings' && room !== 'settings') {
           room = 'settings';
+          /* aria-selected as well as the class: go() sets both, and this path -
+             the page navigating itself, from the firmware badge or a deep link
+             - set only the paint, so a screen reader was told the old tab was
+             still current. */
           Array.prototype.forEach.call(nav.querySelectorAll('.stTab'), function (t) {
-            t.classList.toggle('on', t.dataset.room === 'settings');
+            var on = t.dataset.room === 'settings';
+            t.classList.toggle('on', on);
+            t.setAttribute('aria-selected', on ? 'true' : 'false');
           });
           if (sub) sub.classList.remove('stOff');
         } else if (pair[1] === null && room === 'settings') {

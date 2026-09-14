@@ -112,8 +112,13 @@
     btn.classList.add('sel');
     st.key = k[0]; st.sizeU = k[1]; st.row = k[2];
     caliper(st.sizeU);
-    // a digit key gets its own digit for free; anything else starts blank
-    st.digit = /^[0-9]$/.test(k[0]) ? k[0] : '';
+    /* THE BOARD ALREADY KNOWS WHAT IS ON THE KEY. This only claimed the
+       digits, so picking Q or ; or / left the legend blank and the owner had to
+       type the character they had just pointed at. Every single-character key
+       carries its own label now; the named ones (Shift, Enter, Tab) stay blank
+       because the legend field is one character and a word does not fit - those
+       want the skirt treatment, which is a separate job. */
+    st.digit = (k[0] && k[0].length === 1 && k[0] !== ' ') ? k[0] : '';
     if ($('kcDigit')) $('kcDigit').value = st.digit;
     if (K.PROFILES[st.profile].uniform) st.row = Object.keys(K.PROFILES[st.profile].rows)[0];
     go(2);
@@ -926,6 +931,22 @@
       built.triangles.toLocaleString() + ' triangles');
   }
 
+  /* Set by the Braille input, rendered by legendWarn - the single owner of
+     #kcLegendWarn - so the two cannot race. */
+  var brailleNote = '', brailleBad = false;
+
+  /* WHAT THE PRINTER IS ACTUALLY SET TO. The report quoted "269 layers at
+     0.05 mm" on a machine that might be set to 0.035 or 0.10 - a number written
+     into the card rather than read from the thing that will print it, so the
+     clock and the layer count were both wrong by the ratio. Falls back to 0.05
+     when the printer has not answered yet, which is the same number as before,
+     so nothing regresses on a cold page. */
+  function layerMm() {
+    var s = window.tmStatus;
+    var h = s && Number(s.layerHeight);
+    return (h && h > 0.005 && h < 0.3) ? h : 0.05;
+  }
+
   function legendWarn(rel) {
     var pr = K.PROFILES[st.profile];
     /* THE SIZE LINE IS NOT PART OF THE LEGEND CHECK, and treating it as one is
@@ -944,6 +965,11 @@
        a piece that is floating does not come out wrong, it comes out somewhere
        else in the vat. This is the report that used to be computed and thrown
        away. */
+    if (st.art === 'braille' && brailleNote) {
+      say('kcLegendWarn', brailleNote, brailleBad ? 'bad' : '');
+      return;
+    }
+
     var sk = built && built.sculptCheck;
     if (sk) {
       var mv = built.seated && built.seated.moved;
@@ -985,7 +1011,8 @@
     var plan = built.printPlan;
     var tilt = plan.tilt || 0;
     var supports = !!plan.supports;
-    var layers = Math.ceil((plan.height || built.size.z) / 0.05);
+    var lh = layerMm();
+    var layers = Math.ceil((plan.height || built.size.z) / lh);
     var est = window.printSim ? window.printSim.estimate(PROFILE_ANY, layers) : null;
     /* The plan, so this agrees with the plate rather than re-deriving a flat
        cap that the packer never packs. */
@@ -1001,7 +1028,8 @@
       ['Orientation', tilt ? ('tilted ' + tilt + '°') : 'flat, top face down'],
       ['Supports', supports ? '<span class="warn">yes — on the leading edge</span>' : 'none'],
       ['Per plate', per.count + (per.count === 1 ? ' cap' : ' caps')],
-      ['Layers', layers.toLocaleString() + ' at 0.05 mm'],
+      ['Layers', layers.toLocaleString() + ' at ' + lh.toFixed(3).replace(/0+$/, '').replace(/\.$/, '') +
+                 ' mm' + (window.tmStatus && window.tmStatus.layerHeight ? '' : ' (assumed)')],
       ['Resin', money.resinMl.toFixed(2) + ' ml' + (money.supportsAdd ? ' incl. supports' : '')],
       ['Cost', money.cost < 0.01 ? 'under a penny' : money.cost.toFixed(2) + ' in resin']
     ];
@@ -1019,7 +1047,7 @@
        legend removes the lean, the supports and most of the print. */
     if (plan.forcedBy === 'relief') {
       var flat = K.fits(built.size.x, built.size.y, built.size.z);
-      var flatLayers = Math.ceil(built.size.z / 0.05);
+      var flatLayers = Math.ceil(built.size.z / lh);
       notes.push('Engraved instead: no lean, no supports, ' +
         K.perPlate(st.sizeU, null, built.size.z).count + ' per plate and ' +
         flatLayers.toLocaleString() + ' layers instead of ' + layers.toLocaleString() + '.');
@@ -1224,7 +1252,7 @@
     tok.floor = cs.getPropertyValue('--kFloor').trim();
     var money = K.costOf(built);
     var plan = built.printPlan;
-    var layers = Math.ceil((plan.tilt ? (plan.height || built.size.z) : built.size.z) / 0.05);
+    var layers = Math.ceil((plan.tilt ? (plan.height || built.size.z) : built.size.z) / layerMm());
     var est = window.printSim ? window.printSim.estimate(PROFILE_ANY, layers) : null;
     var card;
     try {
@@ -1256,13 +1284,54 @@
         say('kcState', 'shared · code ' + code.slice(0, 18) + '…');
       } else {
         save(blob, 'keycap-' + (st.key || st.profile) + '.png');
-        say('kcState', 'saved the picture · code copied');
       }
-      if (navigator.clipboard) navigator.clipboard.writeText(code).catch(function () {});
+      /* "code copied" WAS A LIE ON THIS MACHINE. navigator.clipboard only
+         exists in a secure context, and the printer serves the dashboard over
+         plain HTTP on the LAN - so on the one device this product is used from,
+         the object is undefined, the guard is false, nothing is copied, and the
+         card said it had been. The person then pastes an old clipboard into a
+         message and wonders why the cap is wrong.
+
+         So: try the modern API, fall back to the old execCommand trick which
+         still works on an insecure origin, and only say "copied" if one of them
+         actually reported success. If neither did, show the code so it can be
+         read off the screen - useless is better than false. */
+      copyText(code).then(function (ok) {
+        say('kcState', (navigator.share && navigator.canShare ? 'shared' : 'saved the picture') +
+          (ok ? ' \u00b7 code copied' : ' \u00b7 code ' + code));
+      });
       try { window.keycapShare.save(design, { name: st.name || SH.describe(design) }); }
       catch (e) { say('kcState', e.message, 'bad'); }
     }, 'image/png');
   });
+
+  /* One copy, honest about whether it worked. */
+  function copyText(text) {
+    return new Promise(function (res) {
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(text).then(function () { res(true); },
+                                                   function () { res(legacyCopy(text)); });
+          return;
+        }
+      } catch (e) {}
+      res(legacyCopy(text));
+    });
+  }
+  function legacyCopy(text) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+      document.body.appendChild(ta);
+      ta.select(); ta.setSelectionRange(0, text.length);
+      var ok = document.execCommand && document.execCommand('copy');
+      document.body.removeChild(ta);
+      return !!ok;
+    } catch (e) { return false; }
+  }
+  window.keycapCopyText = copyText;
 
   $('kcLoad') && $('kcLoad').addEventListener('click', function () {
     var raw = ($('kcCode').value || '').trim();
@@ -1303,10 +1372,16 @@
       var chk = window.keycapBraille.check(st.braille,
         K.capWidth(st.sizeU) - 2 * pr.topInset, K.DEPTH - 2 * pr.topInset,
         { dotHeight: Math.max(0.48, st.depth) });
-      say('kcLegendWarn', chk.ok ? chk.notes[0] : '⚠ ' + chk.issues[0], chk.ok ? '' : 'bad');
+      /* This used to write straight into #kcLegendWarn and then call refresh(),
+         which runs legendWarn() and writes over it about a tenth of a second
+         later - so the Braille fit warning flashed and was replaced by a legend
+         check that knows nothing about dots. Hand it to legendWarn instead and
+         let the one function that owns that line render it. */
+      brailleNote = chk.ok ? chk.notes[0] : '\u26a0 ' + chk.issues[0];
+      brailleBad = !chk.ok;
       // Braille must be raised; a recess is not readable
       if (!st.raised) setFinish(true);
-    }
+    } else { brailleNote = ''; brailleBad = false; }
     refresh();
   });
 

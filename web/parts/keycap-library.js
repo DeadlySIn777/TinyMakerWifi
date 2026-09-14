@@ -73,6 +73,36 @@
     return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
   }
 
+  /* Everything about a mesh that a LIST needs, measured once, here, while the
+     mesh is in hand.
+
+     The Library room asked for resin, size and storage per card and got a row
+     of em-dashes, because it computed them from rec.positions and list()
+     deliberately does not return positions - twenty cards would be twenty
+     megabytes of Float32Array to render a grid of captions. Both halves were
+     right on their own: the list must stay light, and the facts must be there.
+     So the facts are measured at save and travel with the summary. */
+  function measure(positions) {
+    if (!positions || !positions.length) return null;
+    var mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9], i, k, v;
+    for (i = 0; i < positions.length; i += 3)
+      for (k = 0; k < 3; k++) {
+        v = positions[i + k];
+        if (v < mn[k]) mn[k] = v;
+        if (v > mx[k]) mx[k] = v;
+      }
+    var out = { sizeMm: [+(mx[0]-mn[0]).toFixed(2), +(mx[1]-mn[1]).toFixed(2),
+                         +(mx[2]-mn[2]).toFixed(2)],
+                bytes: positions.length * 4 };
+    /* The same divergence-theorem sum the cost estimate uses, so the card and
+       the report cannot quote different resin for the same mesh. */
+    if (root.keycap && root.keycap.volumeMm3) {
+      try { out.resinMl = +(root.keycap.volumeMm3(positions) / 1000).toFixed(3); }
+      catch (e) { /* a broken mesh still gets a card */ }
+    }
+    return out;
+  }
+
   /* entry: { name, prompt, kind:'sculpt'|'skin'|'icon', positions?, thumb?, design? } */
   function save(entry) {
     var e = entry || {};
@@ -88,7 +118,8 @@
       /* Stored as the typed array it already is. This is the whole reason for
          IndexedDB, and the reason picking one costs nothing. */
       positions: e.positions || null,
-      triangles: e.positions ? e.positions.length / 9 : 0
+      triangles: e.positions ? e.positions.length / 9 : 0,
+      facts: measure(e.positions)
     };
     return tx('readwrite', function (os) { os.put(rec); return rec; })
       .then(function (r) { return trim().then(function () { return r; }); });
@@ -105,7 +136,11 @@
         var v = c.value;
         out.push({ id: v.id, at: v.at, name: v.name, prompt: v.prompt,
                    kind: v.kind, thumb: v.thumb, triangles: v.triangles,
-                   design: v.design });
+                   design: v.design,
+                   /* Measured at save. A record written before this existed has
+                      none, and the card says so for those two fields rather
+                      than loading a megabyte to fill in a caption. */
+                   facts: v.facts || null });
         c.continue();
       };
       return { get result() { return out; } };
@@ -145,6 +180,7 @@
   }
 
   root.keycapLibrary = { save: save, list: list, get: get, remove: remove,
+                         measure: measure,
                          clear: clear, trim: trim, usage: usage,
                          newId: newId, MAX: MAX };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.keycapLibrary;

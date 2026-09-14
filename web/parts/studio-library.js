@@ -38,25 +38,25 @@
     return b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.round(b / 1024) + ' KB';
   }
 
-  /* What the mesh itself says. Volume is the honest resin number - the same
-     divergence-theorem sum the cost estimate uses - and it is recomputed
-     here rather than trusted from the record, because a record written by an
-     older build may predate the field. */
+  /* These came out as a row of em-dashes on every card, because this read
+     rec.positions and list() does not return them - it cannot, or drawing the
+     grid would mean holding every mesh in memory at once. The measurements are
+     taken at save time now and travel with the summary, so a card costs a few
+     numbers rather than a megabyte. positions is still honoured for a record
+     handed over whole (get()), and triangles alone is enough for the exact
+     storage figure on anything saved before the facts existed. */
   function facts(rec) {
     var out = { triangles: rec.triangles || 0 };
-    if (rec.positions && root.keycap) {
-      try {
-        var mm3 = root.keycap.volumeMm3(rec.positions);
-        out.resinMl = mm3 / 1000;
-        var mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9], p = rec.positions, i, k;
-        for (i = 0; i < p.length; i += 3) for (k = 0; k < 3; k++) {
-          if (p[i + k] < mn[k]) mn[k] = p[i + k];
-          if (p[i + k] > mx[k]) mx[k] = p[i + k];
-        }
-        out.sizeMm = [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]];
-      } catch (e) { /* a broken record still gets a card */ }
+    if (rec.facts) {
+      out.resinMl = rec.facts.resinMl;
+      out.sizeMm = rec.facts.sizeMm;
+      out.bytes = rec.facts.bytes;
+    } else if (rec.positions && root.keycapLibrary && root.keycapLibrary.measure) {
+      var m = root.keycapLibrary.measure(rec.positions);
+      if (m) { out.resinMl = m.resinMl; out.sizeMm = m.sizeMm; out.bytes = m.bytes; }
     }
-    out.bytes = rec.positions ? rec.positions.length * 4 : 0;
+    /* A mesh is 9 floats a triangle, so this is exact even with no facts. */
+    if (!out.bytes) out.bytes = out.triangles * 9 * 4;
     return out;
   }
 
@@ -126,12 +126,19 @@
       sh.type = 'button'; sh.textContent = 'Code';
       sh.title = 'Copy the design code so somebody else can open the same cap';
       sh.addEventListener('click', function () {
-        var ok = false;
-        try {
-          if (navigator.clipboard) { navigator.clipboard.writeText(rec.design); ok = true; }
-        } catch (e) {}
-        sh.textContent = ok ? 'Copied' : rec.design.slice(0, 12) + '…';
-        setTimeout(function () { sh.textContent = 'Code'; }, 1800);
+        /* navigator.clipboard does not exist on an insecure origin, and this
+           page is served over plain HTTP - so the old `if (navigator.clipboard)
+           { write(); ok = true; }` set ok BEFORE the promise resolved and said
+           "Copied" whether or not anything was. keycapCopyText falls back to
+           execCommand and reports what actually happened. */
+        var done = function (ok) {
+          sh.textContent = ok ? 'Copied' : 'Select it';
+          if (!ok) note('Could not reach the clipboard on a plain-HTTP page. ' +
+                        'The code is: ' + rec.design);
+          setTimeout(function () { sh.textContent = 'Code'; }, 2000);
+        };
+        if (root.keycapCopyText) root.keycapCopyText(rec.design).then(done);
+        else done(false);
       });
       actions.appendChild(sh);
     }
