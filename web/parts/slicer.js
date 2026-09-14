@@ -553,47 +553,76 @@ const slicerRender=()=>{
   show('printPreviewCard',true);
 };
 
+/* Load a mesh that is ALREADY parsed - a triangle soup, 9 floats per triangle.
+   Factored out of the file-input handler below so there is ONE path into the
+   slicer instead of two that drift apart. Everything downstream - slice,
+   supports, fit check, save, upload - is the existing, already-debugged code.
+
+   This is what lets a model reach the printer without a desktop slicer: a GLB
+   read in the browser (web/parts/meshy-glb.js) hands its positions here and
+   from that point on it is indistinguishable from a file the user picked. */
+window.slicerLoadMesh=function(positions,suggestedName,sizeBytes){
+  if(!slicerMod)return false;
+  if(!positions||!positions.length||positions.length%9)return false;
+  /* Senas rezultatas nuvalomas PRIES nauja modeli: kitaip jo duomenys
+     gali persideti ant naujo ir vaizdas atrodo istemptas (V 08-12). */
+  slicerOut=null;
+  if(window.gl3dSupports)gl3dSupports(null);   // naujas modelis - senos atramos ne jo
+  slicerSupportFacts(null);
+  $('slicerProg').textContent='';
+  slicerLayerUI(false);
+  $('slicerSave').disabled=true;
+  $('slicerDiscardLink').style.visibility='hidden';
+  slicerHome=true;
+  slicerRaw=positions;
+  slicerFileName=suggestedName||'model';
+  slicerFileBytes=sizeBytes||0;
+  slicerBudget=slicerMod.detailBudget(slicerRaw);
+  const best=slicerMod.autoOrient(slicerRaw);      // padedam ant plokstumos iskart
+  slicerTr=best.tr;
+  slicerButtons(true);
+  $('slicerName').value=String(suggestedName||'model')
+    .replace(/\.(stl|glb|gltf|obj)$/i,'')
+    .replace(/[^A-Za-z0-9_-]/g,'').slice(0,40);
+  $('slicerGo').disabled=false;
+  slicerRender();
+  return true;
+};
+
+/* The geometry exactly as it will be sliced - for the export bundle, so what
+   you keep is what you printed rather than what you generated. */
+window.slicerLastGeometry=function(){
+  return (slicerMod&&slicerRaw)?slicerRaw:null;
+};
+
 $('slicerFile').addEventListener('change',async e=>{
   const f=e.target.files&&e.target.files[0]; if(!f)return;
   /* Variklis gali buti dar neuzsikroves (busena atsistatė is atminties, o mygtuko
      niekas nespaude) - tada palaukiam jo cia, o ne tyliai nieko nedarom. */
   if(!slicerMod){await slicerLoadMod(); if(!slicerMod)return;}
   if(slicerBusyStop())return;
-  slicerHome=true;                 // naujas failas - vaizda pastatom is naujo
   slicerSay('slicerInfo','Reading '+f.name+'…');slicerSay('slicerFit','');
   try{
     const buf=await f.arrayBuffer();
-    const r=slicerMod.parseSTL(buf);
-    /* Senas rezultatas nuvalomas PRIES nauja modeli: kitaip jo duomenys
-       gali persideti ant naujo ir vaizdas atrodo istemptas (V 08-12). */
-    slicerOut=null;
-    if(window.gl3dSupports)gl3dSupports(null);   // naujas modelis - senos atramos ne jo
-    /* Ir senos EILUTES ne jo. `slicerInvalidate()` cia neveikia - ji grizta
-       nieko nedariusi, kai `slicerOut` jau nulis, o mes ji ka tik nunulinom.
-       Be sito naujas failas paveldedavo praeito atsakyma: „Sliced in 1,7 s",
-       atramu skaiciu ir net paaiskinima, kodel detale buvo pakelta (pagauta
-       nuotraukoje 08-24 - failas 1,6 mln. trikampiu rode praeito puodelio
-       atramas). */
-    slicerSupportFacts(null);
-    $('slicerProg').textContent='';
-    slicerLayerUI(false);
-    $('slicerSave').disabled=true;
-    $('slicerDiscardLink').style.visibility='hidden';
-    slicerRaw=r.positions; slicerFileName=f.name; slicerFileBytes=f.size||0;
-    slicerBudget=slicerMod.detailBudget(slicerRaw);
-    const best=slicerMod.autoOrient(slicerRaw);      // padedam ant plokstumos iskart
-    slicerTr=best.tr;
-    slicerButtons(true);
-    /* Naujas failas - naujas siulymas: senas vardas likdavo ir modelis
-       issisaugodavo ne tuo pavadinimu (V 08-12). */
-      $('slicerName').value=f.name.replace(/\.stl$/i,'')
-        .replace(/[^A-Za-z0-9_-]/g,'').slice(0,40);   // tiek pat, kiek priima ikelimas is PrusaSlicer
-        /* 14 raidziu buvo MUSU isgalvota riba: tiek matosi printerio ekrane. Bet
-           is Prusos ateinantis vardas rezamas ties 40 (safeModelName), sarase
-           matosi visas, o ekrane tiesiog nesitelpa - ir niekam tai netrukde.
-           Sliceriui buti grieztesniam nera pagrindo (V 08-20). */
-    $('slicerGo').disabled=false;
-    slicerRender();
+    /* GLB as well as STL. The engine only ever wanted a triangle soup; STL was
+       the file picker's format, not the slicer's. */
+    let positions;
+    if(/\.(glb|gltf)$/i.test(f.name)&&window.meshyParseGLB){
+      positions=window.meshyParseGLB(buf).positions;
+    }else{
+      positions=slicerMod.parseSTL(buf).positions;
+    }
+    if(!window.slicerLoadMesh(positions,f.name,f.size||0))
+      throw new Error('That file had no usable triangles.');
+    /* Mesh health: AI-generated meshes arrive with holes and, worse, patches of
+       inverted winding that the engine's global flip cannot fix. Say so BEFORE
+       a four-hour print rather than after. */
+    if(window.meshHealth){
+      const h=window.meshHealth(positions);
+      if(h&&h.severity==='bad')      slicerSay('slicerInfo','⚠ '+h.advice);
+      else if(h&&h.severity==='warn')slicerSay('slicerInfo','⚠ '+h.summary+' - it will usually still slice.');
+      else                           slicerSay('slicerInfo','');
+    }
   }catch(err){slicerSay('slicerInfo',err.message);slicerButtons(false);}
 });
 
