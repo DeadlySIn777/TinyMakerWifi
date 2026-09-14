@@ -23,9 +23,9 @@
     </div>
     <div id='kcBoard' class='kcBoard'></div>
     <div class='kcKeyLegend hint'>
-      <span><i class='kcSw kcOk'></i>lies flat, no supports</span>
-      <span><i class='kcSw kcTilt'></i>fits tilted, needs supports</span>
-      <span><i class='kcSw kcNo'></i>too big for the bed</span>
+      <span><i class='kcSw kcOk'></i>prints flat, no supports</span>
+      <span><i class='kcSw kcTilt'></i>prints leaning over, with supports</span>
+      <span><i class='kcSw kcNo'></i>will not fit the bed at any angle</span>
     </div>
   </div>
 
@@ -128,23 +128,62 @@
 #kcCard .kcSteps li.done b{background:var(--good);color:#fff}
 #kcCard .kcSteps li.done{color:var(--muted)}
 
-#kcCard .kcBoard{display:flex;flex-direction:column;gap:4px;padding:10px;border-radius:10px;
-  background:var(--pv);border:1px solid var(--line);overflow-x:auto}
-#kcCard .kcRow{display:flex;gap:4px}
-#kcCard .kcKey{flex:0 0 auto;height:34px;border-radius:5px;border:1px solid var(--line2);
-  background:var(--tile);color:var(--muted);font:500 11px/1 system-ui,sans-serif;
-  display:grid;place-items:center;cursor:pointer;padding:0 2px;overflow:hidden;
-  transition:transform .12s,border-color .12s,color .12s,background .12s}
-#kcCard .kcKey:hover{transform:translateY(-1px);border-color:var(--accent);color:var(--text)}
-#kcCard .kcKey.sel{border-color:var(--accent);background:var(--accent);color:#fff}
-#kcCard .kcKey.tilt{border-style:dashed;color:var(--warncol)}
-#kcCard .kcKey.no{opacity:.42;cursor:not-allowed;border-style:dotted}
-#kcCard .kcKey.no:hover{transform:none;border-color:var(--line2);color:var(--muted)}
-#kcCard .kcKeyLegend{display:flex;flex-wrap:wrap;gap:14px;margin-top:8px}
-#kcCard .kcKeyLegend span{display:flex;align-items:center;gap:6px}
-#kcCard .kcSw{width:11px;height:11px;border-radius:3px;border:1px solid var(--line2);background:var(--tile)}
-#kcCard .kcSw.kcTilt{border-style:dashed;border-color:var(--warncol)}
-#kcCard .kcSw.kcNo{border-style:dotted;opacity:.42}
+/* The board. Keys are drawn as keycaps rather than as rectangles - a top face
+   lifted off a visible side wall, a highlight along the top edge and a shadow
+   under the front lip - because this is a keycap designer and the picker is the
+   one place that ought to look like the thing being made. Pressing one moves it
+   down onto its own shadow.
+
+   The state language is deliberate. A dashed, amber, dimmed key reads as
+   DISABLED, and 2.25u Enter and Shift are not disabled - they print perfectly
+   well, they just have to lean over and take supports. So those keep the full
+   keycap treatment and carry a small corner wedge instead; only the spacebar,
+   which genuinely does not fit the bed at any angle, is struck through. */
+#kcCard{--kcTop:#2a2f38;--kcSide:#171a20;--kcLip:rgba(0,0,0,.45);--kcGloss:rgba(255,255,255,.10)}
+@media (prefers-color-scheme:light){#kcCard:not([data-theme="dark"]){
+  --kcTop:#fdfdfe;--kcSide:#c6ccd6;--kcLip:rgba(0,0,0,.16);--kcGloss:rgba(255,255,255,.9)}}
+#kcCard .kcBoard{display:flex;flex-direction:column;gap:6px;padding:14px 12px 16px;
+  border-radius:12px;border:1px solid var(--line);overflow-x:auto;
+  background:linear-gradient(180deg,var(--pv),var(--bg))}
+#kcCard .kcRow{display:flex;gap:5px}
+#kcCard .kcKey{position:relative;flex:0 0 auto;height:36px;padding:0 3px;overflow:visible;
+  border:0;border-radius:6px 6px 7px 7px;cursor:pointer;
+  background:linear-gradient(180deg,var(--kcTop),color-mix(in srgb,var(--kcTop) 82%,var(--kcSide)));
+  color:var(--muted);font:600 11px/1 ui-sans-serif,system-ui,sans-serif;
+  display:grid;place-items:center;
+  box-shadow:inset 0 1px 0 var(--kcGloss),0 3px 0 var(--kcSide),0 5px 7px var(--kcLip);
+  transition:transform .1s,box-shadow .1s,color .1s}
+#kcCard .kcKey:hover{transform:translateY(-2px);color:var(--text);
+  box-shadow:inset 0 1px 0 var(--kcGloss),0 5px 0 var(--kcSide),0 9px 12px var(--kcLip)}
+#kcCard .kcKey:active{transform:translateY(3px);
+  box-shadow:inset 0 1px 0 var(--kcGloss),0 0 0 var(--kcSide),0 1px 3px var(--kcLip)}
+#kcCard .kcKey.sel{color:#fff;
+  background:linear-gradient(180deg,var(--accent),color-mix(in srgb,var(--accent) 72%,#000));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.22),
+             0 3px 0 color-mix(in srgb,var(--accent) 45%,#000),0 6px 10px var(--kcLip)}
+/* fits, but has to lean over: a corner wedge, not a warning */
+#kcCard .kcKey.tilt::after{content:'';position:absolute;top:3px;right:3px;
+  border-top:6px solid var(--warncol);border-left:6px solid transparent;border-radius:1px;opacity:.9}
+/* genuinely does not fit at any angle */
+#kcCard .kcKey.no{cursor:not-allowed;filter:grayscale(1);opacity:.38;
+  box-shadow:inset 0 1px 0 var(--kcGloss),0 2px 0 var(--kcSide)}
+#kcCard .kcKey.no::after{content:'';position:absolute;inset:0;border-radius:inherit;
+  background:linear-gradient(to top right,transparent calc(50% - 1px),
+             var(--dangertxt) calc(50% - 1px),var(--dangertxt) calc(50% + 1px),
+             transparent calc(50% + 1px))}
+#kcCard .kcKey.no:hover{transform:none}
+#kcCard .kcKeyLegend{display:flex;flex-wrap:wrap;gap:16px;margin-top:12px}
+#kcCard .kcKeyLegend span{display:flex;align-items:center;gap:7px}
+#kcCard .kcSw{position:relative;width:16px;height:14px;border-radius:3px 3px 4px 4px;
+  background:linear-gradient(180deg,var(--kcTop),var(--kcSide));
+  box-shadow:inset 0 1px 0 var(--kcGloss),0 2px 0 var(--kcSide)}
+#kcCard .kcSw.kcTilt::after{content:'';position:absolute;top:1px;right:1px;
+  border-top:5px solid var(--warncol);border-left:5px solid transparent}
+#kcCard .kcSw.kcNo{filter:grayscale(1);opacity:.38}
+#kcCard .kcSw.kcNo::after{content:'';position:absolute;inset:0;border-radius:inherit;
+  background:linear-gradient(to top right,transparent calc(50% - 1px),
+             var(--dangertxt) calc(50% - 1px),var(--dangertxt) calc(50% + 1px),
+             transparent calc(50% + 1px))}
 
 #kcCard .kcSplit{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
 @media (max-width:720px){#kcCard .kcSplit{grid-template-columns:1fr}}

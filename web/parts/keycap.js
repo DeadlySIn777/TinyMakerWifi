@@ -535,29 +535,108 @@
              sizeU: sizeU, tilt: f.tilt, supports: f.supports, capMm: f.foot };
   }
 
-  /* Lay caps out on the bed, translating each into place. Returns the plate as
-     one soup plus whatever did not fit, so the caller can say so instead of
-     silently dropping caps. */
+  /* Lay caps out on the bed.
+
+     THE THING THIS GETS RIGHT that the first version did not: a cap is packed
+     by the footprint it will actually occupy WHEN PRINTED, not by its size
+     sitting upright. An artisan cap with raised relief has to lean over - a
+     raised legend reaches the plate before the face around it does - and a
+     leaning cap has a different footprint and is far taller. Packing 2.25u
+     Enters by their 41.8 mm width would say none fit; packing them by the
+     29.8 mm they occupy at 34 degrees says two do.
+
+     Supports need room too. A tilted cap is held up off the plate, so its
+     supports splay out past its own footprint; the gap grows when any cap on
+     the plate needs them.
+
+     Height is checked as well as area, because a leaning 2.75u cap stands
+     about 50 mm and the volume only has 52. */
   function layout(caps, opts) {
-    var o = opts || {}, gap = o.gap == null ? 1.5 : o.gap;
-    var placed = [], left = [], cx = 0, cy = 0, rowH = 0, total = 0, parts = [];
-    caps.forEach(function (c) {
-      var w = c.size.x, d = c.size.y;
-      if (cx + w > BED.x + 1e-6) { cx = 0; cy += rowH + gap; rowH = 0; }
-      if (cy + d > BED.y + 1e-6) { left.push(c); return; }
-      var dx = cx + w/2 - BED.x/2, dy = cy + d/2 - BED.y/2;
-      var p = c.positions, out = new Float32Array(p.length);
-      for (var i = 0; i < p.length; i += 3) {
-        out[i] = p[i] + dx; out[i+1] = p[i+1] + dy; out[i+2] = p[i+2];
+    var o = opts || {};
+    caps = (caps || []).filter(Boolean);
+
+    // work out how each cap actually sits on the plate
+    var items = caps.map(function (c, i) {
+      var plan = c.printPlan || fits(c.size.x, c.size.y, c.size.z);
+      var w = plan.foot ? plan.foot.x : c.size.x;
+      var d = plan.foot ? plan.foot.y : c.size.y;
+      var h = plan.height || c.size.z;
+      return { c: c, i: i, w: w, d: d, h: h, tilt: plan.tilt || 0,
+               supports: !!plan.supports, ok: plan.ok !== false };
+    });
+
+    var anySupport = items.some(function (t) { return t.supports; });
+    /* 1.5 mm is enough between two flat caps. Supported ones get 3.5: the
+       support tree is wider at the plate than the part above it, and two
+       neighbouring trees growing into each other is how a plate fails late. */
+    var gap = o.gap == null ? (anySupport ? 3.5 : 1.5) : o.gap;
+
+    /* Shelf packing, tallest first. Sorting by depth first is what makes rows
+       fill instead of leaving a strip of dead bed under every short cap. */
+    var order = items.slice().sort(function (a, b) { return b.d - a.d; });
+
+    var placed = [], left = [], parts = [], total = 0;
+    var cx = 0, cy = 0, rowD = 0, maxH = 0;
+    order.forEach(function (t) {
+      if (!t.ok) { left.push(t.c); return; }
+      // turn a cap 90 degrees if that is the only way it lands
+      var w = t.w, d = t.d, turned = false;
+      if (w > BED.x && d <= BED.x && w <= BED.y) { w = t.d; d = t.w; turned = true; }
+      if (w > BED.x || d > BED.y) { left.push(t.c); return; }
+      if (cx > 0 && cx + w > BED.x + 1e-6) { cx = 0; cy += rowD + gap; rowD = 0; }
+      if (cy + d > BED.y + 1e-6) { left.push(t.c); return; }
+
+      var dx = cx + w / 2 - BED.x / 2, dy = cy + d / 2 - BED.y / 2;
+      var p = t.c.positions, out = new Float32Array(p.length);
+      for (var k = 0; k < p.length; k += 3) {
+        var px = p[k], py = p[k + 1];
+        if (turned) { var sw = px; px = -py; py = sw; }
+        out[k] = px + dx; out[k + 1] = py + dy; out[k + 2] = p[k + 2];
       }
       parts.push(out); total += p.length;
-      placed.push({ name: c.name || null, x: +dx.toFixed(2), y: +dy.toFixed(2) });
-      cx += w + gap; rowH = Math.max(rowH, d);
+      if (t.h > maxH) maxH = t.h;
+      placed.push({ name: t.c.name || null, x: +dx.toFixed(2), y: +dy.toFixed(2),
+                    w: +w.toFixed(2), d: +d.toFixed(2), turned: turned,
+                    tilt: t.tilt, supports: t.supports });
+      cx += w + gap; rowD = Math.max(rowD, d);
     });
+
     var all = new Float32Array(total), at = 0;
     parts.forEach(function (p) { all.set(p, at); at += p.length; });
-    return { positions: all, triangles: all.length / 9, placed: placed,
-             leftOver: left.length, plates: 1 + Math.ceil(left.length / Math.max(placed.length, 1)) };
+
+    var zLimit = anySupport ? BED.zSupported : BED.zFlat;
+    var issues = [];
+    if (maxH > zLimit) issues.push('the tallest cap on this plate stands ' +
+      maxH.toFixed(1) + ' mm and the volume allows ' + zLimit);
+    if (left.length) issues.push(left.length + ' cap' + (left.length > 1 ? 's' : '') +
+      ' did not fit and need another run');
+
+    return {
+      positions: all, triangles: all.length / 9,
+      placed: placed, leftOver: left.length, notPlaced: left,
+      gapMm: gap, supports: anySupport,
+      plateHeightMm: +maxH.toFixed(2), zLimitMm: zLimit,
+      /* Print time is height-only, so this is what a plate actually costs. */
+      layers: Math.ceil(maxH / (o.layerMm || 0.05)),
+      ok: !issues.length, issues: issues,
+      runs: 1 + (placed.length ? Math.ceil(left.length / placed.length) : left.length)
+    };
+  }
+
+  /* Will this whole set fit, and in how many runs? Answers the question an
+     artisan set actually raises - not "does one cap fit" but "can I make the
+     six I want, and how many times do I come back to the machine". */
+  function planSet(caps, opts) {
+    var remaining = (caps || []).slice(), runs = [], guard = 0;
+    while (remaining.length && guard++ < 64) {
+      var r = layout(remaining, opts);
+      if (!r.placed.length) break;              // nothing fits; stop rather than spin
+      runs.push({ caps: r.placed.length, layers: r.layers,
+                  heightMm: r.plateHeightMm, supports: r.supports });
+      remaining = r.notPlaced;
+    }
+    return { runs: runs.length, perRun: runs, stranded: remaining.length,
+             totalLayers: runs.reduce(function (a, r) { return a + r.layers; }, 0) };
   }
 
   /* ---- the tuning print --------------------------------------------------
@@ -586,7 +665,8 @@
   root.keycap = {
     MX: MX, PROFILES: PROFILES, UNIT: UNIT, DEPTH: DEPTH, BED: BED, PIXEL_MM: PIXEL_MM,
     capWidth: capWidth, build: build, orientForPrint: orientForPrint,
-    validate: validate, fits: fits, tiltFit: tiltFit, perPlate: perPlate, layout: layout,
+    validate: validate, fits: fits, tiltFit: tiltFit, perPlate: perPlate,
+    layout: layout, planSet: planSet,
     stemTestComb: stemTestComb
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.keycap;

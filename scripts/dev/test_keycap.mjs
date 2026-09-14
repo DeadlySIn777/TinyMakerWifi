@@ -174,5 +174,88 @@ for (let i = 0; i < plate.positions.length; i += 3) {
 }
 truthy('the plate stays inside the bed', px[1] - px[0] <= K.BED.x + 1e-6);
 
+console.log('\nnesting packs by the footprint a cap PRINTS at, not the one it sits at');
+/* The bug this replaced: an artisan cap with raised relief has to lean over,
+   and a leaning cap has a different footprint. Packing a 2.25u Enter by its
+   41.8 mm width says none fit; by the 29.8 mm it occupies at 34 degrees, it
+   does. */
+const enter = K.build({ profile: 'XDA', row: 'R3', sizeU: 2.25, topGrid: 13 });
+truthy('a 2.25u Enter is wider than the bed sitting upright',
+  enter.size.x > K.BED.x, enter.size.x.toFixed(1) + ' mm vs ' + K.BED.x);
+truthy('but its print plan leans it over', enter.printPlan.tilt > 0,
+  enter.printPlan.tilt + ' degrees');
+const entPlate = K.layout([{ ...enter, name: 'enter' }]);
+ok('and it lands on the plate', entPlate.placed.length, 1);
+truthy('packed at its tilted width, not its upright one',
+  entPlate.placed[0].w < enter.size.x,
+  entPlate.placed[0].w.toFixed(1) + ' mm packed vs ' + enter.size.x.toFixed(1) + ' upright');
+
+console.log('\nsupports get their own clearance');
+const flatPair = K.layout([K.build({ profile: 'DSA', sizeU: 1 }), K.build({ profile: 'DSA', sizeU: 1 })]);
+ok('flat caps need no supports', flatPair.supports, false);
+truthy('and pack tight', flatPair.gapMm <= 1.5, flatPair.gapMm + ' mm gap');
+/* A support tree is wider at the plate than the part above it, so two
+   neighbouring trees can grow into each other. The gap opens up. */
+truthy('a supported plate opens the gap', entPlate.gapMm > flatPair.gapMm,
+  entPlate.gapMm + ' mm vs ' + flatPair.gapMm + ' mm');
+truthy('and it reports that supports are involved', entPlate.supports);
+
+console.log('\nheight is checked, not just area');
+truthy('the plate reports how tall it stands', entPlate.plateHeightMm > 0,
+  entPlate.plateHeightMm + ' mm');
+truthy('against the supported limit, which is lower than the flat one',
+  entPlate.zLimitMm === K.BED.zSupported && K.BED.zSupported < K.BED.zFlat,
+  entPlate.zLimitMm + ' mm');
+truthy('and turns that into layers', entPlate.layers > 0, entPlate.layers + ' at 0.05 mm');
+ok('a plate that fits says so', flatPair.ok, true);
+
+console.log('\na tall artisan sculpt still nests');
+/* The Meshy case: a generated sculpt protrudes far more than a 0.55 mm legend,
+   which makes the cap taller and forces a steeper lean. */
+const tallRelief = (u, v) => {
+  const r = Math.hypot(u, v);
+  return r < 0.55 ? -4.0 * Math.cos(r / 0.55 * Math.PI / 2) : 0;
+};
+const artisan = K.build({ profile: 'XDA', row: 'R3', sizeU: 1, topGrid: 25, relief: tallRelief });
+truthy('a 4 mm sculpt makes a much taller cap', artisan.size.z > 12,
+  artisan.size.z.toFixed(1) + ' mm vs 9.1 plain');
+ok('and it is still watertight', globalThis.meshHealth(artisan.positions).watertight, true);
+truthy('the stem is untouched by it',
+  Math.abs(artisan.slotWidth - (K.MX.crossWide + K.MX.slotClearance)) < 1e-6);
+const artPlate = K.layout([{ ...artisan, name: 'a' }, { ...artisan, name: 'b' }]);
+truthy('two of them still nest', artPlate.placed.length === 2, artPlate.issues.join('; ') || 'both placed');
+truthy('the plate is as tall as the sculpt makes it',
+  artPlate.plateHeightMm >= artisan.size.z - 0.01,
+  artPlate.plateHeightMm + ' mm');
+
+console.log('\nnothing overlaps, ever');
+/* The check that matters for a plate: no two placed footprints intersect. */
+function overlaps(p) {
+  for (let i = 0; i < p.length; i++) for (let j = i + 1; j < p.length; j++) {
+    const a = p[i], b = p[j];
+    if (Math.abs(a.x - b.x) < (a.w + b.w) / 2 - 1e-6 &&
+        Math.abs(a.y - b.y) < (a.d + b.d) / 2 - 1e-6) return `${i} and ${j}`;
+  }
+  return null;
+}
+const six = K.layout(['a','b','c','d','e','f'].map(n =>
+  ({ ...K.build({ profile: 'XDA', row: 'R3', sizeU: 1, topGrid: 13 }), name: n })));
+ok('six 1u caps overlap nowhere', overlaps(six.placed), null);
+truthy('two fit per run, so six is three runs', six.placed.length === 2 && six.leftOver === 4,
+  six.placed.length + ' placed, ' + six.leftOver + ' left over');
+let inside = true;
+for (let i = 0; i < six.positions.length; i += 3) {
+  if (Math.abs(six.positions[i]) > K.BED.x / 2 + 1e-6) inside = false;
+  if (Math.abs(six.positions[i + 1]) > K.BED.y / 2 + 1e-6) inside = false;
+}
+ok('and every one is inside the bed', inside, true);
+
+console.log('\nplanning a whole set');
+const set = K.planSet(['1','2','3','4','5','6'].map(n =>
+  ({ ...K.build({ profile: 'XDA', row: 'R3', sizeU: 1, topGrid: 13 }), name: n })));
+ok('six caps take three runs', set.runs, 3);
+ok('none stranded', set.stranded, 0);
+truthy('and it totals the layers across them', set.totalLayers > 0, set.totalLayers + ' layers');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
