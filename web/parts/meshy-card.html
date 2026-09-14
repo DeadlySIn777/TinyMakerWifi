@@ -1,0 +1,66 @@
+<!-- Meshy card. Reuses slicer.css classes so it adds no CSS and no new include. -->
+<section id='meshyCard' class='card'>
+  <div class='cardHead'>
+    <h2>Generate a model</h2>
+    <span id='meshyState' class='hint'></span>
+  </div>
+
+  <textarea id='meshyPrompt' rows='2' maxlength='600'
+    placeholder='a small stone wizard holding a lantern, on a round base'
+    style='width:100%;box-sizing:border-box;background:var(--tile);color:var(--text);
+           border:1px solid var(--line2);border-radius:8px;padding:9px;font:inherit'></textarea>
+
+  <!-- One row, three controls, nothing wrapping: "mm" was breaking onto its own
+       line and the Detail select was clipping its own option text. -->
+  <div style='display:grid;grid-template-columns:auto auto 1fr;gap:10px;align-items:center;margin-top:10px'>
+    <label style='display:flex;align-items:center;gap:6px;white-space:nowrap'>
+      <span class='hint'>Height</span>
+      <input id='meshyHeight' type='number' min='5' max='58' step='1' value='32'
+        style='width:62px;text-align:right'><span class='hint'>mm</span></label>
+    <label style='display:flex;align-items:center;gap:6px;white-space:nowrap'>
+      <span class='hint'>Detail</span>
+      <select id='meshyPoly' style='min-width:132px'>
+        <option value='15000'>low &middot; 15k</option>
+        <option value='30000' selected>normal &middot; 30k</option>
+        <option value='100000'>high &middot; 100k</option>
+      </select></label>
+    <label style='display:flex;align-items:center;gap:6px;justify-self:end;white-space:nowrap'>
+      <input id='meshyFlat' type='checkbox' checked>
+      <span class='hint'>base flat on plate</span></label>
+  </div>
+
+  <div class='calRow' style='margin-top:8px'>
+    <button id='meshyGo' type='button' style='flex:2 1 160px'>Generate</button>
+    <button id='meshyRefine' class='button secondary' type='button'
+      style='flex:1 1 130px' disabled title='Spend credits on a texture for the preview you just accepted'>Add texture</button>
+    <button id='meshyExport' class='button secondary' type='button'
+      style='flex:1 1 130px' disabled>Export…</button>
+  </div>
+
+  <div id='meshyInfo' class='hint' style='margin-top:6px'></div>
+  <div id='meshyHealth' class='hint'></div>
+
+  <!-- No account needed: the whole print path works from a file you already
+       have. This is deliberately in the card rather than hidden, because it is
+       the part that works today with nothing to sign up for. -->
+  <div class='calRow' style='margin-top:10px;border-top:1px solid var(--line);padding-top:10px'>
+    <label class='button secondary' style='flex:1 1 100%;text-align:center;cursor:pointer'>
+      Load a .glb or .stl instead
+      <input type='file' id='meshyFile' accept='.glb,.stl' style='display:none'></label>
+  </div>
+
+  <details style='margin-top:10px'>
+    <summary class='hint' style='cursor:pointer'>Meshy API key</summary>
+    <div class='calRow' style='margin-top:8px'>
+      <input id='meshyKey' type='password' placeholder='paste key' autocomplete='off'
+        style='flex:2 1 180px'>
+      <button id='meshyKeySave' class='button secondary' type='button' style='flex:1 1 90px'>Save</button>
+    </div>
+    <div class='hint'>
+      Stored in this browser only. This page is served from the printer over
+      plain HTTP on your network, so anyone who can reach the printer can read
+      it - use a key you are willing to rotate, or run the Worker proxy and
+      leave this blank.
+    </div>
+  </details>
+</section>
