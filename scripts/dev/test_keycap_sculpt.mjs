@@ -91,7 +91,9 @@ truthy('and it says it will foul the next key', /foul/.test(SC.check(huge).issue
 
 console.log('\nand it changes how the cap prints');
 const pose = SC.printPose(seated, cap);
-truthy('it goes on its side', pose.tilt >= 45, pose.tilt + ' degrees');
+/* printPose searches now and takes the SHALLOWEST lean that clears, so a
+   small cap settles on the 40 degree floor rather than a fixed 55. */
+truthy('it goes on its side', pose.tilt >= 40, pose.tilt + ' degrees');
 ok('with supports', pose.supports, true);
 ok('and says what forced it', pose.forcedBy, 'sculpt');
 truthy('the reason names the real problem', /buries the sculpt/.test(pose.why));

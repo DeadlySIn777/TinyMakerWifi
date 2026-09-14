@@ -66,6 +66,7 @@ const deps = [
   ['keycap-ui.js', 'keycap-view3d.js'],
   ['keycap-ui.js', 'keycap-braille.js'],
   ['keycap-ui.js', 'keycap-share.js'],
+  ['keycap-ui.js', 'keycap-library.js'],
   ['keycap.js', 'mesh-health.js'],
   ['meshy-ui.js', 'meshy.js'],
   ['meshy.js', 'meshy-glb.js'],

@@ -72,45 +72,65 @@
           <div id='kcRows' class='kcTiles sm'></div>
         </div>
 
+        <!-- One choice, then only what that choice needs. This step used to
+             show four unrelated ways of making art at once - a prompt, ten
+             drawn icons, a Braille field and a finish row - stacked down the
+             card with a paragraph of explanation on top. -->
         <div class='kcGroup' data-for='3' hidden>
-          <p class='kcLbl'>Generate the art</p>
-          <textarea id='kcPrompt' rows='2' maxlength='500'
-            placeholder='a military IFAK pouch, medical cross patch'></textarea>
-          <div class='calRow'>
-            <button id='kcGen' type='button' style='flex:2 1 150px'>Generate</button>
-            <button id='kcGenClear' class='button secondary' type='button'
-              style='flex:1 1 90px' disabled>Clear</button>
-          </div>
-          <p id='kcGenNote' class='hint'>Meshy makes the art; the engine keeps the
-            stem. Whatever comes back becomes relief on the top face &mdash; it never
-            becomes the cap. Needs the key from the Generate&nbsp;a&nbsp;model card.</p>
-
-          <p class='kcLbl'>Or a drawn one</p>
-          <div id='kcIcons' class='kcTiles sm'></div>
-
-          <p class='kcLbl'>Braille</p>
-          <div class='calRow'>
-            <input id='kcBraille' maxlength='2' placeholder='a' class='kcMono'>
-            <span class='hint' style='flex:1 1 150px;margin:0'>one letter, or one
-              digit &mdash; two cells is all a 1u top holds at readable pitch</span>
+          <div class='kcModes' id='kcModes'>
+            <button type='button' data-mode='gen' class='on'>Generate</button>
+            <button type='button' data-mode='lib'>Library</button>
+            <button type='button' data-mode='braille'>Braille</button>
+            <button type='button' data-mode='none'>Plain</button>
           </div>
 
-          <p class='kcLbl'>Finish</p>
-          <div class='calRow'>
-            <label class='kcNum'><span>Corner</span>
-              <input id='kcDigit' maxlength='1' placeholder='&mdash;' class='kcMono'></label>
+          <div data-art='gen'>
+            <textarea id='kcPrompt' rows='3' maxlength='500'
+              placeholder='a military IFAK pouch with a medical cross patch'></textarea>
+            <div class='calRow'>
+              <button id='kcGen' type='button' style='flex:2 1 160px'>Generate</button>
+              <button id='kcGenClear' class='button secondary' type='button'
+                style='flex:1 1 90px' disabled>Clear</button>
+            </div>
+            <p id='kcGenNote' class='hint'></p>
+          </div>
+
+          <div data-art='lib' hidden>
+            <div id='kcShelf' class='kcShelf'></div>
+            <p id='kcShelfNote' class='hint'></p>
+            <details class='kcAdv'>
+              <summary>Built-in shapes</summary>
+              <div id='kcIcons' class='kcTiles sm'></div>
+            </details>
+          </div>
+
+          <div data-art='braille' hidden>
+            <div class='calRow'>
+              <input id='kcBraille' maxlength='2' placeholder='a' class='kcMono'>
+              <span class='hint' style='flex:1 1 160px;margin:0'>one letter or one
+                digit &mdash; a 1u top holds two cells</span>
+            </div>
+          </div>
+
+          <!-- Overrides. Nothing in here has to be touched: the engine picks
+               a depth and a finish from what the art IS - Braille is fixed by
+               specification, a sculpt needs real depth, a legend engraves
+               better - and only stops deciding once you change something. -->
+          <details class='kcAdv'>
+            <summary>Advanced</summary>
+          <div class='kcFinishBar'>
+            <div class='kcSeg' id='kcFinish'>
+              <input type='checkbox' id='kcRaised' checked hidden>
+              <button type='button' data-raised='1' class='on'>Raised</button>
+              <button type='button' data-raised='0'>Engraved</button>
+            </div>
             <label class='kcNum grow'><span>Relief</span>
               <input id='kcDepth' type='range' min='0.15' max='6' step='0.05' value='0.55'>
               <b id='kcDepthVal'>0.55</b></label>
+            <label class='kcNum'><span>Corner</span>
+              <input id='kcDigit' maxlength='1' placeholder='&mdash;' class='kcMono'></label>
           </div>
-          <!-- KEPT: a segmented control rather than a pill toggle. Two named
-               states with different printing consequences should both be
-               visible, not hidden behind a switch position. -->
-          <div class='kcSeg' id='kcFinish'>
-            <input type='checkbox' id='kcRaised' checked hidden>
-            <button type='button' data-raised='1' class='on'>Raised</button>
-            <button type='button' data-raised='0'>Engraved</button>
-          </div>
+          </details>
           <p id='kcLegendWarn' class='hint'></p>
         </div>
 
@@ -295,7 +315,7 @@
   background:color-mix(in srgb,var(--pv) 78%,transparent)}
 @supports not (background:color-mix(in srgb,red 50%,transparent)){
   #kcCard .kcPose{background:var(--pv)}}
-#kcCard .kcPose button{border:0;padding:6px 11px;white-space:nowrap;background:transparent;color:var(--muted2);
+#kcCard .kcPose button{border:0;width:auto;flex:0 0 auto;padding:6px 11px;white-space:nowrap;background:transparent;color:var(--muted2);
   cursor:pointer;font:600 10px/1 ui-sans-serif,system-ui;letter-spacing:.09em;text-transform:uppercase}
 #kcCard .kcPose button.on{background:var(--accent-soft);color:var(--text)}
 #kcCard .kcSpin{position:absolute;left:13px;bottom:11px;z-index:3;pointer-events:none;
@@ -332,6 +352,48 @@
 #kcCard input.kcMono{width:54px;text-align:center;background:var(--tile);color:var(--text);
   border:1px solid var(--line2);border-radius:8px;padding:8px 6px;font-size:13px;
   font-family:ui-monospace,Menlo,Consolas,monospace}
+/* Your own work, newest first. Thumbnails are what you actually recognise a
+   design by - a list of prompts all starting "a military..." is not a shelf. */
+#kcCard .kcShelf{display:grid;gap:clamp(7px,.9cqw,12px);
+  grid-template-columns:repeat(auto-fill,minmax(clamp(92px,11cqw,150px),1fr))}
+#kcCard .kcShelfItem{position:relative;border:1px solid var(--line);border-radius:10px;
+  background:var(--tile);cursor:pointer;overflow:hidden;text-align:left;padding:0;width:auto;
+  transition:border-color .12s}
+#kcCard .kcShelfItem:hover{border-color:var(--line2)}
+#kcCard .kcShelfItem.on{border-color:var(--accent)}
+#kcCard .kcShelfItem img{display:block;width:100%;aspect-ratio:1;object-fit:cover;
+  background:var(--kFloor)}
+#kcCard .kcShelfItem b{display:block;padding:7px 8px 3px;color:var(--text);
+  font:600 clamp(10.5px,1.05cqw,13px)/1.25 ui-sans-serif,system-ui;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#kcCard .kcShelfItem small{display:block;padding:0 8px 8px;color:var(--ink3);
+  font-size:clamp(9.5px,.95cqw,12px)}
+#kcCard .kcShelfDel{position:absolute;top:5px;right:5px;width:auto;min-width:0;margin:0;
+  padding:3px 7px;border:0;border-radius:6px;background:var(--overlay);color:var(--muted);
+  font:600 11px/1 ui-sans-serif,system-ui;cursor:pointer;opacity:0;transition:opacity .12s}
+#kcCard .kcShelfItem:hover .kcShelfDel{opacity:1}
+#kcCard .kcShelfDel:hover{color:var(--dangertxt)}
+#kcCard .kcAdv{margin-top:clamp(12px,1.5cqw,20px);border-top:1px solid var(--line);
+  padding-top:clamp(9px,1.1cqw,15px)}
+#kcCard .kcAdv summary{cursor:pointer;font:600 clamp(10px,1.05cqw,14px)/1 ui-sans-serif,system-ui;
+  letter-spacing:.11em;text-transform:uppercase;color:var(--subh);padding:3px 0}
+#kcCard .kcAdv .kcFinishBar{margin-top:clamp(9px,1.1cqw,15px);border-top:0;padding-top:0}
+#kcCard .kcModes{display:flex;gap:6px;margin-bottom:clamp(11px,1.4cqw,18px);flex-wrap:wrap}
+/* flex-basis 0, not auto. The page has a global `button{width:100%}`, so with
+   basis:auto every one of these claimed a whole line and the four modes came
+   out as four stacked bars. .kcSeg escaped it only because flex:1 already
+   zeroes the basis. */
+#kcCard .kcModes button{flex:1 1 0;width:auto;min-width:76px;padding:clamp(8px,1cqw,13px) 10px;
+  border:1px solid var(--line);border-radius:9px;background:var(--tile);color:var(--muted);
+  cursor:pointer;font:600 clamp(11px,1.15cqw,15px)/1 ui-sans-serif,system-ui;
+  letter-spacing:.06em;text-transform:uppercase;transition:border-color .12s,color .12s}
+#kcCard .kcModes button:hover{color:var(--text);border-color:var(--line2)}
+#kcCard .kcModes button.on{border-color:var(--accent);background:var(--accent-soft);color:var(--text)}
+/* the finish applies to whatever the art is, so it sits on one line under it */
+#kcCard .kcFinishBar{display:flex;flex-wrap:wrap;align-items:center;
+  gap:clamp(9px,1.2cqw,18px);margin-top:clamp(13px,1.7cqw,22px);
+  padding-top:clamp(11px,1.4cqw,18px);border-top:1px solid var(--line)}
+#kcCard .kcFinishBar .kcSeg{margin-top:0;flex:0 0 auto;min-width:190px}
 #kcCard .kcSeg{display:flex;margin-top:10px;border:1px solid var(--line2);border-radius:9px;overflow:hidden}
 #kcCard .kcSeg button{flex:1;padding:9px 6px;border:0;background:var(--tile);color:var(--muted);
   cursor:pointer;font:600 11.5px/1 ui-sans-serif,system-ui;letter-spacing:.07em;text-transform:uppercase}

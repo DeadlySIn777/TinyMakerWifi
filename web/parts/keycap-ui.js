@@ -45,7 +45,8 @@
 
   var st = { step: 1, key: null, profile: 'XDA', row: 'R3', sizeU: 1,
              icon: null, digit: '', depth: 0.55, raised: true, plate: [],
-             skin: null, skinFrom: '', braille: '', name: '', pose: 'made' };
+             skin: null, skinFrom: '', braille: '', name: '', pose: 'made',
+             art: 'gen' };
   var built = null;
 
   function say(id, msg, cls) {
@@ -177,12 +178,83 @@
     });
   }
 
+  // ---- the shelf ---------------------------------------------------------
+  function keepCurrent(prompt) {
+    if (!window.keycapLibrary || !st.sculpt) return;
+    var thumb = null;
+    try {
+      var c = $('kcTop');
+      if (c && c.width) {
+        var t = document.createElement('canvas');
+        t.width = 160; t.height = 160;
+        t.getContext('2d').drawImage(c, 0, 0, 160, 160);
+        thumb = t.toDataURL('image/jpeg', 0.72);
+      }
+    } catch (e) { /* a thumbnail is a nicety; the mesh is the point */ }
+    window.keycapLibrary.save({
+      name: (prompt || '').slice(0, 48) || 'design',
+      prompt: prompt || st.skinFrom || '',
+      kind: 'sculpt', positions: st.sculpt, thumb: thumb,
+      design: window.keycapShare ? window.keycapShare.encode(designOf()) : null
+    }).then(function () { drawShelf(); })
+      .catch(function (e) { say('kcGenNote', 'Kept on the cap but NOT saved: ' + e.message, 'bad'); });
+  }
+
+  function drawShelf() {
+    var host = $('kcShelf'); if (!host || !window.keycapLibrary) return;
+    window.keycapLibrary.list().then(function (rows) {
+      host.innerHTML = '';
+      if (!rows.length) {
+        say('kcShelfNote', 'Nothing here yet \u2014 whatever you generate is kept, and comes back without spending another generation.');
+        return;
+      }
+      say('kcShelfNote', rows.length + ' saved \u00b7 picking one puts the same model back, no regeneration');
+      rows.forEach(function (r) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'kcShelfItem' + (st.libId === r.id ? ' on' : '');
+        b.innerHTML =
+          (r.thumb ? '<img alt="" src="' + r.thumb + '">' : '') +
+          '<b></b><small></small><span class="kcShelfDel" title="Remove">\u00d7</span>';
+        b.querySelector('b').textContent = r.name;
+        b.querySelector('small').textContent =
+          (r.triangles ? r.triangles.toLocaleString() + ' tri' : '') +
+          (r.at ? ' \u00b7 ' + new Date(r.at).toLocaleDateString() : '');
+        b.addEventListener('click', function (ev) {
+          if (ev.target.classList.contains('kcShelfDel')) {
+            ev.stopPropagation();
+            window.keycapLibrary.remove(r.id).then(drawShelf);
+            return;
+          }
+          useSaved(r.id);
+        });
+        host.appendChild(b);
+      });
+    }).catch(function (e) { say('kcShelfNote', e.message, 'bad'); });
+  }
+
+  function useSaved(id) {
+    window.keycapLibrary.get(id).then(function (rec) {
+      if (!rec || !rec.positions) throw new Error('That design has no model stored.');
+      st.sculpt = rec.positions;
+      st.skin = null;
+      st.skinFrom = rec.prompt || '';
+      st.libId = id;
+      st.icon = null;
+      if ($('kcPrompt') && rec.prompt) $('kcPrompt').value = rec.prompt;
+      drawShelf();
+      refresh();
+      say('kcGenNote', 'loaded "' + rec.name + '" \u2014 ' +
+        (rec.triangles || 0).toLocaleString() + ' triangles, no generation spent');
+    }).catch(function (e) { say('kcShelfNote', e.message, 'bad'); });
+  }
+
   // ---- the Meshy route ---------------------------------------------------
   function genBusy(on) {
     ['kcGen', 'kcGenClear', 'kcNext', 'kcBack'].forEach(function (id) {
       var e = $(id); if (e) e.disabled = !!on;
     });
-    if (!on) $('kcGenClear').disabled = !st.skin;
+    if (!on) $('kcGenClear').disabled = !(st.skin || st.sculpt);
   }
 
   $('kcGen').addEventListener('click', function () {
@@ -206,21 +278,37 @@
       function (m) { say('kcGenNote', m); })
       .then(function (state) {
         var parsed = window.meshyParseGLB(state.glb);
-        st.skin = window.keycapSkin.heightField(parsed.positions, { grid: 96 });
+        /* THE MODEL STAYS A MODEL.
+
+           This used to hand the generated mesh to keycapSkin.heightField(),
+           which samples it into a height on the top face. That is the right
+           answer for a legend and the wrong one for a figure: a height field
+           can only extrude a 2D shape, so it has no undercuts and no
+           silhouette - and on a blocky model whose shortest axis is ambiguous,
+           the ray cast sights straight through it and what lands on the cap is
+           a handful of shards. A generated creeper came out as three spikes.
+
+           keycap-sculpt seats the real mesh on the cap as a second overlapping
+           solid instead, which the slicer rasterises as a union. Nothing is
+           resampled, nothing is flattened, and the cap's own geometry - the
+           stem - is untouched. */
+        st.sculpt = parsed.positions;
+        st.skin = null;
         st.skinFrom = prompt;
-        var cov = Math.round(st.skin.coverage * 100);
-        say('kcGenNote', 'sampled a relief from ' + (parsed.positions.length / 9).toLocaleString() +
-          ' triangles, ' + cov + '% of the frame covered' +
-          (cov < 25 ? ' - that is sparse, the model may be off to one side' : ''),
-          cov < 25 ? 'bad' : '');
+        var tris = parsed.positions.length / 9;
+        say('kcGenNote', 'seated a ' + tris.toLocaleString() + ' triangle model on the cap');
         refresh();
+        /* Filed immediately. A generation costs credits and takes a minute, so
+           losing it to a page reload - which is what used to happen - is the
+           one outcome worth engineering against. */
+        setTimeout(function () { keepCurrent(prompt); }, 900);
       })
       .catch(function (e) { say('kcGenNote', e.message, 'bad'); })
       .then(function () { genBusy(false); });
   });
 
   $('kcGenClear').addEventListener('click', function () {
-    st.skin = null; st.skinFrom = '';
+    st.skin = null; st.sculpt = null; st.skinFrom = '';
     $('kcGenClear').disabled = true;
     say('kcGenNote', 'back to the drawn set.');
     refresh();
@@ -232,6 +320,7 @@
     }));
     tiles('kcIcons', list, function (it) { return it.id === st.icon; }, function (it) {
       st.icon = it.id;
+      if (it.id) st.art = 'lib';
       // picking a drawn icon also loads its prompt, so Generate replaces it
       if (it.id && $('kcPrompt') && !$('kcPrompt').value.trim() && window.keycapSkin)
         $('kcPrompt').value = window.keycapSkin.promptFor(it.id);
@@ -244,11 +333,90 @@
      intended route, and the drawn set is the fallback that works with no
      account. Both arrive here as the same kind of function, so nothing below
      this point knows or cares which it was. */
+  /* One art source at a time. Before this the card could hold a generated
+     skin, a drawn icon AND a Braille string simultaneously, and which one you
+     got depended on the order of checks inside relief() rather than on
+     anything visible. */
+  /* SMART DEFAULTS. Most of what this card used to ask for has exactly one
+     sensible answer, and asking for it is just work handed to the user:
+
+       Braille    fixed by specification - 0.75 mm, always raised. Not a choice.
+       Generated  a sculpt needs real depth or it is embossing; 2.4 mm, raised.
+       Drawn      a legend engraves better: no lean, no supports, two per plate,
+                  and the recess holds paint. 0.55 mm.
+
+     They are still overridable under Advanced, but nothing has to be touched
+     for the common case. */
+  var ART_DEFAULTS = {
+    gen:     { depth: 2.40, raised: true },
+    lib:     { depth: 0.55, raised: false },
+    braille: { depth: 0.75, raised: true },
+    none:    { depth: 0.55, raised: false }
+  };
+
+  function setArt(mode) {
+    st.art = mode;
+    var d = ART_DEFAULTS[mode];
+    if (d && !st.touchedFinish) {
+      st.depth = d.depth;
+      if ($('kcDepth')) $('kcDepth').value = st.depth;
+      if ($('kcDepthVal')) $('kcDepthVal').textContent = st.depth.toFixed(2);
+      setFinish(d.raised);
+    }
+    Array.prototype.forEach.call($('kcModes').querySelectorAll('button'), function (b) {
+      b.classList.toggle('on', b.getAttribute('data-mode') === mode);
+    });
+    Array.prototype.forEach.call($('kcCard').querySelectorAll('[data-art]'), function (p) {
+      p.hidden = p.getAttribute('data-art') !== mode;
+    });
+    if (mode === 'lib') drawShelf();
+    if (mode !== 'lib') st.icon = null;
+    if (mode !== 'braille') st.braille = '';
+    if (mode !== 'gen') { st.skin = null; st.sculpt = null; st.skinFrom = ''; }
+    if (mode === 'braille') setFinish(true);   // a recess is not readable
+    if ($('kcBraille') && mode !== 'braille') $('kcBraille').value = '';
+    drawIcons();
+    refresh();
+  }
+
+  /* A corner digit is a LEGEND, and legends are shallow. It used to be
+     extruded at whatever the art's relief depth was, so on a 4.65 mm sculpt
+     setting the digit's 0.5 mm-wide strokes came out as 4.65 mm spikes - thin
+     jagged shards standing off the cap. It only showed on keys that auto-fill
+     a digit, which is why it looked like "the number keys are broken".
+
+     0.8 mm is the ceiling: deep enough to read and to hold paint, shallow
+     enough that a narrow stroke stays a stroke. */
+  var DIGIT_MAX_MM = 0.8;
+  function digitDepth() { return Math.min(st.depth, DIGIT_MAX_MM); }
+
+  /* Real type where the browser can draw it, the hand-plotted polylines only
+     as a fallback. Placed in the corner at a quarter of the face. */
+  function digitRelief(raised) {
+    if (!st.digit) return null;
+    var g = ICO.glyphRelief ? ICO.glyphRelief(st.digit,
+      { depth: digitDepth(), raised: raised, samples: 256 }) : null;
+    if (!g) return ICO.makeRelief({ digit: st.digit }, { depth: digitDepth(), raised: raised });
+    var SC = 0.30, OX = -0.62, OY = 0.64;
+    var f = function (u, v, w, h) {
+      var uu = (u - OX) / SC, vv = (v - OY) / SC;
+      if (uu < -1 || uu > 1 || vv < -1 || vv > 1) return 0;
+      return g(uu, vv, w, h);
+    };
+    f.depth = g.depth; f.raised = g.raised; f.parts = [];
+    return f;
+  }
+
   function relief() {
     /* Braille wins outright when it is set: it is a specification, and mixing
        a decorative icon into it would put shapes a finger cannot distinguish
        from dots next to dots. */
-    if (st.braille && window.keycapBraille) {
+    /* With a model seated on the cap the relief field carries only the corner
+       digit, if any - the sculpt is real geometry, not a displacement. */
+    if (st.sculpt) return digitRelief(false);
+    if (st.art === 'none') return digitRelief(st.raised);
+    if (st.art === 'braille') {
+      if (!st.braille || !window.keycapBraille) return null;
       return window.keycapBraille.brailleRelief(st.braille, { dotHeight: Math.max(0.48, st.depth) });
     }
     if (st.skin) {
@@ -256,7 +424,7 @@
         { depth: st.depth, raised: st.raised });
       if (!st.digit) return f;
       // keep the corner digit over a generated skin: take whichever stands proud
-      var d = ICO.makeRelief({ digit: st.digit }, { depth: st.depth, raised: st.raised });
+      var d = digitRelief(st.raised);
       var both = function (u, v, w, h) {
         var a = f(u, v, w, h), b = d(u, v, w, h);
         return st.raised ? Math.min(a, b) : Math.max(a, b);
@@ -265,18 +433,91 @@
       return both;
     }
     if (!st.icon && !st.digit) return null;
-    return ICO.makeRelief({ icon: st.icon || undefined, digit: st.digit },
-                          { depth: st.depth, raised: st.raised });
+    if (!st.icon) return digitRelief(st.raised);
+    /* Icon and digit at their own depths, combined by whichever stands
+       furthest proud - the icon may be deep, the digit must not follow it. */
+    var ic = ICO.makeRelief({ icon: st.icon }, { depth: st.depth, raised: st.raised });
+    if (!st.digit) return ic;
+    var dg = digitRelief(st.raised);
+    var both = function (u, v, w, h) {
+      var a = ic(u, v, w, h), b = dg(u, v, w, h);
+      return st.raised ? Math.min(a, b) : Math.max(a, b);
+    };
+    both.depth = st.depth; both.raised = st.raised; both.parts = ic.parts || [];
+    return both;
   }
 
+  /* WHY THIS IS DEBOUNCED, and why it was making the whole dashboard lie.
+
+     refresh() rebuilds the cap mesh, redraws the 3D view and rasterises the
+     flat legend preview - and the legend alone is 200x200 pixels each calling
+     the relief function, which evaluates every signed-distance primitive in the
+     icon. That is around a million distance evaluations, on the main thread,
+     and it ran on EVERY keystroke and every tick of the relief slider.
+
+     The visible symptom was not a slow card. It was the dashboard announcing
+     "Printer busy - waiting for it to answer": the status poll's fetch could
+     not run while this was blocking, the poll timed out, and the page drew the
+     obvious conclusion about a printer that was in fact sitting idle. */
+  var pending = 0;
   function refresh() {
+    clearTimeout(pending);
+    pending = setTimeout(refreshNow, 110);
+  }
+  /* One place that builds a cap, at whichever resolution the caller needs. */
+  function capFor(mode, rel) {
+    var pr = K.PROFILES[st.profile];
+    var topW = K.capWidth(st.sizeU) - 2 * pr.topInset;
+    var grid = mode === 'print'
+      ? K.gridForFace(topW)                  // one sample per printer pixel
+      : 31;                                  // enough to judge, cheap to spin
+    var cap = K.build({ profile: st.profile, row: st.row, sizeU: st.sizeU,
+                        relief: rel, topGrid: grid });
+    if (st.sculpt && window.keycapSculpt) {
+      var SCp = window.keycapSculpt;
+      cap.dishDepth = pr.dishDepth;
+      cap.sizeU = st.sizeU;
+      var seated = SCp.seat(cap, st.sculpt,
+        { heightMm: Math.max(6, st.depth > 1 ? st.depth * 5 : 13) });
+      cap.positions = seated.positions;
+      cap.triangles = seated.triangles;
+      cap.seated = seated;
+      cap.printPlan = SCp.printPose(seated, cap);
+      cap.size = { x: seated.footprintMm.x, y: seated.footprintMm.y,
+                   z: seated.totalHeightMm };
+      cap.sculptCheck = SCp.check(seated);
+    }
+    cap.relief = rel;
+    cap.name = (st.key || 'cap') + '-' + (st.icon || (st.sculpt ? 'art' : 'plain'));
+    return cap;
+  }
+
+  /* The full-resolution cap, built only when something real happens to it. */
+  function printMesh() {
+    var rel = null;
+    try { rel = relief(); } catch (e) {}
+    var c = capFor('print', rel);
+    return K.orientForPrint(c.positions, c.angle);
+  }
+
+  function refreshNow() {
     var rel = null, err = null;
     try { rel = relief(); } catch (e) { err = e.message; }
     try {
-      built = K.build({ profile: st.profile, row: st.row, sizeU: st.sizeU,
-                        relief: rel, topGrid: 31 });
+      /* PREVIEW AND PRINT DO NOT SHARE A RESOLUTION, and conflating them is
+         what made the dashboard shout "Printer busy" again: sampling the cap at
+         the printer's pixel takes it from 2,760 triangles to 26,472, and the 3D
+         view rasterises every one of them in JavaScript on the main thread,
+         every frame. The poll could not get a turn.
+
+         So the preview is built coarse and the fine mesh is built ONCE, on
+         demand, by capFor('print') when something is actually exported, sliced
+         or put on a plate. What you look at is fast; what the machine gets is
+         at full resolution. */
+      built = capFor('preview', rel);
       built.relief = rel;
-      built.name = (st.key || 'cap') + '-' + (st.icon || 'plain');
+      built.name = (st.key || 'cap') + '-' + (st.icon || (st.sculpt ? 'art' : 'plain'));
+
     } catch (e) { built = null; err = e.message; }
     drawHero();
     drawTop(rel);
@@ -315,7 +556,12 @@
      read. This is where you actually judge the artwork. */
   function drawTop(rel) {
     var c = $('kcFlat'); if (!c) return;
-    var g = c.getContext('2d'), W = c.width, H = c.height;
+    /* Rendered at a quarter of the pixels and scaled up. This is a thumbnail
+       next to a 3D view, not the thing that gets printed - the printability
+       check rasterises the field properly at 127.5 microns elsewhere - and at
+       200x200 it cost about a million SDF evaluations per keystroke. */
+    var g = c.getContext('2d'), W = 100, H = 100;
+    c.width = W; c.height = H;
     var img = g.createImageData(W, H);
     var pr = K.PROFILES[st.profile], dd = pr.dishDepth;
     var topW = K.capWidth(st.sizeU) - 2 * pr.topInset;
@@ -416,6 +662,15 @@
     var pr = K.PROFILES[st.profile];
     var topW = K.capWidth(st.sizeU) - 2 * pr.topInset, topD = K.DEPTH - 2 * pr.topInset;
     var f = ICO.checkLegendField(rel, topW, topD);
+    /* One line stating what the engine chose and what it costs, instead of a
+       paragraph explaining the architecture. */
+    var plan = built && built.printPlan;
+    if (plan) {
+      say('kcDims', built.size.x.toFixed(1) + ' \u00d7 ' + built.size.y.toFixed(1) +
+        ' \u00d7 ' + built.size.z.toFixed(2) + ' mm \u00b7 ' +
+        (st.raised ? 'raised ' : 'engraved ') + st.depth.toFixed(2) + ' mm \u00b7 ' +
+        (plan.tilt ? ('leans ' + plan.tilt + '\u00b0, supports') : 'flat, no supports'));
+    }
     var src = st.skin ? 'generated' : 'drawn';
     if (f.ok) say('kcLegendWarn', src + ': thinnest feature ' + f.thinnestMarkMm.toFixed(2) +
       ' mm (' + (f.thinnestMarkMm / K.PIXEL_MM).toFixed(1) + ' pixels) - holds.');
@@ -494,9 +749,11 @@
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(function () { URL.revokeObjectURL(u); }, 4000);
   }
+  /* Anything that leaves this card - the plate, the slicer, an STL - takes
+     the full-resolution mesh, not the one on screen. */
   function oriented() {
     if (!built) return null;
-    return K.orientForPrint(built.positions, built.angle);
+    return printMesh();
   }
 
   $('kcAdd').addEventListener('click', function () {
@@ -542,6 +799,11 @@
       ' mm, left to right. Keep the first that clicks on without force, then set slotClearance to it minus ' +
       K.MX.crossWide + '.');
   });
+
+  $('kcModes') && Array.prototype.forEach.call($('kcModes').querySelectorAll('button'),
+    function (b) {
+      b.addEventListener('click', function () { setArt(b.getAttribute('data-mode')); });
+    });
 
   $('kcPose') && Array.prototype.forEach.call($('kcPose').querySelectorAll('button'),
     function (b) {
@@ -705,6 +967,7 @@
   $('kcFinish') && Array.prototype.forEach.call($('kcFinish').querySelectorAll('button'),
     function (b) {
       b.addEventListener('click', function () {
+        st.touchedFinish = true;
         setFinish(b.getAttribute('data-raised') === '1');
         refresh();
       });
@@ -728,6 +991,7 @@
     st.digit = (this.value || '').trim().slice(0, 1); refresh();
   });
   $('kcDepth').addEventListener('input', function () {
+    st.touchedFinish = true;
     st.depth = parseFloat(this.value);
     $('kcDepthVal').textContent = st.depth.toFixed(2);
     refresh();
@@ -741,6 +1005,8 @@
     });
   });
 
+  setArt(st.art);
+  drawShelf();
   setFinish(st.raised);
   $('kcDepth').value = st.depth;
   $('kcDepthVal').textContent = st.depth.toFixed(2);

@@ -283,6 +283,68 @@
            [-0.42, 0.40], [0.00, 0.80]]]
   };
 
+  /* ---- real type, when there is a browser to draw it -------------------
+     The digits below are polylines I drew by hand, and they look it - at any
+     mesh resolution a hand-plotted 7 is a hand-plotted 7. A browser already
+     has properly hinted typefaces, so the glyph is rasterised once to an
+     offscreen canvas and its coverage becomes the height field. Real
+     typography, no font file to embed, and it falls back to the polylines in
+     node where there is no canvas.
+
+     Coverage rather than a threshold: the canvas antialiases the edge, and
+     using that ramp directly gives a clean shoulder instead of a staircase. */
+  function glyphRelief(text, opts) {
+    var o = opts || {};
+    var doc = root.document;
+    if (!doc || !doc.createElement) return null;
+    var N = o.samples || 256;
+    var c = doc.createElement('canvas');
+    c.width = N; c.height = N;
+    var g = c.getContext('2d', { willReadFrequently: true });
+    if (!g) return null;
+    g.clearRect(0, 0, N, N);
+    g.fillStyle = '#fff';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    var weight = o.weight || 700;
+    var family = o.family || 'ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif';
+    // shrink until the glyph fits the box with a margin
+    var px = N * 0.82;
+    for (var tries = 0; tries < 8; tries++) {
+      g.font = weight + ' ' + px + 'px ' + family;
+      var m = g.measureText(text);
+      var w = m.width;
+      var h = (m.actualBoundingBoxAscent || px * 0.7) + (m.actualBoundingBoxDescent || px * 0.2);
+      if (w <= N * 0.86 && h <= N * 0.86) break;
+      px *= Math.min(N * 0.86 / Math.max(w, 1), N * 0.86 / Math.max(h, 1)) * 0.98;
+    }
+    g.font = weight + ' ' + px + 'px ' + family;
+    var mm = g.measureText(text);
+    var asc = mm.actualBoundingBoxAscent || px * 0.7;
+    var desc = mm.actualBoundingBoxDescent || px * 0.2;
+    g.fillText(text, N / 2, N / 2 + (asc - desc) / 2);
+    var data;
+    try { data = g.getImageData(0, 0, N, N).data; } catch (e) { return null; }
+    var cov = new Float32Array(N * N);
+    for (var i = 0, k = 3; i < cov.length; i++, k += 4) cov[i] = data[k] / 255;
+
+    var depth = o.depth == null ? 0.55 : o.depth;
+    var raised = !!o.raised;
+    var f = function (u, v) {
+      var x = (u + 1) / 2 * (N - 1), y = (1 - v) / 2 * (N - 1);
+      if (x < 0 || y < 0 || x > N - 1 || y > N - 1) return 0;
+      var x0 = x | 0, y0 = y | 0, x1 = Math.min(N - 1, x0 + 1), y1 = Math.min(N - 1, y0 + 1);
+      var fx = x - x0, fy = y - y0;
+      var a = cov[y0*N+x0]*(1-fx)*(1-fy) + cov[y0*N+x1]*fx*(1-fy) +
+              cov[y1*N+x0]*(1-fx)*fy     + cov[y1*N+x1]*fx*fy;
+      if (a <= 0.02) return 0;
+      var t = a * a * (3 - 2 * a);
+      return raised ? -depth * t : depth * t;
+    };
+    f.depth = depth; f.raised = raised; f.parts = []; f.glyph = text;
+    return f;
+  }
+
   function digitShape(ch, w) {
     var paths = DIGITS[String(ch)];
     if (!paths) return [];
@@ -497,6 +559,7 @@
     evalHeight: evalHeight,
     raisedTilt: raisedTilt,
     evalShape: evalShape, scaleShape: scaleShape, digitShape: digitShape,
+    glyphRelief: glyphRelief,
     smooth: smooth, pixelIcon: pixelIcon
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.keycapIcons;

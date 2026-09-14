@@ -637,6 +637,7 @@ progress::-moz-progress-bar{background:var(--live)}
               title='Collapse the model list'>&#9660;</button></h2>
     </div>
 
+    <div id='uploadHint' class='hint' style='margin:2px 0 10px'>Uploaded SL1/ZIP files are unpacked into printable model folders on the SD card.</div>
     <div id='sdActions' style='display:flex;align-items:center;gap:8px;margin-bottom:8px'>
       <!-- Filtre siulymai uzgula pati modeliu sarasa, del kurio filtras ir spaudziamas. -->
       <input id='filesFilter' type='text' class='hidden' placeholder='Filter models...'
@@ -3107,9 +3108,21 @@ const refreshStatus=async()=>{
     if(updLock&&updSawDown)location.reload();
     if(updLock&&!updSawDown&&Date.now()-updLockAt>90000){updLock=false;$('updOverlay').classList.remove('on');msg('Update did not start - the printer never went down. Check System > Update on the printer.',true);}
     statusFailCount=0;
-    if(pollWarnTxt){
+    /* A successful poll clears the no-answer warning UNCONDITIONALLY.
+    
+       This used to sit behind `if(pollWarnTxt)`, so the only thing that could
+       remove the pill was the same variable that put it there. Anything that
+       reset pollWarnTxt without touching the DOM - and something does - left
+       "Printer busy - waiting for it to answer" on screen permanently, with
+       the printer answering every single second and no code path able to take
+       it down. Measured: 65 of 65 samples over 13 s, zero failed polls.
+    
+       The printer answering IS the proof that it is not busy, so the check
+       reads the DOM rather than trusting the flag. */
+    {
       const e=$('statusMsg');
-      if(e.textContent===pollWarnTxt)msg('',false);
+      if(e&&(/Printer busy|not answering/i.test(e.textContent)||
+             (pollWarnTxt&&e.textContent===pollWarnTxt)))msg('',false);
       pollWarnTxt='';
     }
     /* Kitas irenginys siunčia printeriui faila. Zinom tai TIK is retu sekmingu
@@ -3154,6 +3167,12 @@ const refreshStatus=async()=>{
     paramVartai();
     if(!pendingPrintCmd&&!deleteBusy&&!printWaitCur&&!sdJobCur&&!rxSnackTxt&&(!msg._until||Date.now()>=msg._until))msg('',false);
   }catch(e){
+    /* The poll's catch covers the fetch AND every line of rendering after it, so
+       a plain JavaScript error in the dashboard gets reported to the user as
+       "the printer is not answering" - blaming the machine for a bug in the
+       page. It is logged now, because a swallowed exception that lies about
+       its cause costs far more than a console line. */
+    if(e&&e.name!=='AbortError')console.error('[status poll]',e);
     statusFailCount++;
     if(updLock)updSawDown=true;
     /* Kai snacka jau valdo ilgas darbas, apklausa apie save NERASO NIEKO. Jos zinute
@@ -3207,7 +3226,14 @@ const refreshStatus=async()=>{
        kuri jau du kartus buvo pagauta ([[statusmsg-poll-owns]]). `!bgJob` - kad dalijimasis
        ir ikelimas ir toliau vadintusi vardais (V 08-13 „sakyk tiksliai"), o ne pasislepty
        po bendresniu tekstu. `inPlace` - be pakartotinio isslinkimo. */
-    else if(statusData&&!statusData.busy&&!bgJob&&lastPollOkAt&&Date.now()-lastPollOkAt<PRINTER_QUIET_GRACE_MS){
+    /* statusFailCount>=2, which is what the comment four lines up already says:
+       "A single missed poll is routine ... only speak up when it keeps failing."
+       The branch had no count test at all, so ONE miss shouted - and because a
+       success resets the counter, the pill alternated set/clear about once a
+       second and read as permanently stuck. Measured on an idle printer
+       answering every poll: 70 of 70 samples showing it, zero failed requests,
+       and it persisted with the keycap card removed from the page entirely. */
+    else if(statusData&&!statusData.busy&&!bgJob&&statusFailCount>=2&&lastPollOkAt&&Date.now()-lastPollOkAt<PRINTER_QUIET_GRACE_MS){
       /* `inPlace` tik KARTOJANT: pirmam rodymui jis praleistu `snackCentre()`, ir sviezaime
          lange zinute atsirastu virsuje (CSS `top:14px`), o ties ~16 s, kai kalba garsioji
          saka, persoktu i centra - akiai tai antras pranesimas ([[snackbaru-taisykle]],
@@ -7039,6 +7065,7 @@ $('cfgMqttEnabled').addEventListener('change',updateMqttFields);
 /*#include parts/keycap-sculpt.js*/
 /*#include parts/keycap-braille.js*/
 /*#include parts/keycap-share.js*/
+/*#include parts/keycap-library.js*/
 /*#include parts/keycap-view3d.js*/
 /*#include parts/meshy.js*/
 /*#include parts/slicer.js*/

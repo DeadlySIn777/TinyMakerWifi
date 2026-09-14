@@ -209,10 +209,21 @@
   /* Grid resolution has to leave the top perimeter (4n-4) divisible by the
      cross's 12, so bridgeUneven gets a whole number. */
   function snapGrid(n) {
-    n = Math.max(7, Math.min(61, Math.round(n)));
+    /* The ceiling was 61, which put a 13.7 mm top face on a 0.23 mm grid -
+       nearly twice the printer's 0.1275 mm pixel. Every legend was therefore
+       discarded at better than half the resolution the machine can print,
+       before the slicer ever saw it: a 0.5 mm digit stroke landed on two
+       samples and came out mangled. 151 lets the grid reach the pixel. */
+    n = Math.max(7, Math.min(151, Math.round(n)));
     while ((4*n - 4) % 12) n++;
     return n;
   }
+  /* The grid that matches the machine: about one sample per printer pixel
+     across the face. Finer than that is detail the mask cannot hold. */
+  function gridForFace(topWmm, pixelMm) {
+    return snapGrid(Math.ceil(topWmm / (pixelMm || PIXEL_MM)) + 1);
+  }
+
 
   // ---- the top surface ----------------------------------------------------
   /* z grows from the top face INTO the cap, so a dish - which removes material
@@ -775,6 +786,7 @@
   root.keycap = {
     MX: MX, PROFILES: PROFILES, UNIT: UNIT, DEPTH: DEPTH, BED: BED, PIXEL_MM: PIXEL_MM,
     capWidth: capWidth, build: build, orientForPrint: orientForPrint,
+    gridForFace: gridForFace,
     orientAsPrinted: orientAsPrinted,
     validate: validate, fits: fits, tiltFit: tiltFit, perPlate: perPlate,
     layout: layout, planSet: planSet, volumeMm3: volumeMm3, costOf: costOf,
