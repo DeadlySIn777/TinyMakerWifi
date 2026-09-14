@@ -383,5 +383,102 @@ for (const [prof, row] of [['DSA','R3'],['XDA','R3'],['SA','R1'],['SA','R2'],['S
     worst >= 0.6 && worst < 1e8, worst > 1e8 ? 'no rays hit' : worst.toFixed(2) + ' mm of overlap');
 }
 
+
+/* ======================================================================== */
+console.log('\nA BOWL IS NOT A FLAT FACE - the centre ray is only for the cap');
+/* surfaceUnder() took the centre ray for EVERYTHING, and justified it with a
+   fact about keycaps: a dished top varies a few tenths of a millimetre across
+   a footprint, so the middle stands for the whole. A generated shell makes no
+   such promise. Ask the centre of a bowl and it answers with the FLOOR of the
+   bowl - so a figure standing on the rim got "repaired" by being dropped
+   inside it, and reseat() reported success.
+
+   The mesh below is that bowl: a floor down at z 8-10 and one wall coming back
+   up to z 0. z runs DOWNWARD into the cap, so the wall's top (z = 0) is the
+   high ground and the floor (z = 8) is 8 mm below it. */
+const bowl = merge(box(-10, 10, -10, 10, 8, 10),      // the floor
+                   box(-10, -8, -10, 10, 0, 10));     // one wall, up to z = 0
+const bowlTris = bowl.length / 9;
+const wholeFoot = { mn: [-10, -10, 0], mx: [10, 10, 0] };
+ok('asked as a cap, the centre ray answers with the floor',
+   SC.surfaceUnder(bowl, null, 0, bowlTris, wholeFoot, 5, true), 8);
+ok('asked as a shell, the grid answers with the rim',
+   SC.surfaceUnder(bowl, null, 0, bowlTris, wholeFoot, 5, false), 0);
+truthy('and a shell never gets the centre ray by default',
+  SC.surfaceUnder(bowl, null, 0, bowlTris, wholeFoot, 5) === 0,
+  String(SC.surfaceUnder(bowl, null, 0, bowlTris, wholeFoot, 5)));
+
+console.log('\nA NUDGE IS MEASURED AGAINST THE PIECE, NOT THE FIGURE');
+/* The bound used to be 0.6 * the WHOLE sculpt's z-extent, so one tall object
+   raised the ceiling for every other piece in the scene. Here a 2 mm bolt sits
+   8 mm above the base - four times its own height, plainly where the generator
+   put it on purpose - next to a 38 mm tower. Under the old rule the tower
+   bought the bolt a 24 mm allowance and the bolt was dragged down onto the
+   base. It must now be left alone, and the scene must go on failing. */
+const tower = merge(box(-9, 9, -9, 9, 0, 2),          // base, meets the cap
+                    box(4, 8, -8, 8, 2, 40),          // the tower
+                    box(-8, -6, -8, -6, 10, 12));     // the bolt, floating
+const towerSeat = SC.seat(cap, tower, { heightMm: 40 });
+ok('the bolt is floating to start with',
+   SC.check(towerSeat).anchorage.floating.length, 1);
+const towerLanded = SC.reseat(towerSeat);
+ok('and a 2 mm bolt is NOT dragged 8 mm down onto the base',
+   towerLanded.moved.length, 0);
+ok('so it is still floating, and still reported',
+   SC.check(towerLanded).anchorage.floating.length, 1);
+truthy('which means the scene is still refused',
+  SC.check(towerLanded).ok === false);
+
+console.log('\nTHE SUMMARY DESCRIBES THE MESH THAT WAS WRITTEN');
+/* sculptMm and totalHeightMm were computed as input-size times scale. seat()
+   tilts the base by the row angle, which makes the seated sculpt taller than
+   that by the rise across its depth - and printPose() picks its lean from
+   these numbers, so under-reporting the height chose a lean whose real
+   footprint ran off the plate. Measure the mesh. */
+for (const [prof, row] of [['SA','R1'], ['CHERRY','R4'], ['OEM','R4'], ['DSA','R3']]) {
+  const c = K.build({ profile: prof, row, sizeU: 1, topGrid: 41 });
+  c.dishDepth = K.PROFILES[prof].dishDepth; c.sizeU = 1;
+  const sc = SC.seat(c, box(-7, 7, -7, 7, 0, 10), { heightMm: 12 });
+  const real = SC.bounds(sc.positions.subarray(sc.capTriangles * 9));
+  truthy(prof + ' ' + row + ': sculptMm.z is the mesh, to 0.01',
+    Math.abs(sc.sculptMm.z - real.size[2]) <= 0.011,
+    sc.sculptMm.z + ' vs ' + real.size[2].toFixed(2));
+  truthy(prof + ' ' + row + ': sculptMm.x/y are the mesh too',
+    Math.abs(sc.sculptMm.x - real.size[0]) <= 0.011 &&
+    Math.abs(sc.sculptMm.y - real.size[1]) <= 0.011);
+  /* The finished part is the cap plus whatever stands proud of z = 0. */
+  truthy(prof + ' ' + row + ': totalHeightMm is cap + proud',
+    Math.abs(sc.totalHeightMm - (c.size.z + Math.max(0, -real.mn[2]))) <= 0.011,
+    sc.totalHeightMm + ' vs ' + (c.size.z + Math.max(0, -real.mn[2])).toFixed(2));
+  /* And the whole part really does fit inside that figure. */
+  const all = SC.bounds(sc.positions);
+  truthy(prof + ' ' + row + ': and nothing sticks out past it',
+    all.size[2] <= sc.totalHeightMm + 0.02,
+    all.size[2].toFixed(2) + ' <= ' + sc.totalHeightMm);
+}
+
+console.log('\nA GAP IS TO THE MATERIAL, NOT TO THE NORMALISATION PLANE');
+/* check() prints this number as "floating N mm clear of everything else". It
+   was -mx[2]: the piece's height above z = 0, which is where build() puts the
+   cap's HIGHEST point - so on a dished or tilted face (every face this engine
+   makes) it was the distance to a plane nothing is on. */
+const gapS2 = SC.seat(cap, merge(box(-8, 8, -8, 8, 0, 3),
+                                    box(-3, 3, -3, 3, 9, 12)), { heightMm: 12 });
+const fl2 = SC.check(gapS2).anchorage.floating;
+ok('one floater', fl2.length, 1);
+const capOnly2 = gapS2.positions.subarray(0, gapS2.capTriangles * 9);
+const faceHere2 = SC.surfaceUnder(capOnly2, null, 0, gapS2.capTriangles,
+                                 { mn: [-3, -3, 0], mx: [3, 3, 0] }, 5, true);
+const pieces2 = SC.shellParts(gapS2.positions.subarray(gapS2.capTriangles * 9));
+const high2 = pieces2.reduce((a, b) => (a.mx[2] < b.mx[2] ? a : b));
+truthy('the reported gap is measured to the cap, not to z = 0',
+  Math.abs(fl2[0].gapMm - (faceHere2 - high2.mx[2])) <= 0.02,
+  fl2[0].gapMm + ' vs ' + (faceHere2 - high2.mx[2]).toFixed(2));
+truthy('which is a DIFFERENT number from the old one',
+  Math.abs(fl2[0].gapMm - (-high2.mx[2])) > 0.05,
+  'old rule would have said ' + (-high2.mx[2]).toFixed(2));
+truthy('and it is positive - the piece really is clear of the cap',
+  fl2[0].gapMm > 0, fl2[0].gapMm + ' mm');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -44,13 +44,33 @@
   function readAscii(text) {
     /* One pass, no split() on the whole file: an ASCII STL of any size is
        mostly whitespace and splitting it allocates several times the file. */
-    var re = /vertex\s+(-?[\d.eE+]+)\s+(-?[\d.eE+]+)\s+(-?[\d.eE+]+)/g;
+    /* ⚠️ THE OLD CLASS HELD '+' AND NOT '-', so it matched 1.0e+000 and could
+       not match 1.0e-003 - which exporters emit constantly for small
+       coordinates. A miss on the first or second coordinate failed the whole
+       match, the engine skipped past the line, and the VERTEX WAS DROPPED:
+       every later vertex shifted one place and triangles were then built from
+       corners belonging to different facets. A mesh that is wrong everywhere,
+       with nothing to say so. The length%9 trim at the end hides it further by
+       quietly discarding the remainder.
+
+       A real float pattern, not a character class - adding '-' to the class
+       would also have accepted "1-2-3". */
+    var NUM = '[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?';
+    var re = new RegExp('vertex\\s+(' + NUM + ')\\s+(' + NUM + ')\\s+(' + NUM + ')', 'g');
     var vals = [], m;
     while ((m = re.exec(text))) {
       vals.push(+m[1], +m[2], +m[3]);
       if (vals.length > MAX_TRIS * 9) throw new Error('That STL is too large to open here.');
     }
-    if (vals.length % 9) vals.length -= vals.length % 9;   // a truncated last facet
+    /* A remainder means vertices went missing mid-file, not that the last facet
+       was cut short - and silently trimming it turns a corrupt read into a
+       plausible-looking mesh. Say so. */
+    if (vals.length % 9) {
+      if (vals.length % 3)
+        throw new Error('That ASCII STL has an incomplete vertex in it - the file ' +
+                        'looks truncated or damaged.');
+      vals.length -= vals.length % 9;
+    }
     return new Float32Array(vals);
   }
 

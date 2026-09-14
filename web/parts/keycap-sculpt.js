@@ -106,7 +106,7 @@
     var BITE = o.bite == null ? 0.8 : o.bite;      // check() calls under 0.60 an issue
     var footBox = { mn: [sxc - maxW * 0.25, syc - maxD * 0.25, 0],
                     mx: [sxc + maxW * 0.25, syc + maxD * 0.25, 0] };
-    var faceZ = surfaceUnder(cap.positions, null, 0, capTris, footBox, o.rays || 5);
+    var faceZ = surfaceUnder(cap.positions, null, 0, capTris, footBox, o.rays || 5, true);
     var seatDepth = o.seatDepth != null ? o.seatDepth
                   : (faceZ != null ? faceZ + BITE
                                    : Math.max(0.8, (cap.dishDepth || 0.8) + 0.5));
@@ -159,11 +159,22 @@
       triangles: both.length / 9,
       scale: +k.toFixed(4),
       seatDepth: +seatDepth.toFixed(2),
-      sculptMm: { x: +(sb.size[0]*k).toFixed(2), y: +(sb.size[1]*k).toFixed(2),
-                  z: +(sb.size[2]*k).toFixed(2) },
-      /* Total height of the finished piece: the cap plus however far the sculpt
-         stands proud of its top face. */
-      totalHeightMm: +(cap.size.z + (sb.size[2]*k - seatDepth)).toFixed(2),
+      /* MEASURED FROM THE MESH, not from the input times the scale. seat()
+         tilts the base by the row angle, which makes the seated sculpt taller
+         than sb.size[2]*k by the rise across its depth - and printPose() picks
+         its lean from these numbers, so under-reporting the height chose a
+         lean whose real footprint ran off the plate. fb is the bounds of what
+         was actually written, eight lines up; footprintMm and overhangs below
+         have always used it. */
+      sculptMm: { x: +fb.size[0].toFixed(2), y: +fb.size[1].toFixed(2),
+                  z: +fb.size[2].toFixed(2) },
+      /* Total height of the finished piece: the cap plus however far the
+         sculpt stands proud of its top face. build() puts the cap's HIGHEST
+         point at z = 0 and z increases downward, so anything above the cap is
+         negative and the proud part is -fb.mn[2]. The old arithmetic -
+         sculpt height minus seat depth - assumed the sculpt sat flat and
+         un-tilted, and was wrong by the row rise on every angled row. */
+      totalHeightMm: +(cap.size.z + Math.max(0, -fb.mn[2])).toFixed(2),
       footprintMm: { x: +Math.max(capW, fb.size[0]).toFixed(2),
                      y: +Math.max(capD, fb.size[1]).toFixed(2) },
       overhangs: +(Math.max(0, fb.size[0] - capW) / 2).toFixed(2),
@@ -271,7 +282,7 @@
     var rays = o.rays || 5;
     var anchored = parts.map(function (g) {
       if (g.mx[2] < 0) return false;
-      var s = surfaceUnder(seatedPositions, null, 0, capTriangles, g, rays);
+      var s = surfaceUnder(seatedPositions, null, 0, capTriangles, g, rays, true);
       return s !== null && g.mx[2] >= s - slack;
     });
     var changed = true, i, j;
@@ -285,6 +296,10 @@
         }
       }
     }
+    function gapUnder(f) {
+      var sz = surfaceUnder(seatedPositions, null, 0, capTriangles, f, rays, true);
+      return sz == null ? -f.mx[2] : (sz - f.mx[2]);
+    }
     var floating = [];
     for (i = 0; i < parts.length; i++)
       if (!anchored[i] && parts[i].tris > 2)
@@ -292,7 +307,14 @@
                         sizeMm: [ +(parts[i].mx[0]-parts[i].mn[0]).toFixed(2),
                                   +(parts[i].mx[1]-parts[i].mn[1]).toFixed(2),
                                   +(parts[i].mx[2]-parts[i].mn[2]).toFixed(2) ],
-                        gapMm: +(-parts[i].mx[2]).toFixed(2) });
+                        /* TO THE MATERIAL, not to z = 0. This reported the
+                           piece's height above the normalisation plane, and
+                           check() prints it as "floating N mm clear of
+                           everything else" - a different quantity, and always
+                           wrong on a dished or tilted face, which is every
+                           face this engine makes. Measure to the surface
+                           actually under it. */
+                        gapMm: +gapUnder(parts[i]).toFixed(2) });
     return { shells: parts.length, anchored: anchored.filter(Boolean).length,
              floating: floating };
   }
@@ -359,8 +381,8 @@
     return top;
   }
 
-  /* The surface under the middle of the footprint, and a grid only when the
-     middle misses.
+  /* The surface under a footprint. Two rules, and WHICH ONE depends on what is
+     being asked about - see centreFirst.
 
      The obvious rule - "take the DEEPEST top across the footprint, so the whole
      base makes contact" - is wrong the moment a piece overhangs the cap, which
@@ -377,12 +399,27 @@
      When the centre misses there is a hole under the piece: an arch, a ring, a
      horseshoe. Then the grid answers, and it answers with the SHALLOWEST hit,
      which cannot bury the piece. If nothing is hit at all, nothing is there -
-     return null and let the caller refuse to land it. */
-  function surfaceUnder(p, idx, lo, hi, box, n) {
+     return null and let the caller refuse to land it.
+
+     ALL OF THAT REASONING IS ABOUT THE CAP, and it does not carry to a shell
+     the generator produced - hence centreFirst, passed true by the four cap
+     callers and by nobody else. */
+  function surfaceUnder(p, idx, lo, hi, box, n, centreFirst) {
     n = n || 5;
-    var cx = (box.mn[0] + box.mx[0]) / 2, cy = (box.mn[1] + box.mx[1]) / 2;
-    var c = rayTop(p, idx, lo, hi, cx, cy);
-    if (c !== null) return c;
+    /* THE CENTRE RAY IS ONLY SOUND FOR THE CAP, and it used to be taken for
+       everything. Its justification is that a keycap's top face varies by a
+       few tenths of a millimetre across a footprint, so the middle stands for
+       the whole. A GENERATED SHELL makes no such promise: ask the centre of a
+       bowl and it answers with the FLOOR of the bowl, so a figure standing on
+       the rim was dropped inside it - a repair that destroys the scene while
+       reporting success. Arbitrary geometry therefore gets the grid and the
+       SHALLOWEST hit below, which cannot bury anything. The cap keeps the
+       cheap path, because there the claim is actually true. */
+    if (centreFirst) {
+      var cx = (box.mn[0] + box.mx[0]) / 2, cy = (box.mn[1] + box.mx[1]) / 2;
+      var c = rayTop(p, idx, lo, hi, cx, cy);
+      if (c !== null) return c;
+    }
     var best = null, a, b, x, y, z;
     var w = box.mx[0] - box.mn[0], d = box.mx[1] - box.mn[1];
     for (a = 0; a < n; a++) for (b = 0; b < n; b++) {
@@ -441,7 +478,7 @@
     /* Anchored means "it reaches the material of the cap", measured, not
        "its box crosses z = 0". */
     function reaches(g) {
-      var s = surfaceUnder(out, null, 0, capTris, g, rays);
+      var s = surfaceUnder(out, null, 0, capTris, g, rays, true);
       return s !== null && g.mx[2] >= s - slack;
     }
     function planOverlap(a, b) {
@@ -502,7 +539,7 @@
           if (d >= -slack && (best === null || d < best)) { best = d < 0 ? 0 : d; onto = 'the piece under it'; }
         }
         if (best === null) {
-          var cz = surfaceUnder(out, null, 0, capTris, f, rays);
+          var cz = surfaceUnder(out, null, 0, capTris, f, rays, true);
           if (cz !== null) { best = cz - f.mx[2]; if (best < 0) best = 0; onto = 'the cap'; }
         }
         /* Nothing under it at all. Translation cannot save this piece, so it
@@ -521,11 +558,28 @@
            but the cap, twelve millimetres down - and dropping it there does
            produce a printable object, just not the one anybody designed. It
            would land inside the arch's opening, sitting on the floor, and the
-           only sign would be a number in a note. So a drop worth more than
-           sixty per cent of the sculpt's own height is refused, the piece is
-           left where the generator put it, and check() goes on saying the scene
-           is wrong - which it is, and which is the generator's to fix. */
-        if (dz > maxDrop || dz > span * 0.6) continue;
+           only sign would be a number in a note. So a drop that is large for
+           the piece being moved is refused, the piece is left where the
+           generator put it, and check() goes on saying the scene is wrong -
+           which it is, and which is the generator's to fix.
+
+           ⚠️ "LARGE" IS MEASURED AGAINST THE PIECE, NOT THE FIGURE. This used
+           to be 0.6 * span, and span is the z-extent of the WHOLE sculpt - so
+           one tall object anywhere in it raised the ceiling for every other
+           piece. A 2 mm bolt beside a 30 mm tower was allowed an 18 mm
+           "nudge", which is not a repair, it is relocating the artwork:
+           exactly what this paragraph says must not happen, permitted by the
+           test written to forbid it. Against the piece, that bolt now gets
+           3 mm.
+
+           1.5 * h, not 0.6 * h, because a drop has to survive a CASCADE: when
+           the thing underneath lands first, everything stacked on it must
+           follow the whole way down, and that distance is bounded by the
+           stack, not by the follower's own height. 1.5 leaves room for one
+           full-height fall plus the bite; the 1.5 mm floor keeps an honest
+           small correction legal on a piece so short that a fraction of its
+           height is less than the bite itself. */
+        if (dz > maxDrop || dz > Math.max(1.5, h * 1.5)) continue;
         settle(f, dz);
         anchored[i] = true; did = true;
         for (j = 0; j < parts.length; j++)

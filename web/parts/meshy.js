@@ -217,7 +217,16 @@
     }
 
     function viaPrinter(why) {
-      return fetch('/api/fetch?u=' + encodeURIComponent(u), { cache: 'no-store' })
+      /* X-TinyMaker, or the printer refuses its own dashboard. requestFromOwnUi
+         accepts an Origin matching Host OR this header, and a same-origin GET
+         from a browser sends NEITHER - browsers omit Origin on same-origin
+         GET, and this call set no headers. Measured on the device: 403 without
+         it, 200 with it. The whole printer-fetches-it feature was returning 403
+         every time and quietly falling through to the manual link. Same origin,
+         so a custom header triggers no preflight - which matters, because the
+         printer cannot answer OPTIONS. */
+      return fetch('/api/fetch?u=' + encodeURIComponent(u),
+                   { cache: 'no-store', headers: { 'X-TinyMaker': '1' } })
         .then(function (r) {
           if (r.ok) return r.arrayBuffer();
           return r.json().catch(function () { return null; }).then(function (j) {

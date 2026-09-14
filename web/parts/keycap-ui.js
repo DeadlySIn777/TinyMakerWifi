@@ -232,6 +232,16 @@
          : Object.keys(pr.rows)[0];
   }
 
+  /* What a key label is allowed to be. Not an escape - a whitelist: the value
+     is a legend off a keyboard ("5", "Shift", ";"), and anything that is not
+     that is not a key label whatever else it might be. Escaping asks every
+     future sink to remember; this makes the value safe once. */
+  function safeKeyLabel(v) {
+    if (typeof v !== 'string') return null;
+    var t = v.trim().slice(0, 12);
+    return /^[A-Za-z0-9 _\-+=\[\]\\;',./`~!@#$%^&*()<>?:"{}|]*$/.test(t) && t ? t : null;
+  }
+
   function restoreSession() {
     var raw;
     try { raw = localStorage.getItem(SESSION); } catch (e) { return; }
@@ -243,7 +253,13 @@
     st.profile = p;
     st.row = knownRow(p, d.row);
     st.sizeU = d.sizeU || 1;
-    st.key = d.key || null;
+    /* A SHARE CODE IS SOMEBODY ELSE'S TEXT, and this one lands in innerHTML by
+       way of report(). d.profile and d.row have always gone through
+       knownProfile()/knownRow(); d.key went through nothing, and
+       rememberSession then persisted it so it survived reloads and re-fired.
+       This origin holds the Meshy key and can start prints. A key label is a
+       keyboard legend - a handful of printable characters - so say so. */
+    st.key = safeKeyLabel(d.key);
     /* setArt() has already run once by now with the default 'gen', and it is
        the only thing that paints the mode row and the [data-art] panels. Taking
        st.art from storage without repainting leaves the state and the buttons
@@ -1116,6 +1132,12 @@
   }
 
   // ---- step 4 ------------------------------------------------------------
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
   function report() {
     var el = $('kcReport'); if (!el || !built) return;
     /* One source. The report used to merge the plan with a second, separately
@@ -1136,7 +1158,11 @@
 
     var money = K.costOf(built);
     var rows = [
-      ['Cap', st.profile + ' ' + st.row + ' · ' + st.sizeU + 'u' + (st.key ? ' (' + st.key + ')' : '')],
+      /* Escaped at the sink as well as whitelisted at the door. The whitelist
+         is the real defence; this is what keeps the next person who adds a
+         field here from having to know that. */
+      ['Cap', st.profile + ' ' + st.row + ' · ' + st.sizeU + 'u' +
+              (st.key ? ' (' + esc(st.key) + ')' : '')],
       ['Size', built.size.x.toFixed(1) + ' × ' + built.size.y.toFixed(1) + ' × ' + built.size.z.toFixed(2) + ' mm'],
       ['Stem', built.stemDepth.toFixed(2) + ' mm deep · ' + built.slotWidth.toFixed(2) +
                ' mm slot (' + built.slotPixels.toFixed(1) + ' px)'],
@@ -1397,7 +1423,7 @@
     st.braille = d.braille || '';
     if (d.depth) st.depth = d.depth;
     st.raised = d.raised !== false;
-    st.key = d.key || null;
+    st.key = safeKeyLabel(d.key);
     st.sculpt = null;                     // a mesh cannot travel in a code
     st.skinFrom = d.prompt || '';
     if ($('kcDigit')) $('kcDigit').value = st.digit;
