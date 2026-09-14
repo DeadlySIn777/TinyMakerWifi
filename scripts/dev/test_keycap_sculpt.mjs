@@ -457,28 +457,50 @@ for (const [prof, row] of [['SA','R1'], ['CHERRY','R4'], ['OEM','R4'], ['DSA','R
     all.size[2].toFixed(2) + ' <= ' + sc.totalHeightMm);
 }
 
-console.log('\nA GAP IS TO THE MATERIAL, NOT TO THE NORMALISATION PLANE');
-/* check() prints this number as "floating N mm clear of everything else". It
-   was -mx[2]: the piece's height above z = 0, which is where build() puts the
-   cap's HIGHEST point - so on a dished or tilted face (every face this engine
-   makes) it was the distance to a plane nothing is on. */
+console.log('\nA GAP IS TO THE NEAREST THING, AND IT SAYS WHICH');
+/* check() prints this number as "floating N mm clear of everything else", and
+   it was wrong twice over. It was -mx[2]: the piece's height above z = 0, which
+   is where build() puts the cap's HIGHEST point - so on a dished or tilted face
+   (every face this engine makes) it was the distance to a plane nothing is on.
+   And then, measured properly, it was measured to the CAP only, while
+   anchorage() had just spent its whole body reasoning about shell-to-shell
+   support: a figure 6 mm above a base that is itself on the cap was reported as
+   8.20 mm "clear of everything else". Both numbers were true of something.
+   Neither was true of the sentence. */
 const gapS2 = SC.seat(cap, merge(box(-8, 8, -8, 8, 0, 3),
-                                    box(-3, 3, -3, 3, 9, 12)), { heightMm: 12 });
+                                 box(-3, 3, -3, 3, 9, 12)), { heightMm: 12 });
 const fl2 = SC.check(gapS2).anchorage.floating;
 ok('one floater', fl2.length, 1);
-const capOnly2 = gapS2.positions.subarray(0, gapS2.capTriangles * 9);
-const faceHere2 = SC.surfaceUnder(capOnly2, null, 0, gapS2.capTriangles,
-                                 { mn: [-3, -3, 0], mx: [3, 3, 0] }, 5, true);
 const pieces2 = SC.shellParts(gapS2.positions.subarray(gapS2.capTriangles * 9));
+/* z runs DOWN into the cap, so the piece with the SMALLEST mx[2] is the high
+   one and the largest is the base sitting on the face. */
 const high2 = pieces2.reduce((a, b) => (a.mx[2] < b.mx[2] ? a : b));
-truthy('the reported gap is measured to the cap, not to z = 0',
-  Math.abs(fl2[0].gapMm - (faceHere2 - high2.mx[2])) <= 0.02,
-  fl2[0].gapMm + ' vs ' + (faceHere2 - high2.mx[2]).toFixed(2));
-truthy('which is a DIFFERENT number from the old one',
-  Math.abs(fl2[0].gapMm - (-high2.mx[2])) > 0.05,
-  'old rule would have said ' + (-high2.mx[2]).toFixed(2));
-truthy('and it is positive - the piece really is clear of the cap',
-  fl2[0].gapMm > 0, fl2[0].gapMm + ' mm');
+const base2 = pieces2.reduce((a, b) => (a.mx[2] > b.mx[2] ? a : b));
+truthy('the gap is to the piece underneath, not past it to the cap',
+  Math.abs(fl2[0].gapMm - (base2.mn[2] - high2.mx[2])) <= 0.02,
+  fl2[0].gapMm + ' vs ' + (base2.mn[2] - high2.mx[2]).toFixed(2));
+ok('and it names what it is clear of', fl2[0].gapOf, 'the piece under it');
+
+/* With nothing but the cap under it, it measures to the cap - and to the cap's
+   real surface, not to the normalisation plane. */
+/* Two pieces that do NOT share ground in plan, so the raised one has only the
+   cap beneath it and the answer has to come from the cap. */
+const capOnlyScene = SC.seat(cap, merge(box(-8, -2, -8, 8, 0, 3),
+                                        box(2, 8, -8, 8, 9, 12)), { heightMm: 12 });
+const fl3 = SC.check(capOnlyScene).anchorage.floating;
+ok('one floater over bare cap', fl3.length, 1);
+const only = SC.shellParts(capOnlyScene.positions.subarray(capOnlyScene.capTriangles * 9))
+               .reduce((a, b) => (a.mx[2] < b.mx[2] ? a : b));
+const face = SC.surfaceUnder(capOnlyScene.positions.subarray(0, capOnlyScene.capTriangles * 9),
+                             null, 0, capOnlyScene.capTriangles,
+                             { mn: [2, -8, 0], mx: [8, 8, 0] }, 5, true);
+ok('it names the cap', fl3[0].gapOf, 'the cap');
+truthy('measured to the cap surface, not to z = 0',
+  Math.abs(fl3[0].gapMm - (face - only.mx[2])) <= 0.02,
+  fl3[0].gapMm + ' vs ' + (face - only.mx[2]).toFixed(2));
+truthy('which is a DIFFERENT number from the old z = 0 rule',
+  Math.abs(fl3[0].gapMm - (-only.mx[2])) > 0.05,
+  'the old rule would have said ' + (-only.mx[2]).toFixed(2));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

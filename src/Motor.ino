@@ -41,8 +41,17 @@ bool apiMovePlate(float mm, String &error) {
   while (stepper.distanceToGo() != 0) {
     stepper.run();
 #if ENABLE_NETWORK
-    // HTTP only - the caller is an HTTP handler and a long move must not make
-    // the dashboard look dead. Same rule as the homing loop.
+    /* "The caller is an HTTP handler" was the reason this was WRONG, not the
+       reason it was needed. apiMovePlate() is reached only from
+       handleApiMove(), i.e. from inside WebServer::_handleRequest(), and
+       re-entering handleClient() there destroys the very client this request
+       still owes an answer to - so /api/move never replied, and other requests
+       ran re-entrantly while the stepper was moving.
+
+       network_service_http() now refuses to re-enter, so this is a no-op when
+       the move came from HTTP, and still keeps the dashboard alive when the
+       move came from the touchscreen - which is the case the line was written
+       for. Left in place for that case, and only that one. */
     static unsigned long svc = 0;
     if (millis() - svc > 250) { svc = millis(); network_service_http(); }
 #endif

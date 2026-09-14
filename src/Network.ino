@@ -94,6 +94,36 @@ WebServer server(80);
 // API savo kodu, be musu antrastes - ji islaiko Origin patikra. Svetimas
 // puslapis nepraeina nei vienos: antrastes jis neprides (reiketu preflight, o
 // i OPTIONS printeris neatsako), o Origin tures savo.
+// Is this authority one of the printer's OWN names?
+//
+// WITHOUT THIS THE WHOLE CSRF GATE FALLS TO DNS REBINDING. requestFromOwnUi
+// used to test Origin == Host and stop there - and BOTH of those headers come
+// out of the same request, so an attacker supplies both and they agree.
+// Register printer.evil.com with a one-second TTL, get the owner to open
+// http://printer.evil.com/, let the record rebind to 192.168.1.22, and every
+// later request carries Origin: http://printer.evil.com and Host:
+// printer.evil.com. Equal. Accepted. Every POST on this box - start a print,
+// move the Z axis, delete a file, flash the firmware - was then reachable from
+// a page the owner merely visited.
+//
+// The fix is to compare against something the request cannot choose: our own
+// addresses and our own mDNS name. Port 80 may be present or absent; both are
+// us. Kept deliberately short - a name we do not answer on is a name nobody
+// reaches us by.
+static bool hostIsOurs(String a) {
+  a.trim();
+  a.toLowerCase();
+  if (a.length() == 0) return false;
+  if (a.endsWith(":80")) a = a.substring(0, a.length() - 3);
+  while (a.endsWith(".")) a = a.substring(0, a.length() - 1);
+  if (a == "tinymaker.local" || a == "tinymaker") return true;
+  if (a == "localhost" || a == "127.0.0.1") return true;
+  IPAddress sta = WiFi.localIP(), ap = WiFi.softAPIP();
+  if (sta && a == sta.toString()) return true;
+  if (ap && a == ap.toString()) return true;
+  return false;
+}
+
 bool requestFromOwnUi() {
   // SVETIMAS Origin atmetamas VISADA, net su musu antraste: taip taisykle lieka
   // vienareiksme ("is musu puslapio ar ne"), o ne dvieju keliu kombinacija.
@@ -102,11 +132,19 @@ bool requestFromOwnUi() {
     int p = o.indexOf("://");
     if (p >= 0) o = o.substring(p + 3);
     if (!server.hasHeader("Host") || o != server.header("Host")) return false;
-    return true;                     // musu pats puslapis (ir Connect UI jame)
+    // ...and the name they agree on has to be OURS. See hostIsOurs above.
+    return hostIsOurs(o);
   }
   // Origin nera: ne narsykles uzklausa. Praleidziam tik su musu antraste -
   // ja prideda pultas ir musu pacio irankiai.
-  return server.hasHeader("X-TinyMaker");
+  //
+  // A rebound page can set this header on a same-origin request, so when a Host
+  // is present it has to be ours as well. A tool with no Host header at all
+  // (curl -H, the test suite) is not a browser and cannot be a rebinding
+  // victim, so it still passes on the header alone.
+  if (!server.hasHeader("X-TinyMaker")) return false;
+  if (server.hasHeader("Host") && !hostIsOurs(server.header("Host"))) return false;
+  return true;
 }
 
 bool rejectIfWebControlOff() {
@@ -115,6 +153,26 @@ bool rejectIfWebControlOff() {
     return true;
   }
   if (server.method() != HTTP_GET && !requestFromOwnUi()) {
+    /* Two different refusals wear the same 403, and telling them apart is the
+       difference between "somebody is attacking you" and "you typed the wrong
+       address". If Origin and Host agree, this IS the printer's own dashboard
+       as far as the browser is concerned - it just reached us by a name we do
+       not answer to, which is exactly what hostIsOurs() has to refuse. Say
+       which names do work. */
+    if (server.hasHeader("Origin") && server.hasHeader("Host")) {
+      String o = server.header("Origin");
+      int p = o.indexOf("://");
+      if (p >= 0) o = o.substring(p + 3);
+      if (o == server.header("Host")) {
+        String m = "this page reached the printer as \"";
+        m += server.header("Host");
+        m += "\", which is not a name the printer answers to. Open it at http://";
+        m += WiFi.localIP().toString();
+        m += "/ or http://tinymaker.local/";
+        sendApiError(403, m.c_str());
+        return true;
+      }
+    }
     sendApiError(403, "request must come from the printer's own dashboard");
     return true;
   }
@@ -781,7 +839,15 @@ void handleUpdateUpload() {
     otaShownBytes = 0;
     // Latch the decision once, at the start: reject a flash requested while
     // the printer is busy (see handleUpdateFinish).
-    otaBlocked = !otaWebAllowed();
+    //
+    // AND WHO ASKED. This was the ONE write route on the box with no CSRF
+    // check - every other one goes through rejectIfWebControlOff(), and the
+    // four other upload callbacks call requestFromOwnUi() right here. A
+    // multipart POST needs no preflight, so any page the owner had open in
+    // another tab could post a .bin to /update and replace the firmware on an
+    // idle printer. The check has to be latched at START, because the body is
+    // written to flash before handleUpdateFinish ever runs.
+    otaBlocked = !otaWebAllowed() || !requestFromOwnUi();
     if (otaBlocked) {
       DBGLN("Web OTA rejected: not in Update menu");
       return;
@@ -2609,8 +2675,17 @@ void handleApiUvTest() {
   digitalWrite(LED, HIGH);
   unsigned long until = millis() + (unsigned long)secs * 1000UL;
   while ((long)(until - millis()) > 0) {
+    /* No network_service_http() here. It used to be called "to keep the
+       dashboard answering during the burn", and what it actually did was
+       re-enter WebServer::handleClient() from inside a handler: the in-flight
+       client sits in HC_WAIT_READ with nothing left to read, and after
+       HTTP_MAX_DATA_WAIT the core destroys it - so THIS request never got its
+       answer, and meanwhile other requests were dispatched while the UV LED
+       was lit. The guard in network_service_http() makes the call a no-op now
+       anyway; it is removed here as well so the intent is not misread again.
+       A one-to-thirty-second silence is what every other blocking action on
+       this box already accepts. */
     delay(10);
-    network_service_http();   // keep the dashboard answering during the burn
   }
   digitalWrite(LED, LOW);
   gfx1->fillScreen(BLACK);
@@ -4801,7 +4876,13 @@ void handleApiBootAnimFile() {
   uint8_t buf[512];
   int n;
   WiFiClient client = server.client();
-  while ((n = f.read(buf, sizeof(buf))) > 0) client.write(buf, n);
+  /* Guarded like every sibling streamer (handleApiModelSlicesGet, handleLibThree,
+     handleLibSlicerFile). A closed peer makes WiFiClient::write retry 10 x 1 s
+     per chunk, and this route serves up to 8 MB: unguarded, one browser that
+     walked away holds this loop - and therefore the motors - for hours. */
+  while ((n = f.read(buf, sizeof(buf))) > 0) {
+    if ((int)client.write(buf, n) != n || !client.connected()) break;
+  }
   f.close();
 }
 
@@ -5594,9 +5675,30 @@ void network_setup() {
 // HTTP only - safe inside the exposure wait loop: full network_loop() also
 // runs MQTT and the Connect sync, whose timeouts can hold the caller for
 // seconds, and during an exposure that caller is also the button poll.
+/* RE-ENTRANCY GUARD. The comment on sdJobService() below already states the
+   rule - handleClient() must never run inside an HTTP handler, "where nested
+   handleClient would corrupt the pending response" - and two handlers broke it
+   anyway: apiMovePlate()'s motion loop and handleApiUvTest()'s burn loop, both
+   of which are only ever entered FROM a handler.
+
+   What happened when they did: the in-flight client is parked in HC_WAIT_READ
+   with its body fully consumed, so the nested call finds nothing to read;
+   after HTTP_MAX_DATA_WAIT the core declares it dead and destroys it. The
+   request still executing therefore never sent an answer - /api/move simply
+   never replied - and other requests were dispatched re-entrantly while the
+   stepper was running or the UV LED was lit.
+
+   A flag is the whole fix, and it is the right shape: it makes the rule true
+   for every caller, including the next one somebody adds, instead of relying
+   on each of the twelve call sites to remember it. */
+static bool httpDispatching = false;
+
 void network_service_http() {
   if (!networkRuntimeEnabled()) return;
+  if (httpDispatching) return;        // already inside a handler - see above
+  httpDispatching = true;
   server.handleClient();
+  httpDispatching = false;
 }
 
 // Deferred-SD-job HTTP servicing (1-32/1-33): called from the delete/unpack
@@ -5659,7 +5761,9 @@ void sdJobRun() {
 
 void network_loop() {
   if (!networkRuntimeEnabled()) return;
-  server.handleClient();   // dashboard stays viewable with Web control off
+  /* Through the same guard as every other entry, so a handler that calls back
+     into the loop cannot dispatch a second request on top of itself. */
+  network_service_http();  // dashboard stays viewable with Web control off
                            // (actions are 403'd - see rejectIfWebControlOff)
   // Dev espota OTA is answered only while the printer is on the Update screen
   // (same safety gate as the web /update flasher).

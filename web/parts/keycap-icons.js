@@ -383,8 +383,27 @@
     groups = groups.filter(function (g) { return g && g.length; });
     if (!groups.length) return null;
 
-    var f = function (u, v) {
+    /* ROUND THINGS HAVE TO STAY ROUND. The relief contract normalises x and y
+       INDEPENDENTLY - u = x/(topW/2), v = y/(topD/2) - so on any cap wider than
+       it is deep, a shape that is square in (u,v) comes out topW/topD times
+       wider than it is tall. On a 6.25u spacebar that is a factor of six: the
+       cross in the first-aid icon became a letter box, and the corner digit
+       became a smear.
+
+       keycap-braille works in real millimetres and keycap-skin takes one
+       uniform scale k = fit * min(topW/su, topD/sv) for exactly this reason.
+       This path never did. Undo the stretch here, where the artwork is
+       evaluated, by shrinking the LONG axis' input so the shape occupies the
+       same millimetres either way and stays centred. topW and topD are handed
+       in by build(); when they are not (the 1u preview path, where they are
+       equal anyway) nothing changes. */
+    var f = function (u, v, topW, topD) {
       var h = 0;
+      if (topW && topD) {
+        if (topW > topD) u *= topW / topD;
+        else if (topD > topW) v *= topD / topW;
+      }
+      if (u < -1 || u > 1 || v < -1 || v > 1) return 0;   // off the artwork
       for (var g = 0; g < groups.length; g++) h = Math.max(h, evalHeight(groups[g], u, v, soft));
       return raised ? -depth * h : depth * h;
     };

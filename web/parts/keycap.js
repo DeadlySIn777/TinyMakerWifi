@@ -165,7 +165,16 @@
      the origin, nested, and stepped monotonically in angle, every triangle
      stays inside its own angular wedge and none can invert. */
   function bridgeUneven(s, big, small, up) {
-    var m = big.length, n = small.length, per = m / n;
+    bridgeTris(big, small).forEach(function (t) {
+      if (up) s.tri(t[0], t[1], t[2]); else s.tri(t[0], t[2], t[1]);
+    });
+  }
+
+  /* The same walk, handed back instead of emitted. It exists so that the roof
+     clearance check and the roof itself cannot disagree: the check measures the
+     triangles that will actually be built, not an idealisation of them. */
+  function bridgeTris(big, small) {
+    var m = big.length, n = small.length, per = m / n, out = [];
     if (per !== Math.floor(per)) throw new Error('keycap: ring counts must divide (' + m + '/' + n + ')');
     var a0 = Math.atan2(small[0][1], small[0][0]), best = 0, bestD = Infinity;
     for (var q = 0; q < m; q++) {
@@ -174,13 +183,39 @@
     }
     for (var k = 0; k < n; k++) {
       var apex = small[k], b = best + k * per;
-      for (var e = 0; e < per; e++) {
-        var p = big[(b + e) % m], r = big[(b + e + 1) % m];
-        if (up) s.tri(apex, p, r); else s.tri(apex, r, p);
-      }
-      var nxt = small[(k + 1) % n], last = big[(b + per) % m];
-      if (up) s.tri(apex, last, nxt); else s.tri(apex, nxt, last);
+      for (var e = 0; e < per; e++)
+        out.push([apex, big[(b + e) % m], big[(b + e + 1) % m]]);
+      out.push([apex, big[(b + per) % m], small[(k + 1) % n]]);
     }
+    return out;
+  }
+
+  /* How far a set of triangles has to move in +z before every one of `pts`
+     clears it by `want`. The triangles are the roof underside; the points are
+     the top face. z grows INTO the cap, so "underside below the top" means
+     triZ >= topZ + want, and a shortfall is topZ + want - triZ. Returns 0 when
+     nothing is violated, which is the ordinary case. */
+  function liftOver(tris, pts, want) {
+    var extra = 0, t, i, j, k;
+    for (t = 0; t < tris.length; t++) {
+      var a = tris[t][0], b = tris[t][1], c = tris[t][2];
+      var mnx = Math.min(a[0], b[0], c[0]), mxx = Math.max(a[0], b[0], c[0]);
+      var mny = Math.min(a[1], b[1], c[1]), mxy = Math.max(a[1], b[1], c[1]);
+      var d = (b[1]-c[1])*(a[0]-c[0]) + (c[0]-b[0])*(a[1]-c[1]);
+      if (Math.abs(d) < 1e-12) continue;                    // degenerate in plan
+      for (k = 0; k < pts.length; k++) {
+        var x = pts[k][0], y = pts[k][1];
+        if (x < mnx || x > mxx || y < mny || y > mxy) continue;
+        var l1 = ((b[1]-c[1])*(x-c[0]) + (c[0]-b[0])*(y-c[1])) / d;
+        var l2 = ((c[1]-a[1])*(x-c[0]) + (a[0]-c[0])*(y-c[1])) / d;
+        var l3 = 1 - l1 - l2;
+        if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) continue;
+        var z = l1*a[2] + l2*b[2] + l3*c[2];
+        var need = pts[k][2] + want - z;
+        if (need > extra) extra = need;
+      }
+    }
+    return extra;
   }
   function angDiff(a, b) { var d = a - b; while (d > Math.PI) d -= 2*Math.PI; while (d < -Math.PI) d += 2*Math.PI; return d; }
 
@@ -331,12 +366,58 @@
     var crossXY = crossRing(mx.crossLen, slot, 0);
     var postXY = postRing(crossXY, mx.postR, 0);
 
+    var innerW = topW - 2*wall, innerD = topD - 2*wall;
+
+    /* ⚠️ HOW MUCH MATERIAL IS ACTUALLY LEFT OVER THE CAVITY.
+
+       The roof underside is not a surface with an equation - it is a BRIDGE
+       between two rings (the inner wall and the post), linear in between,
+       while the top face is the full n x n grid of surf(). Wherever the top
+       bulges above its own two-ring interpolation the underside passes through
+       it and the cap has a hole. An engraved legend in the middle of the face
+       does precisely that, and nothing here looked: the only check was floorZ
+       below, which samples thirteen points, every one of them under the post,
+       where the flat floor already covers the case.
+
+       Measured on the shipped code: XDA R3 1u with the drawn 'afak' icon
+       engraved 1.50 mm put 244 of 14400 vertical rays clean through the cap,
+       worst void 0.149 mm; at 2.00 mm, 556 rays and 0.579 mm. warnings was
+       empty, validate() found nothing, and mesh-health called it watertight -
+       which it is. It is watertight and self-intersecting, and it prints with
+       a hole in the top.
+
+       So measure it. bridgeTris() is the same walk bridgeUneven() emits, so
+       what is checked is what gets built; liftOver() drops the top grid onto
+       those triangles and returns the worst shortfall. Pushing BOTH rings down
+       by that much restores the clearance without flattening the roof - which
+       matters, because a flat roof is what makes a tilted Cherry R3 4 mm thick
+       at the front and leaves no room for a stem (see `roof` above). */
+    var MIN_ROOF = o.minRoof == null ? 0.5 : o.minRoof;   // ~10 layers at 0.05
+    var inPts = [], inPost = [];
+    for (i = 0; i < n; i++) for (j = 0; j < n; j++) {
+      var px = gp[i][j][0], py = gp[i][j][1];
+      if (Math.abs(px) > innerW/2 || Math.abs(py) > innerD/2) continue;
+      (px*px + py*py <= mx.postR*mx.postR ? inPost : inPts).push(gp[i][j]);
+    }
+    var roofRing0 = subdivRect(innerW, innerD, n, 0).map(function (q) {
+      return [q[0], q[1], surf(q[0], q[1]) + roof];
+    });
+    var poLo0 = postXY.map(function (q) { return [q[0], q[1], surf(q[0], q[1]) + roof]; });
+    var roofExtra = liftOver(bridgeTris(roofRing0, poLo0), inPts, MIN_ROOF);
+
     /* The hole floor is flat, so the switch bottoms out evenly, and it sits at
        the deepest the roof gets anywhere under the post - otherwise a dish or a
        legend could push the roof up through the floor and open a hole in the
-       top of the cap. */
-    var floorZ = surf(0, 0) + roof;
-    postXY.forEach(function (p) { var z = surf(p[0], p[1]) + roof; if (z > floorZ) floorZ = z; });
+       top of the cap.
+
+       It now sweeps the whole post DISC, not the twelve ring vertices and the
+       centre: a legend stroke can cross the disc without touching any of those
+       thirteen points, and thirteen samples of a surface is not a bound on it. */
+    var floorZ = surf(0, 0) + roof + roofExtra;
+    postXY.forEach(function (p) {
+      var z = surf(p[0], p[1]) + roof + roofExtra; if (z > floorZ) floorZ = z; });
+    inPost.forEach(function (q) {
+      var z = q[2] + Math.max(roof, MIN_ROOF) + roofExtra; if (z > floorZ) floorZ = z; });
     /* A low sculpted row cannot hold a full-depth stem - Cherry R4 is 8.45 mm
        tall and a 4.2 mm stem under a 1.2 mm roof wants 8.58. Real caps shorten
        the stem rather than not existing, so this does too: take what the cap
@@ -348,19 +429,30 @@
     var postTopZ = floorZ + useDepth;
 
     // ---- refuse to emit a cap that cannot work ---------------------------
-    var innerW = topW - 2*wall, innerD = topD - 2*wall;
     if (innerW <= 2*mx.postR + 1 || innerD <= 2*mx.postR + 1)
       throw new Error('keycap: the ' + pname + ' top face is ' + topW.toFixed(1) +
         ' mm, too small for a ' + (mx.postR*2).toFixed(1) + ' mm post inside ' + wall + ' mm walls');
     if (useDepth < 3.0)
       throw new Error('keycap: ' + pname + ' ' + rname + ' stands ' + mouthZ.toFixed(2) +
         ' mm, which leaves only ' + Math.max(0, haveDepth).toFixed(2) +
-        ' mm for the stem under a ' + roof + ' mm roof - a switch needs at least 3.0. ' +
-        'Use a taller row, or a thinner roof.');
+        ' mm for the stem under a ' + (roof + roofExtra).toFixed(2) + ' mm roof' +
+        (roofExtra > 0.005
+          ? ' (deepened by ' + roofExtra.toFixed(2) + ' mm to keep material under the ' +
+            'artwork - a shallower legend would give the stem that back)'
+          : '') +
+        ' - a switch needs at least 3.0. Use a taller row, a shallower legend, ' +
+        'or a thinner roof.');
     if (useDepth < wantDepth - 0.01)
       warn.push('the stem is ' + useDepth.toFixed(2) + ' mm deep instead of ' + wantDepth +
         ' - that is all ' + pname + ' ' + rname + ' has room for. It still holds a switch ' +
         '(the stem stands 3.6 mm proud) but sits slightly higher on it.');
+    /* Not silent. The roof got thicker, the stem got shorter, and the owner
+       chose neither - so it is said out loud, in millimetres. */
+    if (roofExtra > 0.005)
+      warn.push('the artwork reaches ' + (roof + roofExtra).toFixed(2) +
+        ' mm into the cap, so the roof under it was deepened by ' +
+        roofExtra.toFixed(2) + ' mm and the stem is that much shorter. ' +
+        'Without it the legend would have opened a hole through the top.');
     if (mx.postR * 2 <= mx.crossLen)
       throw new Error('keycap: postR ' + mx.postR + ' is smaller than the ' +
         mx.crossLen + ' mm cross - the slot would break out of the post');
@@ -379,16 +471,14 @@
     var mouthOut = subdivRect(W, D, n, mouthZ);
     var mouthIn  = subdivRect(W - 2*wall, D - 2*wall, n, mouthZ);
     // the roof underside follows the top contour, so its ring is not planar
-    var roofRing = subdivRect(innerW, innerD, n, 0).map(function (q) {
-      return [q[0], q[1], surf(q[0], q[1]) + roof];
-    });
+    var roofRing = roofRing0.map(function (q) { return [q[0], q[1], q[2] + roofExtra]; });
 
     band(s, topRing, mouthOut, true);      // outer skirt
     flatRing(s, mouthOut, mouthIn, true);  // the rim that sits on the switch plate
     band(s, roofRing, mouthIn, false);     // cavity wall
 
     // ---- the stem --------------------------------------------------------
-    var poLo = postXY.map(function (q) { return [q[0], q[1], surf(q[0], q[1]) + roof]; });
+    var poLo = poLo0.map(function (q) { return [q[0], q[1], q[2] + roofExtra]; });
     var poHi = postXY.map(function (q) { return [q[0], q[1], postTopZ]; });
     var crLo = crossXY.map(function (q) { return [q[0], q[1], floorZ]; });
 
@@ -809,9 +899,9 @@
      Resin prices are per litre and vary enormously; the default here is a
      mid-range tough resin. Supports and the raft are added as a fraction
      because their volume depends on the slicer's settings, not on this mesh. */
-  function volumeMm3(positions) {
-    var v = 0;
-    for (var i = 0; i < positions.length; i += 9) {
+  function volumeMm3(positions, from, to) {
+    var v = 0, lo = from == null ? 0 : from, hi = to == null ? positions.length : to;
+    for (var i = lo; i < hi; i += 9) {
       var ax=positions[i],   ay=positions[i+1], az=positions[i+2],
           bx=positions[i+3], by=positions[i+4], bz=positions[i+5],
           cx=positions[i+6], cy=positions[i+7], cz=positions[i+8];
@@ -820,10 +910,39 @@
     return Math.abs(v);
   }
 
+  /* The resin a SEATED cap costs, which is not the sum of its two solids.
+
+     A cap with a figure on it is deliberately two overlapping closed shells -
+     keycap-sculpt's own check() says so: "the cap and the sculpt are two
+     overlapping solids; the slicer rasterises them as a union". The divergence
+     theorem over all of it therefore counts the seated part of the figure
+     TWICE, while the printer pays for it once. Measured on an XDA R3 1u with a
+     13 mm sculpt seated 1.6 mm deep, the bill was over by the whole buried
+     plug.
+
+     Each shell is summed on its own and taken absolute first - so a sculpt that
+     arrived wound inside out adds instead of cancelling the cap - and the
+     overlap is then taken off. The overlap is estimated as the sculpt's own
+     footprint times how far it is buried, which is exact for the common case
+     (a figure with a flat-ish base sunk into the face) and conservative
+     otherwise: it is the plug the seat cut, not a bounding box. */
+  function seatedVolumeMm3(cap) {
+    var p = cap.positions;
+    if (!cap.capTriangles || cap.capTriangles * 9 >= p.length)
+      return volumeMm3(p);
+    var split = cap.capTriangles * 9;
+    var vCap = volumeMm3(p, 0, split);
+    var vSculpt = volumeMm3(p, split, p.length);
+    var buried = Math.max(0, cap.seatDepth || 0);
+    var foot = cap.sculptMm ? Math.max(0, cap.sculptMm.x) * Math.max(0, cap.sculptMm.y) : 0;
+    var overlap = Math.min(vSculpt, foot * buried);
+    return Math.max(0, vCap + vSculpt - overlap);
+  }
+
   function costOf(cap, opts) {
     var o = opts || {};
     var perLitre = o.resinPerLitre == null ? 45 : o.resinPerLitre;   // currency per L
-    var mm3 = volumeMm3(cap.positions);
+    var mm3 = cap.capTriangles ? seatedVolumeMm3(cap) : volumeMm3(cap.positions);
     var supportFrac = (cap.printPlan && cap.printPlan.supports) ? (o.supportFrac == null ? 0.35 : o.supportFrac) : 0;
     var ml = mm3 / 1000 * (1 + supportFrac);
     return {
@@ -944,6 +1063,7 @@
   root.keycap = {
     MX: MX, PROFILES: PROFILES, UNIT: UNIT, DEPTH: DEPTH, BED: BED, PIXEL_MM: PIXEL_MM,
     capWidth: capWidth, build: build, orientForPrint: orientForPrint,
+    seatedVolumeMm3: seatedVolumeMm3,
     gridForFace: gridForFace,
     orientAsPrinted: orientAsPrinted, mouthDown: mouthDown,
     validate: validate, fits: fits, tiltFit: tiltFit, perPlate: perPlate,

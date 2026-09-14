@@ -229,5 +229,54 @@ let anyLit = 0;
 for (let i = 3; i < empty._ctx._d.length; i += 4) if (empty._ctx._d[i]) anyLit++;
 ok('an empty mesh draws nothing rather than throwing', anyLit, 0);
 
+console.log('\nTHE TWO RENDERERS AGREE ABOUT WHICH WAY IS RIGHT');
+/* THE CLAIM THIS ANSWERS: that the 3D preview is mirrored, because the map from
+   model space to (screen-right, screen-up, away) has a positive determinant.
+   The determinant is positive. It proves nothing on its own, because the
+   engine's +x has no physical meaning: x and y are two in-plane axes and only
+   y is pinned - to the row tilt, by zFront = surf(0, -topD/2), which makes +y
+   the BACK of the key. Which way +x points is a CONVENTION, and it is set by
+   whichever picture the owner holds the finished cap up against.
+
+   There are two such pictures and they have to agree with each other:
+     drawTop (keycap-ui.js, the flat paint guide)  puts +x to the RIGHT
+     View    (keycap-view3d.js, the 3D preview)    must do the same.
+
+   The absolute handedness - whether the PRINT matches either of them - is a
+   hardware fact: the slicer writes a mask in (x, y) and the machine's LCD lays
+   it on the vat however its ribbon runs. There is no mirror anywhere in
+   slicer.js, print-sim.js or the firmware. Only a printed cap with something
+   unsymmetrical on it can settle that, and until one exists, the honest thing
+   is to keep the two pictures locked together rather than to flip one of them
+   on the strength of a determinant. */
+{
+  const view = V.attach(makeCanvas(S, S), { az: 0, el: 0.52, spin: false, dist: 3.0 });
+  view.setMesh(cap.positions);           // any real mesh: setMesh only normalises
+  const cam = view._camera(S, S);
+  const at = (x, y, z) => cam.project(x, y, z, [0, 0, 0]);
+
+  /* setMesh maps (x,y,z) -> (x, -y, mx2-z)/span, a 180-degree turn about X:
+     determinant +1, no mirror, and the comment in setMesh says exactly that.
+     So a point at engine +x is at view +x, and this asks where that lands. */
+  const mid = at(0, 0, 0);
+  const plusX = at(0.4, 0, 0);
+  const plusYengine = at(0, -0.4, 0);      // engine +y is view -y
+
+  truthy('engine +x draws to the RIGHT, as the flat paint guide does',
+    plusX[0] > mid[0], plusX[0].toFixed(1) + ' vs ' + mid[0].toFixed(1));
+  truthy('engine +y (the back of the key) draws UPWARD, as the flat guide does',
+    plusYengine[1] < mid[1], plusYengine[1].toFixed(1) + ' vs ' + mid[1].toFixed(1));
+
+  /* And the two axes are independent - neither leaks into the other at az = 0,
+     which is what would show up if somebody "fixed" one by rotating instead of
+     reflecting. */
+  view.az = 0; view.el = 0.4;
+  const c2 = view._camera(S, S);
+  const m2 = c2.project(0, 0, 0, [0,0,0]), x2 = c2.project(0.4, 0, 0, [0,0,0]);
+  truthy('and still to the right with the camera level',
+    x2[0] > m2[0] && Math.abs(x2[1] - m2[1]) < 1e-6,
+    'dx ' + (x2[0]-m2[0]).toFixed(1) + ', dy ' + (x2[1]-m2[1]).toFixed(4));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

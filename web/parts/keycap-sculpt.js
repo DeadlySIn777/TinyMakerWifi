@@ -258,6 +258,15 @@
     return Object.keys(groups).map(function (k) { return groups[k]; });
   }
 
+  /* Do the two boxes share any ground in plan? At module scope because both
+     reseat() and anchorage() ask it - it used to live inside reseat, and
+     anchorage's gap measurement could not see it. */
+  function planOverlap(a, b, slack) {
+    slack = slack || 0;
+    return !(a.mn[0] - slack > b.mx[0] || b.mn[0] - slack > a.mx[0] ||
+             a.mn[1] - slack > b.mx[1] || b.mn[1] - slack > a.mx[1]);
+  }
+
   function boxesTouch(a, b, slack) {
     for (var k = 0; k < 3; k++)
       if (a.mn[k] - slack > b.mx[k] || b.mn[k] - slack > a.mx[k]) return false;
@@ -269,7 +278,10 @@
     var o = opts || {};
     var slack = o.slack == null ? 0.15 : o.slack;   // mm of tolerable gap
     var sc = seatedPositions.slice(capTriangles * 9);
-    var parts = shells(sc);
+    /* shellParts, not shells: identical grouping, and it also hands back each
+       shell's triangle indices - which gapUnder() below needs to ray-cast one
+       shell against another. */
+    var parts = shellParts(sc);
     /* "z >= 0" WAS THE WRONG TEST and it is the reason a landed-but-still-
        floating piece could pass. z = 0 is the cap's highest point, not its
        face; a piece parked between the two satisfies the old test while
@@ -296,9 +308,28 @@
         }
       }
     }
+    /* EVERYTHING ELSE MEANS EVERYTHING ELSE. This measured to the cap alone -
+       lo = 0, hi = capTriangles - while anchorage() had just spent its whole
+       body reasoning about shell-to-shell support, so a figure hovering
+       0.16 mm above a base that is itself on the cap was reported as "floating
+       1.36 mm clear of everything else". It is 1.36 mm clear of the CAP, and
+       0.16 mm clear of the thing it is actually above, and check() prints the
+       wrong one of those two. Take the shallowest of the cap and every other
+       shell that overlaps it in plan, and name what it is clear of. */
     function gapUnder(f) {
-      var sz = surfaceUnder(seatedPositions, null, 0, capTriangles, f, rays, true);
-      return sz == null ? -f.mx[2] : (sz - f.mx[2]);
+      var best = null, what = null;
+      var cz = surfaceUnder(seatedPositions, null, 0, capTriangles, f, rays, true);
+      if (cz != null) { best = cz - f.mx[2]; what = 'the cap'; }
+      for (var q = 0; q < parts.length; q++) {
+        if (parts[q] === f || parts[q].tris <= 2) continue;
+        if (!planOverlap(f, parts[q], slack)) continue;
+        var sz = surfaceUnder(sc, parts[q].idx, 0, 0, f, rays);
+        if (sz == null) continue;
+        var d = sz - f.mx[2];
+        if (d < -0.001) continue;                      // that one is above it
+        if (best == null || d < best) { best = d; what = 'the piece under it'; }
+      }
+      return { mm: best == null ? -f.mx[2] : best, of: what || 'the plate' };
     }
     var floating = [];
     for (i = 0; i < parts.length; i++)
@@ -314,7 +345,8 @@
                            wrong on a dished or tilted face, which is every
                            face this engine makes. Measure to the surface
                            actually under it. */
-                        gapMm: +gapUnder(parts[i]).toFixed(2) });
+                        gapMm: +gapUnder(parts[i]).mm.toFixed(2),
+                        gapOf: gapUnder(parts[i]).of });
     return { shells: parts.length, anchored: anchored.filter(Boolean).length,
              floating: floating };
   }
@@ -481,10 +513,6 @@
       var s = surfaceUnder(out, null, 0, capTris, g, rays, true);
       return s !== null && g.mx[2] >= s - slack;
     }
-    function planOverlap(a, b) {
-      return !(a.mn[0] - slack > b.mx[0] || b.mn[0] - slack > a.mx[0] ||
-               a.mn[1] - slack > b.mx[1] || b.mn[1] - slack > a.mx[1]);
-    }
     function settle(g, dz) {
       for (var q = 0; q < g.idx.length; q++) {
         var base = g.idx[q] * 9;
@@ -532,7 +560,7 @@
            bounding box says otherwise. */
         for (j = 0; j < parts.length; j++) {
           if (i === j || !anchored[j]) continue;
-          if (!planOverlap(f, parts[j])) continue;
+          if (!planOverlap(f, parts[j], slack)) continue;
           var sz = surfaceUnder(sc, parts[j].idx, 0, 0, f, rays);
           if (sz === null) continue;
           var d = sz - f.mx[2];
@@ -657,7 +685,7 @@
           'and overlapping pieces fuse in the slicer');
       anchors.floating.forEach(function (f) {
         issues.push('a piece ' + f.sizeMm.join(' × ') + ' mm is floating ' +
-          f.gapMm.toFixed(2) + ' mm clear of everything else. On screen it looks ' +
+          f.gapMm.toFixed(2) + ' mm clear of ' + (f.gapOf || 'everything else') + '. On screen it looks ' +
           'attached; on the plate it is a separate object in mid air with nothing ' +
           'under it. Seat it deeper, or have the generator put the figures on a base.');
       });
@@ -678,6 +706,28 @@
     var D = seated.footprintMm.y;
     var h = seated.totalHeightMm;
 
+    /* ⚠️ MEASURE THE POSE, DO NOT ROTATE A BOX. Everything below used to be
+       trigonometry on L, D and h - the bounding box of the seated cap - and
+       the height of a rotated BOX is not the height of the thing inside it.
+       keycap.js:426 fixed this exact mistake for the plain cap ("the layer
+       count and the clock derived from it were short by up to five per cent...
+       measure the pose that will actually be printed instead of assuming the
+       two are the same") and printPose never got the same treatment: it was
+       over-reporting the layer count by 7 to 11 per cent on every sculpt cap,
+       and the owner's print-time estimate with it.
+
+       So when the real orienter is available - it is, in the browser and in
+       node, both of which load keycap.js beside this file - the candidate lean
+       is applied to the actual mesh and the actual bounds are read back. The
+       box arithmetic stays as the fallback for a caller that has no orienter,
+       and is now clearly labelled as an approximation rather than the answer. */
+    var K = root.keycap;
+    var posed = (K && K.orientAsPrinted && seated.positions) ? function (t) {
+      var q = K.orientAsPrinted(seated.positions, cap.angle, t, { mouthDown: true });
+      var b = bounds(q);
+      return { fx: b.size[0], fy: b.size[1], fz: b.size[2] };
+    } : null;
+
     /* MIN_LEAN is the point of the exercise: below it the sculpt is still
        pointing at the plate and the supports would land on the artwork. */
     var MIN_LEAN = o.minTilt == null ? 40 : o.minTilt;
@@ -689,21 +739,21 @@
        Leaning FURTHER shrinks the footprint, so the answer was never "it does
        not fit", it was "not at that angle". Take the shallowest lean that
        clears, because every extra degree is more overhang and more support. */
+    function at(t) {
+      if (posed) { var m = posed(t); return { deg: t, foot: m.fx, depth: m.fy, height: m.fz }; }
+      var r = t * Math.PI / 180;
+      return { deg: t, foot: L * Math.cos(r) + h * Math.sin(r), depth: D,
+               height: L * Math.sin(r) + h * Math.cos(r) };
+    }
     var pick = null;
     for (var t = MIN_LEAN; t <= MAX_LEAN; t += 0.5) {
-      var r = t * Math.PI / 180;
-      var fx = L * Math.cos(r) + h * Math.sin(r);
-      var fz = L * Math.sin(r) + h * Math.cos(r);
-      if (fx <= bed.x - 0.5 && D <= bed.y && fz <= bed.zSupported) {
-        pick = { deg: t, foot: fx, height: fz };
+      var c0 = at(t);
+      if (c0.foot <= bed.x - 0.5 && c0.depth <= bed.y && c0.height <= bed.zSupported) {
+        pick = c0;
         break;
       }
     }
-    if (o.tilt != null) {
-      var rr = o.tilt * Math.PI / 180;
-      pick = { deg: o.tilt, foot: L * Math.cos(rr) + h * Math.sin(rr),
-               height: L * Math.sin(rr) + h * Math.cos(rr) };
-    }
+    if (o.tilt != null) pick = at(o.tilt);
     if (!pick) {
       return { ok: false, tilt: null, supports: true,
         foot: { x: null, y: D }, height: null, forcedBy: 'sculpt',
@@ -719,7 +769,7 @@
          plate. Turned over, the open skirt rim takes the plate and the supports
          and the figure points at the ceiling. */
       ok: true, tilt: +pick.deg.toFixed(1), supports: true, mouthDown: true,
-      foot: { x: +pick.foot.toFixed(2), y: D },
+      foot: { x: +pick.foot.toFixed(2), y: +(pick.depth == null ? D : pick.depth).toFixed(2) },
       height: +pick.height.toFixed(2),
       forcedBy: 'sculpt',
       why: 'a cap with a figure on it cannot print face down - that buries the ' +
