@@ -304,13 +304,7 @@
   /* The lean the machine will use: whatever the footprint needs, or whatever a
      raised legend needs, whichever is greater. */
   function printedTilt() {
-    if (!built) return 0;
-    var plan = built.printPlan || {};
-    var raise = (window.keycapIcons && built.relief)
-      ? window.keycapIcons.raisedTilt(built.relief, K.PROFILES[st.profile],
-          K.DEPTH - 2 * K.PROFILES[st.profile].topInset)
-      : { tilt: 0 };
-    return Math.max(plan.tilt || 0, raise.tilt || 0);
+    return (built && built.printPlan && built.printPlan.tilt) || 0;
   }
   function printedMesh() {
     return K.orientAsPrinted(built.positions, built.angle, printedTilt());
@@ -431,12 +425,15 @@
   // ---- step 4 ------------------------------------------------------------
   function report() {
     var el = $('kcReport'); if (!el || !built) return;
+    /* One source. The report used to merge the plan with a second, separately
+       computed raised-legend tilt - and only for display, so it printed a
+       correct 12 degrees next to a layer count taken from the UNtilted height.
+       build() folds the lean into printPlan now, so height is the leaning
+       height and the clock agrees with the picture. */
     var plan = built.printPlan;
-    var raise = ICO.raisedTilt(built.relief, K.PROFILES[st.profile],
-                               K.DEPTH - 2 * K.PROFILES[st.profile].topInset);
-    var tilt = Math.max(plan.tilt || 0, raise.tilt || 0);
-    var supports = !!plan.supports || !!raise.supports;
-    var layers = Math.ceil((tilt ? plan.height || built.size.z : built.size.z) / 0.05);
+    var tilt = plan.tilt || 0;
+    var supports = !!plan.supports;
+    var layers = Math.ceil((plan.height || built.size.z) / 0.05);
     var est = window.printSim ? window.printSim.estimate(PROFILE_ANY, layers) : null;
     var per = K.perPlate(st.sizeU);
 
@@ -462,8 +459,16 @@
     }).join('') + '</dl>';
 
     var notes = (built.warnings || []).slice();
-    if (supports && raise.supports) notes.push(raise.why);
-    if (plan.tilt && plan.why) notes.push(plan.why);
+    if (plan.why) notes.push(plan.why);
+    /* The trade, stated rather than left to be discovered: engraving the same
+       legend removes the lean, the supports and most of the print. */
+    if (plan.forcedBy === 'relief') {
+      var flat = K.fits(built.size.x, built.size.y, built.size.z);
+      var flatLayers = Math.ceil(built.size.z / 0.05);
+      notes.push('Engraved instead: no lean, no supports, ' +
+        K.perPlate(st.sizeU, null, built.size.z).count + ' per plate and ' +
+        flatLayers.toLocaleString() + ' layers instead of ' + layers.toLocaleString() + '.');
+    }
     if (notes.length) html += '<div class="hint" style="margin-top:8px">' +
       notes.map(function (n) { return '• ' + n; }).join('<br>') + '</div>';
     el.innerHTML = html;
@@ -496,7 +501,11 @@
 
   $('kcAdd').addEventListener('click', function () {
     if (!built) return;
-    st.plate.push({ positions: oriented(), size: built.size, name: built.name });
+    /* printPlan travels with the cap. Without it layout() fell through to
+       recomputing fits() from the bounding box, which is blind to the relief,
+       so a raised cap was packed flat however loudly the report said otherwise. */
+    st.plate.push({ positions: oriented(), size: built.size, name: built.name,
+                    printPlan: built.printPlan });
     var lay = K.layout(st.plate);
     say('kcPlate', lay.placed.length + ' on the plate' +
       (lay.leftOver ? ', ' + lay.leftOver + ' will not fit and need another run' : '') +
@@ -505,7 +514,8 @@
 
   $('kcSlice').addEventListener('click', function () {
     var caps = st.plate.length ? st.plate
-      : [{ positions: oriented(), size: built && built.size, name: built && built.name }];
+      : [{ positions: oriented(), size: built && built.size, name: built && built.name,
+           printPlan: built && built.printPlan }];
     if (!caps[0] || !caps[0].positions) return;
     var lay = K.layout(caps);
     if (!window.slicerLoadMesh) { say('kcState', 'The slicer engine is not loaded - open the slicer card once, then retry.', 'bad'); return; }
@@ -516,7 +526,8 @@
   });
 
   $('kcStl').addEventListener('click', function () {
-    var caps = st.plate.length ? st.plate : [{ positions: oriented(), size: built.size, name: built.name }];
+    var caps = st.plate.length ? st.plate
+      : [{ positions: oriented(), size: built.size, name: built.name, printPlan: built.printPlan }];
     var lay = K.layout(caps);
     save(binarySTL(lay.positions), (caps.length > 1 ? 'keycap-plate' : caps[0].name) + '.stl');
     say('kcState', 'saved');

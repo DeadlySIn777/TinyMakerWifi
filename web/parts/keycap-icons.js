@@ -458,9 +458,14 @@
      leading edge instead of on the artwork. */
   function raisedTilt(relief, prof, topDmm) {
     if (!relief || !relief.raised) return { tilt: 0, supports: false };
-    var rise = Math.abs(relief.depth) + (prof && prof.dishDepth ? prof.dishDepth : 0);
-    var deg = Math.atan2(rise * 1.6, topDmm) * 180 / Math.PI;   // 1.6 = margin
-    deg = Math.max(12, Math.min(35, Math.ceil(deg)));
+    /* Delegates to the engine. This used to compute the angle itself, and the
+       result was two implementations of the same physical fact with only one of
+       them reaching the plate and the clock. */
+    var deg = (root.keycap && root.keycap.raisedLean)
+      ? root.keycap.raisedLean(relief.depth, prof && prof.dishDepth, topDmm)
+      : Math.max(12, Math.min(35, Math.ceil(
+          Math.atan2((Math.abs(relief.depth) + (prof && prof.dishDepth ? prof.dishDepth : 0)) * 1.6,
+                     topDmm) * 180 / Math.PI)));
     return { tilt: deg, supports: true,
       why: 'a raised legend reaches the plate before the face around it does, so the cap ' +
            'has to lean at least ' + deg + '° and take supports on its leading edge. ' +

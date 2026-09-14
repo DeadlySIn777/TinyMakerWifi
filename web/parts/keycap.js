@@ -391,7 +391,15 @@
       mouthZ: +mouthZ.toFixed(3), frontZ: +zFront.toFixed(3),
       roofMm: roof, floorZ: +floorZ.toFixed(3), postTopZ: +postTopZ.toFixed(3),
       stemDepth: +useDepth.toFixed(3),
-      printPlan: fits(W, D, mouthZ),
+      printPlan: (function () {
+        var plan = fits(W, D, mouthZ);
+        /* The relief knows whether it stands proud; the geometry does not. This
+           is the one place that has both. */
+        var deg = (relief && relief.raised)
+          ? raisedLean(relief.depth, (o.dishDepth != null ? o.dishDepth : prof.dishDepth), topD)
+          : 0;
+        return leanPlan(plan, W, D, mouthZ, deg);
+      })(),
       warnings: warn
     };
   }
@@ -546,6 +554,46 @@
         BED.x + ' × ' + BED.y + ' × ' + BED.zSupported +
         ' mm volume at no angle. Above about 3u - which on a keyboard means only the ' +
         'spacebar - the cap has to be split and joined.' };
+  }
+
+  /* WHY A RAISED LEGEND FORCES A LEAN, and why this lives here rather than in
+     the icon module where it started.
+
+     A cap prints top face down. A raised legend therefore reaches the plate
+     BEFORE the face around it does, so that face begins in mid air. A dish does
+     not save it - a bump in the middle of a bowl is still an island. Leaning
+     the cap far enough that its height varies across the face by more than the
+     legend stands proud makes every layer grow out of the one below.
+
+     This was computed in keycap-icons.js and merged into the report for
+     DISPLAY only, so build(), layout() and the layer count never saw it: the
+     report said "tilted 12 degrees, supports yes" while the plate packed the
+     same cap flat at 1.5 mm spacing and the clock counted its untilted height.
+     Two sources of truth, disagreeing silently, with the correct one on screen
+     making the wrong one look authoritative. One source now - printPlan. */
+  function raisedLean(reliefDepthMm, dishDepthMm, topDmm) {
+    var rise = Math.abs(reliefDepthMm || 0) + (dishDepthMm || 0);
+    if (rise <= 0) return 0;
+    var deg = Math.atan2(rise * 1.6, topDmm || 13.7) * 180 / Math.PI;  // 1.6 = margin
+    return Math.max(12, Math.min(35, Math.ceil(deg)));
+  }
+
+  /* Fold a forced lean into a plan that thought the cap could lie flat. The
+     footprint shrinks and the height grows, exactly as tiltFit computes them,
+     so the picture, the packing and the clock cannot drift apart. */
+  function leanPlan(plan, len, depth, h, deg) {
+    if (!deg || !plan.ok) return plan;
+    if (plan.tilt >= deg) return plan;                 // already leaning further
+    var r = deg * Math.PI / 180;
+    return {
+      ok: true, tilt: deg, rotate: false, supports: true,
+      foot: { x: +(len * Math.cos(r) + h * Math.sin(r)).toFixed(2), y: depth },
+      height: +(len * Math.sin(r) + h * Math.cos(r)).toFixed(2),
+      forcedBy: 'relief',
+      why: 'a raised legend reaches the plate before the face around it does, so ' +
+           'the cap leans ' + deg + '\u00b0 and takes supports on its leading edge. ' +
+           'Engraved needs neither.'
+    };
   }
 
   function perPlate(sizeU, gap, h) {
@@ -730,6 +778,7 @@
     orientAsPrinted: orientAsPrinted,
     validate: validate, fits: fits, tiltFit: tiltFit, perPlate: perPlate,
     layout: layout, planSet: planSet, volumeMm3: volumeMm3, costOf: costOf,
+    raisedLean: raisedLean, leanPlan: leanPlan,
     stemTestComb: stemTestComb
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.keycap;

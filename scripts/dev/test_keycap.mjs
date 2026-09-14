@@ -257,5 +257,77 @@ ok('six caps take three runs', set.runs, 3);
 ok('none stranded', set.stranded, 0);
 truthy('and it totals the layers across them', set.totalLayers > 0, set.totalLayers + ' layers');
 
+console.log('\nA RAISED legend forces the lean into the PLAN, not just into the report');
+/* The bug this pins. printPlan came from fits(), which sees only geometry, so a
+   1u cap "fits flat" - tilt 0, no supports. The relief is the thing that knows
+   it stands proud, and that knowledge reached the REPORT only. The report
+   printed "tilted 12 degrees, supports yes" while layout() packed the same cap
+   flat at 1.5 mm and the clock counted its untilted height. Every Tarkov cap is
+   raised, so the flagship set was exactly the broken case. */
+const ICO = require('../../web/parts/keycap-icons.js');
+const plainCap = K.build({ profile: 'XDA', row: 'R3', sizeU: 1, topGrid: 21 });
+const engCap = K.build({ profile: 'XDA', row: 'R3', sizeU: 1, topGrid: 21,
+  relief: ICO.makeRelief({ icon: 'ifak', digit: '1' }, { depth: 0.55, raised: false }) });
+const upCap = K.build({ profile: 'XDA', row: 'R3', sizeU: 1, topGrid: 21,
+  relief: ICO.makeRelief({ icon: 'ifak', digit: '1' }, { depth: 0.55, raised: true }) });
+
+ok('a plain 1u lies flat', plainCap.printPlan.tilt, 0);
+ok('engraved also lies flat - a recess starts late, it never reaches the plate',
+   engCap.printPlan.tilt, 0);
+ok('and needs no supports', engCap.printPlan.supports, false);
+truthy('but RAISED forces a lean', upCap.printPlan.tilt >= 12, upCap.printPlan.tilt + ' degrees');
+ok('and supports', upCap.printPlan.supports, true);
+ok('and says what forced it', upCap.printPlan.forcedBy, 'relief');
+truthy('and explains it in words', /reaches the plate before/.test(upCap.printPlan.why || ''));
+
+console.log('\nand the height in the plan is the LEANING height');
+truthy('a leaning cap is taller than an upright one',
+  upCap.printPlan.height > plainCap.size.z * 1.3,
+  upCap.printPlan.height + ' mm leaning vs ' + plainCap.size.z.toFixed(2) + ' upright');
+const upLayers = Math.ceil(upCap.printPlan.height / 0.05);
+const flatLayers = Math.ceil(engCap.size.z / 0.05);
+truthy('so it costs far more layers', upLayers > flatLayers * 1.3, upLayers + ' vs ' + flatLayers);
+const th = upCap.printPlan.tilt * Math.PI / 180;
+near('the height matches the rotation exactly', upCap.printPlan.height,
+  upCap.size.x * Math.sin(th) + upCap.size.z * Math.cos(th), 0.02);
+near('as does the footprint', upCap.printPlan.foot.x,
+  upCap.size.x * Math.cos(th) + upCap.size.z * Math.sin(th), 0.02);
+
+console.log('\nthe plate obeys the same plan');
+function plateOf(cap) {
+  return K.layout([
+    { positions: cap.positions, size: cap.size, name: 'a', printPlan: cap.printPlan },
+    { positions: cap.positions, size: cap.size, name: 'b', printPlan: cap.printPlan }]);
+}
+const engPlate = plateOf(engCap), upPlate = plateOf(upCap);
+ok('two engraved caps share a plate', engPlate.placed.length, 2);
+ok('a raised one takes the plate to itself', upPlate.placed.length, 1);
+truthy('the gap opens for its supports', upPlate.gapMm > engPlate.gapMm,
+  upPlate.gapMm + ' vs ' + engPlate.gapMm + ' mm');
+ok('measured against the supported ceiling', upPlate.zLimitMm, K.BED.zSupported);
+ok('while the engraved plate uses the flat one', engPlate.zLimitMm, K.BED.zFlat);
+
+console.log('\nthere is only ONE implementation of the lean now');
+const prof = K.PROFILES.XDA, topD = K.DEPTH - 2 * prof.topInset;
+const viaIcons = ICO.raisedTilt(ICO.makeRelief({ icon: 'ifak' }, { depth: 0.55, raised: true }), prof, topD);
+const viaEngine = K.raisedLean(0.55, prof.dishDepth, topD);
+ok('the icon module and the engine agree', viaIcons.tilt, viaEngine);
+ok('and the plan carries that same angle', upCap.printPlan.tilt, viaEngine);
+
+console.log('\na deeper sculpt leans further');
+const deep = K.build({ profile: 'XDA', row: 'R3', sizeU: 1, topGrid: 21,
+  relief: ICO.makeRelief({ icon: 'ifak' }, { depth: 3.0, raised: true }) });
+truthy('3 mm of relief leans more than 0.55 mm', deep.printPlan.tilt > upCap.printPlan.tilt,
+  deep.printPlan.tilt + ' vs ' + upCap.printPlan.tilt + ' degrees');
+truthy('and stands taller still', deep.printPlan.height > upCap.printPlan.height);
+truthy('but still clears the volume', deep.printPlan.height < K.BED.zSupported);
+
+console.log('\na lean the footprint already forces is not made worse');
+const entRaised = K.build({ profile: 'XDA', row: 'R3', sizeU: 2.25, topGrid: 13,
+  relief: ICO.makeRelief({ icon: 'cross' }, { depth: 0.55, raised: true }) });
+truthy('the footprint lean still governs', entRaised.printPlan.tilt > 25,
+  entRaised.printPlan.tilt + ' degrees');
+ok('and it still fits', entRaised.printPlan.ok, true);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
