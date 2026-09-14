@@ -543,13 +543,23 @@
       cap.sizeU = st.sizeU;
       var seated = SCp.seat(cap, st.sculpt,
         { heightMm: Math.max(6, st.depth > 1 ? st.depth * 5 : 13) });
+      /* THE CHECK USED TO BE THE END OF IT. check() found the hovering
+         figure, wrote a sentence into cap.sculptCheck, and nothing on the page
+         ever rendered it - so a Pokemon the generator left a hair off the rock
+         went to the plate as a separate object in mid air. Land it, then check
+         the mesh that is actually going to be printed. */
+      var chk = SCp.check(seated);
+      if (chk.anchorage && chk.anchorage.floating.length && SCp.reseat) {
+        var landed = SCp.reseat(seated);
+        if (landed.moved.length) { seated = landed; chk = SCp.check(seated); }
+      }
       cap.positions = seated.positions;
       cap.triangles = seated.triangles;
       cap.seated = seated;
       cap.printPlan = SCp.printPose(seated, cap);
       cap.size = { x: seated.footprintMm.x, y: seated.footprintMm.y,
                    z: seated.totalHeightMm };
-      cap.sculptCheck = SCp.check(seated);
+      cap.sculptCheck = chk;
     }
     cap.relief = rel;
     cap.name = (st.key || 'cap') + '-' + (st.icon || (st.sculpt ? 'art' : 'plain'));
@@ -723,12 +733,11 @@
   }
 
   function legendWarn(rel) {
-    if (!rel) { say('kcLegendWarn', ''); return; }
     var pr = K.PROFILES[st.profile];
-    var topW = K.capWidth(st.sizeU) - 2 * pr.topInset, topD = K.DEPTH - 2 * pr.topInset;
-    var f = ICO.checkLegendField(rel, topW, topD);
-    /* One line stating what the engine chose and what it costs, instead of a
-       paragraph explaining the architecture. */
+    /* THE SIZE LINE IS NOT PART OF THE LEGEND CHECK, and treating it as one is
+       why a generated cap showed no dimensions at all: this function returned
+       early when there was no relief, and the only writer of #kcDims sat below
+       that return. A cap has a size whether or not anything is written on it. */
     var plan = built && built.printPlan;
     if (plan) {
       say('kcDims', built.size.x.toFixed(1) + ' \u00d7 ' + built.size.y.toFixed(1) +
@@ -736,6 +745,34 @@
         (st.raised ? 'raised ' : 'engraved ') + st.depth.toFixed(2) + ' mm \u00b7 ' +
         (plan.tilt ? ('leans ' + plan.tilt + '\u00b0, supports') : 'flat, no supports'));
     }
+
+    /* A seated sculpt has its own health, and it matters more than a legend's:
+       a piece that is floating does not come out wrong, it comes out somewhere
+       else in the vat. This is the report that used to be computed and thrown
+       away. */
+    var sk = built && built.sculptCheck;
+    if (sk) {
+      var mv = built.seated && built.seated.moved;
+      if (!sk.ok) {
+        say('kcLegendWarn', '\u26a0 ' + sk.issues[0], 'bad');
+      } else if (mv && mv.length) {
+        say('kcLegendWarn', 'landed ' + mv.length + ' loose piece' +
+          (mv.length > 1 ? 's' : '') + ' onto ' + mv[0].onto + ' (' +
+          mv.map(function (m) { return m.dropMm.toFixed(2) + ' mm'; }).join(', ') +
+          ') \u2014 it would have printed in mid air.');
+      } else {
+        say('kcLegendWarn', built.seated.sculptTriangles.toLocaleString() +
+          ' triangle sculpt, ' + built.seated.sculptMm.z.toFixed(1) +
+          ' mm proud of the cap' +
+          (sk.anchorage && sk.anchorage.shells > 1
+            ? ', ' + sk.anchorage.shells + ' pieces all attached' : '') + '.');
+      }
+      return;
+    }
+
+    if (!rel) { say('kcLegendWarn', ''); return; }
+    var topW = K.capWidth(st.sizeU) - 2 * pr.topInset, topD = K.DEPTH - 2 * pr.topInset;
+    var f = ICO.checkLegendField(rel, topW, topD);
     var src = st.skin ? 'generated' : 'drawn';
     if (f.ok) say('kcLegendWarn', src + ': thinnest feature ' + f.thinnestMarkMm.toFixed(2) +
       ' mm (' + (f.thinnestMarkMm / K.PIXEL_MM).toFixed(1) + ' pixels) - holds.');

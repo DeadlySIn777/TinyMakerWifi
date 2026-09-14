@@ -148,5 +148,74 @@ truthy('and it reports how big the floater is',
 const stacked = merge(base, box(-4, 4, -4, 4, 2.0, 8), box(-2, 2, -2, 2, 7.5, 13));
 ok('anchoring carries up a stack', SC.check(SC.seat(cap, stacked, { heightMm: 15 })).anchorage.floating.length, 0);
 
+
+console.log('\nAND THEN IT LANDS THEM - the detector grew hands');
+/* Catching the floater was only ever half of it. check() used to hand back a
+   sentence and the unchanged mesh went to the plate anyway. reseat() lowers a
+   floating piece onto whatever is beneath it, biting in far enough that the
+   slicer unions the two instead of printing a kiss. */
+const brokenSeat = SC.seat(cap, broken, { heightMm: 14 });
+const landed = SC.reseat(brokenSeat);
+ok('the floater is landed', landed.stillFloating, 0);
+ok('and it says so, once', landed.moved.length, 1);
+truthy('with the drop in millimetres', landed.moved[0].dropMm > 0,
+  landed.moved[0].dropMm + ' mm');
+ok('nothing floats any more', SC.check(landed).anchorage.floating.length, 0);
+ok('so the scene is accepted now', SC.check(landed).ok, true);
+
+/* The bite is the whole point: touching is not fusing. After the drop the
+   piece has to REACH INTO what is under it, not rest on its skin. */
+const shellsAfter = SC.shellParts(landed.positions.subarray(landed.capTriangles * 9));
+truthy('the landed piece overlaps the one below it in z',
+  shellsAfter.length === 3 &&
+  shellsAfter.some(a => shellsAfter.some(b => a !== b &&
+    a.mn[2] < b.mn[2] && a.mx[2] > b.mn[2])));
+
+/* Nothing may move sideways. Two characters placed beside each other stay
+   beside each other - only their height changes. */
+const beforeXY = SC.bounds(brokenSeat.positions.subarray(brokenSeat.capTriangles * 9));
+const afterXY = SC.bounds(landed.positions.subarray(landed.capTriangles * 9));
+truthy('the plan view is untouched',
+  Math.abs(beforeXY.size[0] - afterXY.size[0]) < 1e-4 &&
+  Math.abs(beforeXY.size[1] - afterXY.size[1]) < 1e-4);
+truthy('and the cap itself is not touched',
+  landed.positions.subarray(0, landed.capTriangles * 9)
+    .every((v, i) => v === brokenSeat.positions[i]));
+truthy('the caller keeps their own mesh', brokenSeat.positions !== landed.positions);
+
+/* A scene that was already sound must come back untouched, not "fixed". */
+const soundAgain = SC.reseat(seatedScene);
+ok('a sound scene is moved nowhere', soundAgain.moved.length, 0);
+truthy('and its height is unchanged',
+  Math.abs(soundAgain.totalHeightMm - seatedScene.totalHeightMm) < 0.02,
+  soundAgain.totalHeightMm + ' vs ' + seatedScene.totalHeightMm);
+
+/* Landing a piece can only make the finished part shorter, never taller, and
+   the reported height has to follow it - a stale number feeds the bed check a
+   part that is not the one being printed. (Here it is unchanged: the floater
+   was not the tallest thing on the cap, so lowering it moved no ceiling.) */
+truthy('the reported height never grows',
+  landed.totalHeightMm <= brokenSeat.totalHeightMm + 1e-6,
+  landed.totalHeightMm + ' vs ' + brokenSeat.totalHeightMm);
+
+/* Two floaters, one above the other, resolve from the bottom up. */
+const twoUp = merge(base, box(-3, 3, -3, 3, 4.0, 9), box(-2, 2, -2, 2, 11.0, 15));
+const twoSeat = SC.seat(cap, twoUp, { heightMm: 15 });
+ok('both are floating to start with', SC.check(twoSeat).anchorage.floating.length, 2);
+const twoLanded = SC.reseat(twoSeat);
+ok('and both are landed', twoLanded.stillFloating, 0);
+ok('in two reported moves', twoLanded.moved.length, 2);
+truthy('and THAT one does get shorter - the top piece came down',
+  twoLanded.totalHeightMm < twoSeat.totalHeightMm - 0.5,
+  twoLanded.totalHeightMm + ' vs ' + twoSeat.totalHeightMm);
+truthy('the upper one landed on the lower one, not on the cap',
+  twoLanded.moved.some(m => m.onto === 'the piece under it'),
+  twoLanded.moved.map(m => m.onto).join(' / '));
+
+/* It refuses nonsense rather than mangling it. */
+let rethrew = '';
+try { SC.reseat({ positions: new Float32Array(9) }); } catch (e) { rethrew = 'needs a seat'; }
+ok('reseat wants a seated result', rethrew, 'needs a seat');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -151,6 +151,36 @@
      conservative in the safe direction: boxes overlap MORE often than the
      meshes inside them, so this reports a floater only when the pieces are
      genuinely far apart. */
+  /* shells() hands back boxes, which is all the anchorage REPORT needed. To
+     move a piece you also need to know WHICH triangles are in it, so the
+     union-find lives here and shells() became a thin summary over it. Same
+     algorithm and same answers - the old one is not re-implemented, it is
+     re-exposed with the membership it was already computing and throwing away. */
+  function shellParts(p) {
+    var n = p.length / 9, parent = new Int32Array(n), i;
+    for (i = 0; i < n; i++) parent[i] = i;
+    function find(a) { while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; } return a; }
+    function join(a, b) { a = find(a); b = find(b); if (a !== b) parent[b] = a; }
+    var map = Object.create(null);
+    for (i = 0; i < n; i++) for (var c = 0; c < 3; c++) {
+      var q = i * 9 + c * 3;
+      var key = Math.round(p[q] * 200) + ',' + Math.round(p[q + 1] * 200) + ',' + Math.round(p[q + 2] * 200);
+      if (map[key] === undefined) map[key] = i; else join(map[key], i);
+    }
+    var groups = {}, order = [];
+    for (i = 0; i < n; i++) {
+      var r = find(i), g = groups[r];
+      if (!g) { g = groups[r] = { tris: 0, idx: [], mn: [1e9, 1e9, 1e9], mx: [-1e9, -1e9, -1e9] }; order.push(g); }
+      g.tris++; g.idx.push(i);
+      for (var v = 0; v < 9; v += 3) for (var k = 0; k < 3; k++) {
+        var val = p[i * 9 + v + k];
+        if (val < g.mn[k]) g.mn[k] = val;
+        if (val > g.mx[k]) g.mx[k] = val;
+      }
+    }
+    return order;
+  }
+
   function shells(p) {
     var n = p.length / 9, parent = new Int32Array(n), i;
     for (i = 0; i < n; i++) parent[i] = i;
@@ -211,6 +241,130 @@
                         gapMm: +(-parts[i].mx[2]).toFixed(2) });
     return { shells: parts.length, anchored: anchored.filter(Boolean).length,
              floating: floating };
+  }
+
+  /* ---- and then DO something about it -----------------------------------
+
+     anchorage() was written to catch the diorama failure and it did: it found
+     the hovering figure every time. It was also the end of the road. check()
+     put the words into a report nobody rendered, the mesh went to the plate
+     unchanged, and a piece that was floating on screen was still floating on
+     the machine. A detector with no hands is not a safety net.
+
+     So: drop it. A floating shell is a figure the generator forgot to stand on
+     anything, and the fix a person would make is to lower it until it lands.
+     The cap's z runs from the top face DOWN, so "lower" is +z, and the thing a
+     piece lands on is whichever anchored shell sits below it - the smallest
+     positive distance from this shell's bottom to that shell's top, counting
+     only pieces that overlap it in plan. Nothing below it in plan means it
+     lands on the cap.
+
+     TOUCHING IS NOT ENOUGH. Two solids that meet on a plane share no volume,
+     and the slicer unions by rasterising volume - they would print as two
+     objects that happen to kiss. So it goes in by a bite: a fifth of the
+     piece's own height, between 0.2 and 0.6 mm, deep enough to fuse and
+     shallow enough not to swallow a figure's feet.
+
+     Nothing moves sideways and nothing is scaled: two characters the generator
+     placed beside each other stay beside each other, and the only thing that
+     changes is how far down one of them sits. Every move is reported in
+     millimetres, because a mesh that silently rearranged itself is worse than
+     one that failed loudly. */
+  function reseat(seated, opts) {
+    var o = opts || {};
+    if (!seated || !seated.positions || seated.capTriangles == null)
+      throw new Error('keycap-sculpt: reseat needs a seated result');
+    var capTris = seated.capTriangles;
+    var out = new Float32Array(seated.positions);      // a copy; the caller keeps theirs
+    var sc = out.subarray(capTris * 9);
+    var parts = shellParts(sc);
+    var slack = o.slack == null ? 0.15 : o.slack;
+    var maxDrop = o.maxDropMm == null ? 24 : o.maxDropMm;
+
+    /* WHAT COUNTS AS ANCHORED IS NOT "IT REACHES THE CAP". A figure standing
+       ON the base never touches the cap at all - it touches the base, and the
+       base touches the cap. Getting this wrong does not fail safe: it drops a
+       scene that was already correct, shoving a standing figure down through
+       the rock it was standing on. So anchoring is seeded from the cap and
+       then propagated through overlapping boxes exactly the way anchorage()
+       reports it, and only what is left over is actually moved. */
+    var anchored = parts.map(function (g) { return g.mx[2] >= 0; });
+    var spread = true, i, j;
+    while (spread) {
+      spread = false;
+      for (i = 0; i < parts.length; i++) {
+        if (anchored[i]) continue;
+        for (j = 0; j < parts.length; j++) {
+          if (i === j || !anchored[j]) continue;
+          if (boxesTouch(parts[i], parts[j], slack)) { anchored[i] = true; spread = true; break; }
+        }
+      }
+    }
+    var moved = [], guard = 0;
+
+    function planOverlap(a, b) {
+      return !(a.mn[0] - slack > b.mx[0] || b.mn[0] - slack > a.mx[0] ||
+               a.mn[1] - slack > b.mx[1] || b.mn[1] - slack > a.mx[1]);
+    }
+    function settle(g, dz) {
+      for (var q = 0; q < g.idx.length; q++) {
+        var base = g.idx[q] * 9;
+        for (var v = 2; v < 9; v += 3) sc[base + v] += dz;
+      }
+      g.mn[2] += dz; g.mx[2] += dz;
+    }
+
+    /* Repeated, because landing one piece can give the next one something to
+       land on - which is how a figure on a rock on the cap resolves. */
+    while (guard++ < parts.length + 2) {
+      var did = false;
+      for (i = 0; i < parts.length; i++) {
+        if (anchored[i] || parts[i].tris <= 2) continue;
+        var f = parts[i], best = null;
+        for (j = 0; j < parts.length; j++) {
+          if (i === j || !anchored[j]) continue;
+          if (!planOverlap(f, parts[j])) continue;
+          var d = parts[j].mn[2] - f.mx[2];            // down to that piece's top
+          if (d >= -slack && (best === null || d < best)) best = Math.max(0, d);
+        }
+        var onto = best === null ? 'the cap' : 'the piece under it';
+        if (best === null) best = -f.mx[2];            // nothing under it: the cap's face
+        var bite = Math.min(0.6, Math.max(0.2, (f.mx[2] - f.mn[2]) * 0.2));
+        var dz = best + bite;
+        if (dz > maxDrop) continue;                    // absurd - leave it for check() to shout about
+        settle(f, dz);
+        anchored[i] = true; did = true;
+        for (j = 0; j < parts.length; j++)
+          if (!anchored[j] && boxesTouch(parts[j], f, slack)) anchored[j] = true;
+        moved.push({ triangles: f.tris, dropMm: +dz.toFixed(2), onto: onto,
+                     sizeMm: [+(f.mx[0] - f.mn[0]).toFixed(2),
+                              +(f.mx[1] - f.mn[1]).toFixed(2),
+                              +(f.mx[2] - f.mn[2]).toFixed(2)] });
+      }
+      if (!did) break;
+    }
+
+    var left = 0;
+    for (i = 0; i < parts.length; i++)
+      if (!anchored[i] && parts[i].tris > 2) left++;
+
+    /* The cap is untouched, so only the sculpt's reach is re-measured. Its
+       highest point is the most negative z, and the finished piece stands that
+       far proud of a cap whose own height has not changed. */
+    var fb = bounds(sc);
+    var capHeight = seated.totalHeightMm - (seated.sculptMm.z - seated.seatDepth);
+    var fixed = {};
+    for (var k in seated)
+      if (Object.prototype.hasOwnProperty.call(seated, k)) fixed[k] = seated[k];
+    fixed.positions = out;
+    fixed.sculptMm = { x: +fb.size[0].toFixed(2), y: +fb.size[1].toFixed(2),
+                       z: +fb.size[2].toFixed(2) };
+    fixed.footprintMm = { x: +Math.max(seated.footprintMm.x, fb.size[0]).toFixed(2),
+                          y: +Math.max(seated.footprintMm.y, fb.size[1]).toFixed(2) };
+    fixed.totalHeightMm = +(capHeight + Math.max(0, -fb.mn[2])).toFixed(2);
+    fixed.moved = moved;
+    fixed.stillFloating = left;
+    return fixed;
   }
 
   /* Does the finished piece work - on a board, and in the machine? */
@@ -323,6 +477,7 @@
   }
 
   root.keycapSculpt = { seat: seat, check: check, printPose: printPose, bounds: bounds,
+                        reseat: reseat, shellParts: shellParts,
                         shells: shells, anchorage: anchorage };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.keycapSculpt;
 })(typeof window !== 'undefined' ? window : globalThis);
