@@ -826,7 +826,8 @@
        after this the geometry, the footprint and the layer count are finally
        describing one object. */
     return K.orientAsPrinted(c.positions, c.angle,
-                             (c.printPlan && c.printPlan.tilt) || 0);
+                             (c.printPlan && c.printPlan.tilt) || 0,
+                             { mouthDown: !!(c.printPlan && c.printPlan.mouthDown) });
   }
 
   function refreshNow() {
@@ -903,7 +904,10 @@
     return (built && built.printPlan && built.printPlan.tilt) || 0;
   }
   function printedMesh() {
-    return K.orientAsPrinted(built.positions, built.angle, printedTilt());
+    /* The "as printed" preview has to show the same object the exporter makes,
+       or it is the dishonest picture this function exists to replace. */
+    return K.orientAsPrinted(built.positions, built.angle, printedTilt(),
+      { mouthDown: !!(built.printPlan && built.printPlan.mouthDown) });
   }
 
   /* The flat top-down view survives as a DETAIL inset: at 13 mm across, the

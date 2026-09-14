@@ -481,8 +481,40 @@
      supports, and the first time you see that is when you open the slicer. The
      lean is where support scars land and where an overhang gets rough, so it
      is worth being able to look at before committing resin to it. */
-  function orientAsPrinted(positions, rowAngleDeg, tiltDeg) {
+  /* Turn it over so the open mouth takes the plate. Negating z is a MIRROR,
+     not a rotation, so the winding reverses with it and has to be put back -
+     the third time this project has met that fact, hence the note.
+
+     A cap with a figure on its top face cannot be laid top-face-down, which is
+     what orientForPrint does and what is right for a plain cap. Measured before
+     this existed: the sculpt sat 5.8 to 7.0 mm BELOW the cap on every profile,
+     at every tilt from 0 to 88 degrees - the artwork bearing the whole part
+     against the FEP. Leaning a part that is already upside down only changes
+     which corner of it is crushed first. */
+  function mouthDown(p) {
+    var flipped = new Float32Array(p.length), mn = Infinity, i;
+    for (i = 0; i < p.length; i += 3) {
+      flipped[i] = p[i];
+      flipped[i + 1] = p[i + 1];
+      flipped[i + 2] = -p[i + 2];
+      if (flipped[i + 2] < mn) mn = flipped[i + 2];
+    }
+    for (i = 2; i < flipped.length; i += 3) flipped[i] -= mn;
+    var out = new Float32Array(p.length), ORDER = [0, 2, 1], t, c;
+    for (t = 0; t < flipped.length; t += 9) {
+      for (c = 0; c < 3; c++) {
+        var src = t + ORDER[c] * 3, dst = t + c * 3;
+        out[dst] = flipped[src];
+        out[dst + 1] = flipped[src + 1];
+        out[dst + 2] = flipped[src + 2];
+      }
+    }
+    return out;
+  }
+
+  function orientAsPrinted(positions, rowAngleDeg, tiltDeg, opts) {
     var p = orientForPrint(positions, rowAngleDeg || 0);
+    if (opts && opts.mouthDown) p = mouthDown(p);
     if (!tiltDeg) return p;
     var a = tiltDeg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
     var out = new Float32Array(p.length), minZ = Infinity, i;
@@ -913,7 +945,7 @@
     MX: MX, PROFILES: PROFILES, UNIT: UNIT, DEPTH: DEPTH, BED: BED, PIXEL_MM: PIXEL_MM,
     capWidth: capWidth, build: build, orientForPrint: orientForPrint,
     gridForFace: gridForFace,
-    orientAsPrinted: orientAsPrinted,
+    orientAsPrinted: orientAsPrinted, mouthDown: mouthDown,
     validate: validate, fits: fits, tiltFit: tiltFit, perPlate: perPlate,
     layout: layout, planSet: planSet, volumeMm3: volumeMm3, costOf: costOf,
     raisedLean: raisedLean, leanPlan: leanPlan,

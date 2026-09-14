@@ -631,7 +631,12 @@
              MAX_LEAN + ' degrees. Make the sculpt shorter, or the key narrower.' };
     }
     return {
-      ok: true, tilt: +pick.deg.toFixed(1), supports: true,
+      /* mouthDown is the half of this that the exporter has to honour. The
+         lean alone cannot save a cap that is lying on its artwork: the figure
+         grows out of the top face, and orientForPrint lays that face on the
+         plate. Turned over, the open skirt rim takes the plate and the supports
+         and the figure points at the ceiling. */
+      ok: true, tilt: +pick.deg.toFixed(1), supports: true, mouthDown: true,
       foot: { x: +pick.foot.toFixed(2), y: D },
       height: +pick.height.toFixed(2),
       forcedBy: 'sculpt',
