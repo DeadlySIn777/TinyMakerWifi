@@ -218,8 +218,21 @@
     var slack = o.slack == null ? 0.15 : o.slack;   // mm of tolerable gap
     var sc = seatedPositions.slice(capTriangles * 9);
     var parts = shells(sc);
-    // a shell reaching z >= 0 is down inside the cap
-    var anchored = parts.map(function (g) { return g.mx[2] >= 0; });
+    /* "z >= 0" WAS THE WRONG TEST and it is the reason a landed-but-still-
+       floating piece could pass. z = 0 is the cap's highest point, not its
+       face; a piece parked between the two satisfies the old test while
+       touching nothing. Ray-cast the cap under the shell and compare against
+       the surface that is actually there.
+
+       The cheap test is kept as a REJECT only, which is the direction it is
+       sound in: the surface is always at z >= 0, so a shell that cannot reach
+       0 certainly cannot reach the surface, and that one needs no rays. */
+    var rays = o.rays || 5;
+    var anchored = parts.map(function (g) {
+      if (g.mx[2] < 0) return false;
+      var s = surfaceUnder(seatedPositions, null, 0, capTriangles, g, rays);
+      return s !== null && g.mx[2] >= s - slack;
+    });
     var changed = true, i, j;
     while (changed) {
       changed = false;
@@ -241,6 +254,103 @@
                         gapMm: +(-parts[i].mx[2]).toFixed(2) });
     return { shells: parts.length, anchored: anchored.filter(Boolean).length,
              floating: floating };
+  }
+
+  /* ---- where the surface actually is ------------------------------------
+
+     ⚠️ THE FIRST VERSION OF reseat() LANDED PIECES ON z = 0 AND THAT PLANE IS
+     NOT THE CAP. z = 0 is where build() normalises the cap's single HIGHEST
+     point; the top face falls away from it by the dish depth and the row
+     angle, so the real surface under a centred figure is 0.80 mm down on XDA
+     and 2.81 mm down on SA R1. seat() has always known this - it sinks the
+     whole sculpt by dishDepth + 0.5 for exactly this reason - and check()
+     calls anything shallower than 0.60 mm an outright issue.
+
+     So reseat moved a floating piece from one patch of mid air to another,
+     then set anchored = true and reported stillFloating: 0. Because
+     anchorage() tested the same wrong plane, check() flipped from ok:false to
+     ok:true and the card told the owner the piece "would have printed in mid
+     air" - past tense - about a piece that was still in mid air. A detector
+     that had been right was talked out of it by its own repair. That is worse
+     than the bug it was written for, because the old failure at least said no.
+
+     Bounding boxes cannot fix this and were the second half of the same fault:
+     landing on a target shell's box TOP puts a piece over the hole in an arch,
+     a ring or a horseshoe onto nothing, and then the box test agrees - because
+     reseat moved it until the boxes touched. It manufactured the evidence for
+     its own success.
+
+     The only honest answer is to measure. Drop a vertical ray on a grid across
+     the piece's plan footprint, take the TOP surface each ray finds (smallest
+     z, since z runs down into the cap), and land on the DEEPEST of those tops
+     so the whole footprint makes contact rather than one lucky corner. If no
+     ray finds anything, there is nothing under that piece and it is not landed
+     at all - it stays floating and check() keeps refusing the scene, which is
+     the correct outcome for geometry that translation cannot save. */
+
+  function triZAt(p, t, x, y) {
+    var ax = p[t],     ay = p[t + 1], az = p[t + 2],
+        bx = p[t + 3], by = p[t + 4], bz = p[t + 5],
+        cx = p[t + 6], cy = p[t + 7], cz = p[t + 8];
+    var d = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+    if (d > -1e-12 && d < 1e-12) return null;          // edge-on in plan
+    var l1 = ((by - cy) * (x - cx) + (cx - bx) * (y - cy)) / d;
+    var l2 = ((cy - ay) * (x - cx) + (ax - cx) * (y - cy)) / d;
+    var l3 = 1 - l1 - l2;
+    if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) return null;
+    return l1 * az + l2 * bz + l3 * cz;
+  }
+
+  /* The highest material at (x,y) - smallest z, because z runs downward. */
+  function rayTop(p, idx, lo, hi, x, y) {
+    var top = null, k, t, z;
+    if (idx) {
+      for (k = 0; k < idx.length; k++) {
+        z = triZAt(p, idx[k] * 9, x, y);
+        if (z !== null && (top === null || z < top)) top = z;
+      }
+    } else {
+      for (t = lo * 9; t < hi * 9; t += 9) {
+        z = triZAt(p, t, x, y);
+        if (z !== null && (top === null || z < top)) top = z;
+      }
+    }
+    return top;
+  }
+
+  /* The surface under the middle of the footprint, and a grid only when the
+     middle misses.
+
+     The obvious rule - "take the DEEPEST top across the footprint, so the whole
+     base makes contact" - is wrong the moment a piece overhangs the cap, which
+     artisan caps do on purpose. The corner rays then land on the SKIRT, several
+     millimetres down the side, and that becomes the target: the sculpt's own
+     base gets reported as floating and dragged down through the cap. The test
+     suite caught it immediately, with three floaters in a scene that has one.
+
+     The centre ray is the honest one. Surface variation across a 6 mm footprint
+     on a dished top is a few tenths of a millimetre - less than the bite - so
+     landing on the middle and biting in 0.6 to 1.0 mm makes contact across the
+     whole base anyway, without letting one corner off the edge decide.
+
+     When the centre misses there is a hole under the piece: an arch, a ring, a
+     horseshoe. Then the grid answers, and it answers with the SHALLOWEST hit,
+     which cannot bury the piece. If nothing is hit at all, nothing is there -
+     return null and let the caller refuse to land it. */
+  function surfaceUnder(p, idx, lo, hi, box, n) {
+    n = n || 5;
+    var cx = (box.mn[0] + box.mx[0]) / 2, cy = (box.mn[1] + box.mx[1]) / 2;
+    var c = rayTop(p, idx, lo, hi, cx, cy);
+    if (c !== null) return c;
+    var best = null, a, b, x, y, z;
+    var w = box.mx[0] - box.mn[0], d = box.mx[1] - box.mn[1];
+    for (a = 0; a < n; a++) for (b = 0; b < n; b++) {
+      x = box.mn[0] + w * (a + 0.5) / n;
+      y = box.mn[1] + d * (b + 0.5) / n;
+      z = rayTop(p, idx, lo, hi, x, y);
+      if (z !== null && (best === null || z < best)) best = z;
+    }
+    return best;
   }
 
   /* ---- and then DO something about it -----------------------------------
@@ -280,28 +390,19 @@
     var parts = shellParts(sc);
     var slack = o.slack == null ? 0.15 : o.slack;
     var maxDrop = o.maxDropMm == null ? 24 : o.maxDropMm;
+    var rays = o.rays || 5;
 
-    /* WHAT COUNTS AS ANCHORED IS NOT "IT REACHES THE CAP". A figure standing
-       ON the base never touches the cap at all - it touches the base, and the
-       base touches the cap. Getting this wrong does not fail safe: it drops a
-       scene that was already correct, shoving a standing figure down through
-       the rock it was standing on. So anchoring is seeded from the cap and
-       then propagated through overlapping boxes exactly the way anchorage()
-       reports it, and only what is left over is actually moved. */
-    var anchored = parts.map(function (g) { return g.mx[2] >= 0; });
-    var spread = true, i, j;
-    while (spread) {
-      spread = false;
-      for (i = 0; i < parts.length; i++) {
-        if (anchored[i]) continue;
-        for (j = 0; j < parts.length; j++) {
-          if (i === j || !anchored[j]) continue;
-          if (boxesTouch(parts[i], parts[j], slack)) { anchored[i] = true; spread = true; break; }
-        }
-      }
+    var anchored = parts.map(function (g) { return reaches(g); });
+    var moved = [], guard = 0, i, j;
+    /* How tall the whole sculpt stands, used to tell a nudge from a relocation. */
+    var sb = bounds(sc), span = sb.size[2];
+
+    /* Anchored means "it reaches the material of the cap", measured, not
+       "its box crosses z = 0". */
+    function reaches(g) {
+      var s = surfaceUnder(out, null, 0, capTris, g, rays);
+      return s !== null && g.mx[2] >= s - slack;
     }
-    var moved = [], guard = 0;
-
     function planOverlap(a, b) {
       return !(a.mn[0] - slack > b.mx[0] || b.mn[0] - slack > a.mx[0] ||
                a.mn[1] - slack > b.mx[1] || b.mn[1] - slack > a.mx[1]);
@@ -314,24 +415,63 @@
       g.mn[2] += dz; g.mx[2] += dz;
     }
 
-    /* Repeated, because landing one piece can give the next one something to
-       land on - which is how a figure on a rock on the cap resolves. */
+    /* Seeded from the cap and then spread through overlapping boxes, the way
+       anchorage() reports it: a figure standing on the base never touches the
+       cap, and dropping it would shove it through the rock it stands on. */
+    var spread = true;
+    while (spread) {
+      spread = false;
+      for (i = 0; i < parts.length; i++) {
+        if (anchored[i]) continue;
+        for (j = 0; j < parts.length; j++) {
+          if (i === j || !anchored[j]) continue;
+          if (boxesTouch(parts[i], parts[j], slack)) { anchored[i] = true; spread = true; break; }
+        }
+      }
+    }
+
     while (guard++ < parts.length + 2) {
       var did = false;
       for (i = 0; i < parts.length; i++) {
         if (anchored[i] || parts[i].tris <= 2) continue;
-        var f = parts[i], best = null;
+        var f = parts[i], best = null, onto = null;
+
+        /* A shell is only a landing target where it has MATERIAL under the
+           footprint. An arch supports nothing over its opening, and its
+           bounding box says otherwise. */
         for (j = 0; j < parts.length; j++) {
           if (i === j || !anchored[j]) continue;
           if (!planOverlap(f, parts[j])) continue;
-          var d = parts[j].mn[2] - f.mx[2];            // down to that piece's top
-          if (d >= -slack && (best === null || d < best)) best = Math.max(0, d);
+          var sz = surfaceUnder(sc, parts[j].idx, 0, 0, f, rays);
+          if (sz === null) continue;
+          var d = sz - f.mx[2];
+          if (d >= -slack && (best === null || d < best)) { best = d < 0 ? 0 : d; onto = 'the piece under it'; }
         }
-        var onto = best === null ? 'the cap' : 'the piece under it';
-        if (best === null) best = -f.mx[2];            // nothing under it: the cap's face
-        var bite = Math.min(0.6, Math.max(0.2, (f.mx[2] - f.mn[2]) * 0.2));
+        if (best === null) {
+          var cz = surfaceUnder(out, null, 0, capTris, f, rays);
+          if (cz !== null) { best = cz - f.mx[2]; if (best < 0) best = 0; onto = 'the cap'; }
+        }
+        /* Nothing under it at all. Translation cannot save this piece, so it
+           is left exactly where it is and stays unanchored - check() goes on
+           refusing the scene, which is the honest outcome. */
+        if (best === null) continue;
+
+        /* The bite can never be shallower than the 0.60 mm check() itself
+           calls too shallow, or reseat would be landing pieces to a standard
+           its own validator rejects. */
+        var h = f.mx[2] - f.mn[2];
+        var bite = Math.min(1.0, Math.max(0.6, h * 0.2));
         var dz = best + bite;
-        if (dz > maxDrop) continue;                    // absurd - leave it for check() to shout about
+        /* A REPAIR IS A NUDGE. Anything more is relocating the artwork.
+           A figure the generator perched on top of an arch has nothing under it
+           but the cap, twelve millimetres down - and dropping it there does
+           produce a printable object, just not the one anybody designed. It
+           would land inside the arch's opening, sitting on the floor, and the
+           only sign would be a number in a note. So a drop worth more than
+           sixty per cent of the sculpt's own height is refused, the piece is
+           left where the generator put it, and check() goes on saying the scene
+           is wrong - which it is, and which is the generator's to fix. */
+        if (dz > maxDrop || dz > span * 0.6) continue;
         settle(f, dz);
         anchored[i] = true; did = true;
         for (j = 0; j < parts.length; j++)
@@ -344,13 +484,12 @@
       if (!did) break;
     }
 
-    var left = 0;
-    for (i = 0; i < parts.length; i++)
-      if (!anchored[i] && parts[i].tris > 2) left++;
+    /* stillFloating is re-derived from the MOVED geometry rather than read off
+       the flags reseat set on itself. The old version asked its own bookkeeping
+       whether it had succeeded, which is how it came to report 0 floaters in a
+       scene that still had one. */
+    var left = anchorage(out, capTris, { slack: slack, rays: rays }).floating.length;
 
-    /* The cap is untouched, so only the sculpt's reach is re-measured. Its
-       highest point is the most negative z, and the finished piece stands that
-       far proud of a cap whose own height has not changed. */
     var fb = bounds(sc);
     var capHeight = seated.totalHeightMm - (seated.sculptMm.z - seated.seatDepth);
     var fixed = {};
@@ -477,7 +616,7 @@
   }
 
   root.keycapSculpt = { seat: seat, check: check, printPose: printPose, bounds: bounds,
-                        reseat: reseat, shellParts: shellParts,
+                        reseat: reseat, shellParts: shellParts, surfaceUnder: surfaceUnder,
                         shells: shells, anchorage: anchorage };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.keycapSculpt;
 })(typeof window !== 'undefined' ? window : globalThis);

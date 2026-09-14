@@ -217,5 +217,84 @@ let rethrew = '';
 try { SC.reseat({ positions: new Float32Array(9) }); } catch (e) { rethrew = 'needs a seat'; }
 ok('reseat wants a seated result', rethrew, 'needs a seat');
 
+
+console.log('\nLANDING ON THE CAP - the plane that was not the cap');
+/* The first reseat() landed pieces on z = 0. z = 0 is where build() normalises
+   the cap's HIGHEST point, not its face: the dish and the row angle put the
+   real surface 0.8 to 2.8 mm further down. So a piece was moved from one patch
+   of air to another, marked anchored, and check() flipped from ok:false to
+   ok:true - the detector talked out of a correct refusal by its own repair.
+
+   Every reseat fixture above uses a full-width base, so the "onto the cap"
+   branch was never once exercised. This is that branch: two rocks with a gap,
+   and a figure hovering over the gap with nothing beneath it. */
+/* No base: with one, the figure lands on the base and the cap branch is still
+   never reached. Two rocks standing straight on the cap, and the gap between
+   them is genuinely cap. */
+const gapScene = merge(box(-8, -5, -3, 3, 0, 9),            // left rock
+                       box(5, 8, -3, 3, 0, 9),              // right rock
+                       box(-1.5, 1.5, -1.5, 1.5, 2.0, 7));  // the figure, over the gap
+const gapSeat = SC.seat(cap, gapScene, { heightMm: 14 });
+/* All three read as floating here, and that is not a fault in the fixture - it
+   is seat() doing its job. It spreads a sculpt across the cap's full 18 mm
+   width while the DSA top FACE is only 12.70 mm, so anything out near the edge
+   overhangs onto the shoulder and its surface is 3.4 mm down rather than 1.1.
+   A real generated sculpt is one connected shell whose centre is over the face,
+   so it anchors; three separate boxes each get judged where they individually
+   stand. What matters is that every one of them is landed on the material that
+   is actually beneath it. */
+truthy('the hovering figure is caught', SC.check(gapSeat).anchorage.floating.length >= 1,
+  SC.check(gapSeat).anchorage.floating.length + ' pieces not touching anything');
+const gapLanded = SC.reseat(gapSeat);
+ok('and it is landed', gapLanded.stillFloating, 0);
+ok('onto the cap, not onto a rock', gapLanded.moved[0].onto, 'the cap');
+
+/* THE ASSERTION THAT WOULD HAVE CAUGHT IT. Measure the cap's own surface under
+   the piece and require the piece to have reached it - not merely to have
+   crossed z = 0. */
+const landedShells = SC.shellParts(gapLanded.positions.subarray(gapLanded.capTriangles * 9));
+/* The figure is the shell over the middle of the cap - the rocks straddle the
+   shoulder. Picking by triangle count picked a rock, and then measured the
+   skirt instead of the top face. */
+const cAt = g => Math.abs((g.mn[0] + g.mx[0]) / 2) + Math.abs((g.mn[1] + g.mx[1]) / 2);
+const fig = landedShells.reduce((a, b) => (cAt(a) <= cAt(b) ? a : b));
+const capZ = SC.surfaceUnder(gapLanded.positions, null, 0, gapLanded.capTriangles, fig, 5);
+truthy('the cap surface under it is well below z = 0', capZ > 0.4, capZ.toFixed(2) + ' mm down');
+truthy('and the piece reaches that surface, not the z=0 plane',
+  fig.mx[2] >= capZ, 'piece bottom ' + fig.mx[2].toFixed(2) + ' vs surface ' + capZ.toFixed(2));
+truthy('with enough bite to fuse rather than kiss',
+  fig.mx[2] - capZ >= 0.55, (fig.mx[2] - capZ).toFixed(2) + ' mm of overlap');
+truthy('and the old z=0 landing would NOT have reached it', capZ > 0.6,
+  'the old code stopped at 0.60 mm; the surface is at ' + capZ.toFixed(2) +
+  ' - ' + (capZ - 0.6).toFixed(2) + ' mm of air it called landed');
+
+console.log('\nA HOLE IS NOT A FLOOR');
+/* The other half of the same fault: landing on a target shell's bounding-box
+   top. An arch, a ring or a horseshoe has a box with nothing in the middle, so
+   a piece over the opening was "landed" onto air - and then the box test
+   agreed, because reseat had moved it until the boxes touched. It manufactured
+   the evidence for its own success. A piece translation cannot save must stay
+   refused. */
+const arch = merge(box(-8, -4, -8, 8, 0, 8),      // left tower
+                   box(4, 8, -8, 8, 0, 8),         // right tower
+                   box(-4, 4, -8, -4, 0, 2),       // the ledge that joins them
+                   box(-2, 2, 0, 4, 12, 16));      // a figure over the opening
+const archSeat = SC.seat(cap, arch, { heightMm: 15 });
+const archChk = SC.check(archSeat);
+truthy('the piece over the opening is caught', archChk.anchorage.floating.length >= 1);
+const archLanded = SC.reseat(archSeat);
+truthy('and reseat does NOT claim to have landed it', archLanded.stillFloating >= 1,
+  archLanded.stillFloating + ' still floating, ' + archLanded.moved.length + ' moved');
+ok('so the scene is still refused', SC.check(archLanded).ok, false);
+truthy('and the refusal still says why',
+  /floating/.test(SC.check(archLanded).issues.join(' ')));
+
+/* stillFloating must be measured from the moved mesh, not read off the flags
+   reseat set on itself - asking your own bookkeeping whether you succeeded is
+   how it came to report 0 floaters in a scene that had one. */
+ok('stillFloating agrees with an independent check of the same mesh',
+  archLanded.stillFloating, SC.check(archLanded).anchorage.floating.length);
+ok('and it agrees on the sound scene too', SC.reseat(seatedScene).stillFloating,
+  SC.check(seatedScene).anchorage.floating.length);
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
