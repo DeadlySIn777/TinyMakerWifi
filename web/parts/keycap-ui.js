@@ -84,6 +84,15 @@
           else b.title = k[1] + 'u, ' + K.capWidth(k[1]).toFixed(1) + ' mm - prints flat, no supports';
         }
         b.appendChild(lab);
+        /* ⚠️ THE RESTORED KEY WAS NEVER SHOWN AS PICKED. `sel` is added only by
+           pickKey, which only a click calls, so after a reload the session had
+           st.key = ';' and the board showed nothing selected at all - the owner
+           could not see which key the cap on screen was for, and clicking the
+           one that was already chosen looked like it did something. The key is
+           its label and its width together: 'Shift' appears twice on a board at
+           two different widths. */
+        if (fit.ok && st.key === k[0] && st.sizeU === k[1] && st.row === k[2])
+          b.classList.add('sel');
         b.addEventListener('click', function () { pickKey(k, b); });
         r.appendChild(b);
       });
@@ -140,7 +149,12 @@
       g.hidden = g.getAttribute('data-for') !== String(n);
     });
     $('kcCard').classList.toggle('kcStep1', n === 1);
-    $('kcNext').textContent = n >= 4 ? 'Done' : 'Next';
+    /* ⚠️ "Done" USED TO DO NOTHING. go() renamed the button at step 4 and the
+       handler guarded on st.step < 4, so the biggest, reddest control on the
+       card fell through every branch: nothing saved, nothing confirmed, no
+       message. A first-time owner finishing the wizard pressed it and the card
+       sat there. The last step's forward action is the one the step is FOR. */
+    $('kcNext').textContent = n >= 4 ? 'Send to slicer' : 'Next';
     $('kcBack').disabled = false;
     /* Every step now, not just from 2. The stage is on screen at step 1 and an
        empty stage beside a keyboard is worse than no stage - the whole reason
@@ -236,11 +250,20 @@
      is a legend off a keyboard ("5", "Shift", ";"), and anything that is not
      that is not a key label whatever else it might be. Escaping asks every
      future sink to remember; this makes the value safe once. */
+  /* The width of a key in units. 1 to 7 covers 1u through the 6.25u spacebar
+     with room to spare, and anything else is not a key width. */
+  function knownSizeU(v, fallback) {
+    var u = Number(v);
+    return (isFinite(u) && u >= 1 && u <= 7) ? u : (fallback == null ? 1 : fallback);
+  }
+
   function safeKeyLabel(v) {
     if (typeof v !== 'string') return null;
     var t = v.trim().slice(0, 12);
     return /^[A-Za-z0-9 _\-+=\[\]\\;',./`~!@#$%^&*()<>?:"{}|]*$/.test(t) && t ? t : null;
   }
+
+  var restoredStep = 1;
 
   function restoreSession() {
     var raw;
@@ -285,15 +308,44 @@
     if ($('kcDepthVal')) $('kcDepthVal').textContent = st.depth.toFixed(2);
     /* The model comes back from IndexedDB, so a generated design survives a
        reload without spending another generation. */
+    /* ⚠️ AND ONLY WHEN THE ART IS STILL THE GENERATED KIND. st.libId is a
+       pointer to a mesh; every path that removes the mesh now clears it (see
+       dropSculpt), but a session written by an OLDER build can still hold a
+       libId next to art:'braille', and re-hydrating from it would put the
+       figure back on top of the dots - which is the bug, arriving by a
+       different door. The stored art wins. */
+    if (st.libId && st.art !== 'gen') st.libId = null;
     if (st.libId && window.keycapLibrary) {
       window.keycapLibrary.get(st.libId).then(function (rec) {
         if (rec && rec.positions) { st.sculpt = rec.positions; refresh(); }
-      }).catch(function () {});
+        else st.libId = null;              // the record is gone; stop pointing at it
+      }).catch(function () { st.libId = null; });
     }
-    if (d.step > 1 && st.key) go(d.step); else refresh();
+    /* ⚠️ DO NOT go() HERE. The board and the tiles do not exist yet -
+       restoreSession runs before drawBoard - and initialisation ends with an
+       unconditional go(1) a few lines from the bottom of this file, which
+       overwrote whatever this chose AND then destroyed it: go(1) sets
+       st.step = 1 and schedules rememberSession, so the stored value could
+       never be used on any later load either. Hand the step back and let the
+       initialiser apply it once everything is drawn. */
+    restoredStep = (d.step > 1 && st.key) ? d.step : 1;
+    refresh();
   }
 
   // ---- the shelf ---------------------------------------------------------
+  /* What the seated cap measures, or null if there is no cap yet. */
+  function capFacts() {
+    if (!built) return null;
+    try {
+      var plan = built.printPlan || {};
+      return { sizeMm: [+built.size.x.toFixed(2), +built.size.y.toFixed(2),
+                        +built.size.z.toFixed(2)],
+               resinMl: +K.costOf(built).resinMl.toFixed(2),
+               profile: st.profile, row: st.row, sizeU: st.sizeU,
+               tilt: plan.tilt || 0, fits: plan.ok !== false };
+    } catch (e) { return null; }
+  }
+
   function keepCurrent(prompt) {
     if (!window.keycapLibrary || !st.sculpt) return;
     var thumb = null;
@@ -310,6 +362,11 @@
       name: (prompt || '').slice(0, 48) || 'design',
       prompt: prompt || st.skinFrom || '',
       kind: 'sculpt', positions: st.sculpt, thumb: thumb,
+      /* THE CAP'S MEASUREMENTS, taken here because this is the only place that
+         has them. st.sculpt is in the generator's own units - the Library
+         cannot recover millimetres from it - and what the owner wants to know
+         about a saved design is what it PRINTS as. */
+      facts: capFacts(),
       design: window.keycapShare ? window.keycapShare.encode(designOf()) : null
     }).then(function (rec) { st.libId = rec && rec.id; rememberSession(); drawShelf(); })
       .catch(function (e) { say('kcGenNote', 'Kept on the cap but NOT saved: ' + e.message, 'bad'); });
@@ -338,7 +395,29 @@
         b.addEventListener('click', function (ev) {
           if (ev.target.classList.contains('kcShelfDel')) {
             ev.stopPropagation();
-            window.keycapLibrary.remove(r.id).then(drawShelf);
+            /* ⚠️ THE ONLY COPY. A generation costs Meshy credits and a minute of
+               waiting, the record here is the only place the mesh exists, and
+               this used to delete it on one mis-aimed tap with no dialog and no
+               undo - while the Library room's own Delete for the SAME record
+               asks first. Ask here too, and if the design being deleted is the
+               one currently on the cap, take it off the cap as well rather than
+               leaving a pointer to a record that is gone. */
+            var gone = function () {
+              if (st.libId === r.id) { dropSculpt(); st.skinFrom = ''; refresh(); }
+              drawShelf();
+            };
+            /* uiConfirm is a top-level const in the assembled page - the same
+               way slicerLoadMod is reached from here - and it is the dialog
+               the rest of the dashboard uses. confirm() is the fallback for
+               the standalone harness. */
+            var msg = 'Delete "' + r.name + '"? This is the only copy of that model.';
+            var ask = (typeof uiConfirm === 'function')
+              ? uiConfirm(msg, { ok: 'Delete', danger: true })
+              : Promise.resolve(confirm(msg));
+            Promise.resolve(ask).then(function (yes) {
+              if (!yes) return;
+              window.keycapLibrary.remove(r.id).then(gone);
+            });
             return;
           }
           useSaved(r.id);
@@ -450,7 +529,18 @@
     ['kcGen', 'kcGenClear', 'kcNext', 'kcBack'].forEach(function (id) {
       var e = $(id); if (e) e.disabled = !!on;
     });
-    if (!on) $('kcGenClear').disabled = !st.sculpt;
+    if (!on) syncClear();
+  }
+
+  /* ⚠️ #kcGenClear SHIPS DISABLED and used to be enabled only by genBusy(false),
+     which only the Generate button and the resume path call. Three of the four
+     ways a mesh gets onto a cap - Open a .glb, drag-and-drop, and loading a
+     saved design from the shelf or the Library room - never touched it, so the
+     only control that removes the figure was permanently greyed out for them.
+     One line, called from refreshNow(), covers all four. */
+  function syncClear() {
+    var b = $('kcGenClear');
+    if (b) b.disabled = !st.sculpt;
   }
 
   /* seat()'s own envelope, so the sentence describes the room the sculpt will
@@ -496,6 +586,16 @@
     if (!window.meshy || !window.meshy.pending || !window.meshy.pending()) return;
     if (!window.meshyParseGLB) return;
     var d = window.meshy.pending();
+    /* ⚠️ WHOSE GENERATION IS THIS. meshy keeps ONE pending slot and used to
+       record nothing about which card filled it, and this claimed it
+       unconditionally 1.2 seconds after every page load - while meshy-ui, the
+       OTHER card that generates models, has no resume code at all. So a model
+       started in "Generate a model", interrupted by a reload, came back SEATED
+       ON A KEYCAP: the owner's model was gone, the cap had a stranger on it,
+       and the credits were spent. Claim only what this card started. Records
+       written before this field existed have no `from`, and those still come
+       here, because this card is where they used to go. */
+    if (d.from && d.from !== 'keycap') return;
     genBusy(true);
     say('kcGenNote', 'a generation was still running - picking it up\u2026');
     window.meshy.resume(function (m) { say('kcGenNote', m); })
@@ -544,9 +644,34 @@
     if (!window.meshyParseGLB || !window.keycapSkin) {
       say('kcGenNote', 'The GLB reader is missing from this build.', 'bad'); return;
     }
+    /* ⚠️ THERE IS ALREADY ONE RUNNING. waitFor rejects on the FIRST failed poll
+       - one WiFi blip on the printer's own access point, which is the network
+       this whole card is about - and the obvious next action is to press
+       Generate again. That called createPreview (a second billed task) and
+       remember() overwrote the record for the first one, which was still
+       running and still paid for. Offer to pick it up instead; the resume path
+       already exists and costs nothing. */
+    var open = window.meshy.pending && window.meshy.pending();
+    if (open && (!open.from || open.from === 'keycap')) {
+      var ask = 'A generation from ' +
+        (open.at ? new Date(open.at).toLocaleTimeString() : 'earlier') +
+        ' is still running' + (open.prompt ? ' ("' + open.prompt.slice(0, 40) + '")' : '') +
+        '. Pick that one up instead of paying for a new one?';
+      var q = (typeof uiConfirm === 'function')
+        ? uiConfirm(ask, { ok: 'Pick it up', cancel: 'Start a new one' })
+        : Promise.resolve(confirm(ask));
+      Promise.resolve(q).then(function (yes) {
+        if (yes) resumeGeneration(); else { window.meshy.forgetPending(); startGeneration(prompt); }
+      });
+      return;
+    }
+    startGeneration(prompt);
+  });
+
+  function startGeneration(prompt) {
     genBusy(true);
     say('kcGenNote', 'asking Meshy\u2026');
-    window.meshy.generate(prompt, { polycount: 30000, refine: false },
+    window.meshy.generate(prompt, { polycount: 30000, refine: false, from: 'keycap' },
       function (m) { say('kcGenNote', m); })
       .then(function (state) {
         var parsed = window.meshyParseGLB(state.glb);
@@ -592,12 +717,20 @@
            one outcome worth engineering against. */
         setTimeout(function () { keepCurrent(prompt); }, 900);
       })
-      .catch(function (e) { say('kcGenNote', e.message, 'bad'); })
+      /* ⚠️ offerManualDownload, NOT say(). fetchModel attaches e.modelUrl when
+         the asset exists but this browser cannot read it - assets.meshy.ai
+         sends no CORS header, and the printer's own fetch is refused mid-print
+         - and its message ends "open the link and bring the file back in".
+         say() renders text. The link was dropped on the floor, so the sentence
+         told the owner to click something that was not there, about a model
+         they had already paid for. The resume path above has always called
+         this; the Generate path did not. */
+      .catch(function (e) { offerManualDownload(e); })
       .then(function () { genBusy(false); });
-  });
+  }
 
   $('kcGenClear').addEventListener('click', function () {
-    st.sculpt = null; st.skinFrom = '';
+    dropSculpt(); st.skinFrom = '';
     $('kcGenClear').disabled = true;
     say('kcGenNote', 'back to the drawn set.');
     refresh();
@@ -658,6 +791,18 @@
     });
   }
 
+  /* ⚠️ st.libId IS A POINTER TO A MESH IN IndexedDB, and it used to be set in
+     three places and cleared in none. rememberSession persists it
+     unconditionally and restoreSession re-hydrates the mesh from it, so every
+     path that removes the sculpt - switching to Braille, pressing Clear,
+     loading a shared design - left the pointer behind and the figure came back
+     on the next reload, on top of whatever the owner had switched to. Clearing
+     the mesh and clearing the pointer are one act, so they are one function. */
+  function dropSculpt() {
+    st.sculpt = null;
+    st.libId = null;
+  }
+
   function setArt(mode) {
     st.art = mode;
     var d = ART_DEFAULTS[mode];
@@ -671,7 +816,7 @@
     if (mode === 'lib') drawShelf();
     if (mode !== 'lib') st.icon = null;
     if (mode !== 'braille') st.braille = '';
-    if (mode !== 'gen') { st.sculpt = null; st.skinFrom = ''; }
+    if (mode !== 'gen') { dropSculpt(); st.skinFrom = ''; }
     if (mode === 'braille') setFinish(true);   // a recess is not readable
     if ($('kcBraille') && mode !== 'braille') $('kcBraille').value = '';
     drawIcons();
@@ -852,6 +997,7 @@
 
   function refreshNow() {
     rememberSession();
+    syncClear();          // every route that puts a mesh on the cap, not just Generate
     var rel = null, err = null;
     try { rel = relief(); } catch (e) { err = e.message; }
     try {
@@ -1166,7 +1312,14 @@
       ['Size', built.size.x.toFixed(1) + ' × ' + built.size.y.toFixed(1) + ' × ' + built.size.z.toFixed(2) + ' mm'],
       ['Stem', built.stemDepth.toFixed(2) + ' mm deep · ' + built.slotWidth.toFixed(2) +
                ' mm slot (' + built.slotPixels.toFixed(1) + ' px)'],
-      ['Orientation', tilt ? ('tilted ' + tilt + '°') : 'flat, top face down'],
+      /* ⚠️ tilt IS `plan.tilt || 0`, AND printPose RETURNS tilt: null TOGETHER
+         WITH ok: false - so "no lean" and "no lean exists" collapsed into the
+         same row, and a 2.75u Shift with a figure on it reported "flat, top
+         face down", "410 layers at 0.05 mm" and a print time, for a cap that
+         cannot be printed at all. Branch on ok first. */
+      ['Orientation', plan.ok === false
+        ? '<span class="warn">will not fit the plate at any lean</span>'
+        : (tilt ? ('tilted ' + tilt + '°') : 'flat, top face down')],
       ['Supports', supports ? '<span class="warn">yes — on the leading edge</span>' : 'none'],
       ['Per plate', per.count + (per.count === 1 ? ' cap' : ' caps')],
       ['Layers', layers.toLocaleString() + ' at ' + lh.toFixed(3).replace(/0+$/, '').replace(/\.$/, '') +
@@ -1175,9 +1328,14 @@
       ['Cost', money.cost < 0.01 ? 'under a penny' : money.cost.toFixed(2) + ' in resin']
     ];
     /* The number that decides whether this is worth making, lifted clear of
-       the list rather than buried as its eighth row. */
-    var html = '<div class="kcHero"><b>' + (est ? est.text : '—') +
-               '</b><span>for a full plate of ' + per.count + '</span></div>';
+       the list rather than buried as its eighth row - unless there is no such
+       number, in which case a confident "1h 47m" over a cap that cannot be
+       printed is the worst thing on the card. */
+    var html = plan.ok === false
+      ? '<div class="kcHero kcHeroBad"><b>does not fit</b><span>' +
+        esc(plan.why || 'no lean clears the build volume') + '</span></div>'
+      : '<div class="kcHero"><b>' + (est ? est.text : '—') +
+        '</b><span>for a full plate of ' + per.count + '</span></div>';
     html += '<dl>' + rows.map(function (r) {
       return '<dt>' + r[0] + '</dt><dd>' + r[1] + '</dd>';
     }).join('') + '</dl>';
@@ -1196,6 +1354,14 @@
     if (notes.length) html += '<div class="hint" style="margin-top:8px">' +
       notes.map(function (n) { return '• ' + n; }).join('<br>') + '</div>';
     el.innerHTML = html;
+    /* A control that cannot succeed does not stay lit. All three of these end
+       in K.layout(), which will place nothing. */
+    var dead = plan.ok === false && !st.plate.length;
+    ['kcAdd', 'kcSlice', 'kcStl'].forEach(function (id) {
+      var b = $(id); if (!b) return;
+      b.disabled = dead;
+      b.title = dead ? (plan.why || 'this cap does not fit the plate at any lean') : '';
+    });
     say('kcPlate', st.plate.length ? (st.plate.length + ' cap' + (st.plate.length > 1 ? 's' : '') +
       ' on the plate') : '');
   }
@@ -1233,6 +1399,14 @@
     st.plate.push({ positions: oriented(), size: built.size, name: built.name,
                     printPlan: built.printPlan });
     var lay = K.layout(st.plate);
+    /* Nothing placed is not "0 on the plate", it is a cap that cannot be
+       printed - say which and why, once, instead of a zero the owner has to
+       interpret. */
+    if (!lay.placed.length) {
+      say('kcPlate', 'none of these fit the plate' +
+        (lay.issues && lay.issues[0] ? ' - ' + lay.issues[0] : ''), 'bad');
+      return;
+    }
     say('kcPlate', lay.placed.length + ' on the plate' +
       (lay.leftOver ? ', ' + lay.leftOver + ' will not fit and need another run' : '') +
       ' · ' + lay.triangles.toLocaleString() + ' triangles');
@@ -1316,8 +1490,29 @@
     var caps = st.plate.length ? st.plate
       : [{ positions: oriented(), size: built.size, name: built.name, printPlan: built.printPlan }];
     var lay = K.layout(caps);
+    /* ⚠️ "SAVED" USED TO MEAN "A FILE WAS WRITTEN", not "your caps are in it".
+       K.layout() returns only what it could PLACE, plus leftOver and issues
+       describing the rest, and this read neither. Four XDA R3 caps with a
+       raised legend place ONE - the lean makes the footprint 19.61 x 18 and
+       the support gap 3.5, so a single column fits - and the file held one cap
+       while the card said "saved". Worse, a cap that clears the volume at no
+       lean at all (a 2.75u Shift with a figure on it) places NONE, binarySTL
+       writes a valid 84-byte header with a triangle count of zero, and that
+       also said "saved". An empty STL opens in every slicer and shows nothing;
+       the owner blames the slicer. */
+    if (!lay.positions.length) {
+      say('kcState', 'nothing was saved: ' +
+        (lay.issues && lay.issues[0] ? lay.issues[0]
+         : (built.printPlan && built.printPlan.why) ||
+           'this cap does not fit the ' + K.BED.x + ' × ' + K.BED.y + ' mm plate at any lean'),
+        'bad');
+      return;
+    }
     save(binarySTL(lay.positions), (caps.length > 1 ? 'keycap-plate' : caps[0].name) + '.stl');
-    say('kcState', 'saved');
+    say('kcState', lay.leftOver
+      ? ('saved ' + lay.placed.length + ' of ' + caps.length + ' caps - ' + lay.leftOver +
+         ' need another run')
+      : 'saved', lay.leftOver ? 'warn' : '');
   });
 
   $('kcComb').addEventListener('click', function () {
@@ -1399,14 +1594,26 @@
                 prompt it answered TRUE for every generated cap, and the warning
                 that the art will come back DIFFERENT could never fire. */
              prompt: st.skinFrom || undefined,
+             /* Not `|| undefined`: false is the value worth sending. */
+             legendOn: st.legendOn !== false,
              key: st.key || undefined, name: st.name || undefined };
   }
   function applyDesign(d) {
     /* Fed by share codes, so this is the one an outsider can aim at. */
+    /* Before setArt(), which reads legendOn() while it renders. A code from
+       before the field existed has no 'l' and gets today's default, which is
+       on - the behaviour those codes were made under. */
+    st.legendOn = d.legendOn !== false;
     var dp = knownProfile(d.profile);
     if (dp) st.profile = dp;
     st.row = knownRow(st.profile, d.row);
-    if (d.sizeU) st.sizeU = d.sizeU;
+    /* A SHARE CODE IS SOMEBODY ELSE'S TEXT, and this one reaches innerHTML
+       through report()'s 'Cap' row. d.profile, d.row and d.key all go through
+       whitelists; sizeU went through nothing at all, so a code carrying
+       sizeU: '<img src=x onerror=...>' ran script on the origin that holds the
+       Meshy key and can start prints. A key width is a number between 1 and 7.
+       Say so, at the door, like the other three. */
+    st.sizeU = knownSizeU(d.sizeU, st.sizeU);
     /* THE MODE HAS TO BE CHOSEN FIRST, and it was never chosen at all. A code
        carrying Braille restored st.braille, filled #kcBraille and said "Opened"
        - but left st.art as whatever it already was, and relief() only reaches
@@ -1424,7 +1631,7 @@
     if (d.depth) st.depth = d.depth;
     st.raised = d.raised !== false;
     st.key = safeKeyLabel(d.key);
-    st.sculpt = null;                     // a mesh cannot travel in a code
+    dropSculpt();                     // a mesh cannot travel in a code
     st.skinFrom = d.prompt || '';
     if ($('kcDigit')) $('kcDigit').value = st.digit;
     if ($('kcBraille')) $('kcBraille').value = st.braille;
@@ -1433,6 +1640,7 @@
     if ($('kcPrompt') && d.prompt) $('kcPrompt').value = d.prompt;
     setFinish(st.raised);
     drawProfiles(); drawRows(); drawIcons(); caliper(st.sizeU); refresh();
+    paintLegendRow();          // the checkbox and the state agree
   }
 
   // ---- share, and open what was shared ------------------------------------
@@ -1449,7 +1657,16 @@
     tok.floor = cs.getPropertyValue('--kFloor').trim();
     var money = K.costOf(built);
     var plan = built.printPlan;
-    var layers = Math.ceil((plan.tilt ? (plan.height || built.size.z) : built.size.z) / layerMm());
+    /* ⚠️ NO BRANCH ON tilt. When the lean is zero this fell back to
+       built.size.z - mouthZ, measured in KEYBOARD space - and that is not the
+       height the cap stands at once orientForPrint has laid its top face on
+       the plate. keycap.js:426 documents fixing exactly this ("on a 13-degree
+       row that is a different height from the one measured here, so the layer
+       count and the clock derived from it were short by up to five per cent")
+       and printPlan.height is already the measured one for every lean,
+       including none. report() a few hundred lines up uses it unconditionally;
+       the share card - the picture somebody signs off on - did not. */
+    var layers = Math.ceil((plan.height || built.size.z) / layerMm());
     var est = window.printSim ? window.printSim.estimate(PROFILE_ANY, layers) : null;
     var card;
     try {
@@ -1617,7 +1834,14 @@
     $('kcDepthVal').textContent = st.depth.toFixed(2);
     refresh();
   });
-  $('kcNext').addEventListener('click', function () { if (st.step < 4) go(st.step + 1); });
+  $('kcNext').addEventListener('click', function () {
+    if (st.step < 4) { go(st.step + 1); return; }
+    /* At step 4 it IS the forward action, not a label. Delegating to the
+       existing button keeps one implementation of "send this to the slicer",
+       including its engine-loading and its refusals. */
+    var go4 = $('kcSlice');
+    if (go4 && !go4.disabled) go4.click();
+  });
   $('kcBack').addEventListener('click', function () { go(Math.max(1, st.step - 1)); });
   Array.prototype.forEach.call($('kcSteps').children, function (li) {
     li.addEventListener('click', function () {
@@ -1648,5 +1872,9 @@
   }
   $('kcDepth').value = st.depth;
   $('kcDepthVal').textContent = st.depth.toFixed(2);
-  drawBoard(); drawProfiles(); drawRows(); drawIcons(); go(1);
+  drawBoard(); drawProfiles(); drawRows(); drawIcons();
+  /* The step the owner left off on, applied AFTER everything is drawn. This
+     used to be a bare go(1) and it is why the card always opened on the
+     keyboard however far through you were. */
+  go(restoredStep);
 })();

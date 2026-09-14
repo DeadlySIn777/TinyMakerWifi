@@ -47,13 +47,22 @@
      storage figure on anything saved before the facts existed. */
   function facts(rec) {
     var out = { triangles: rec.triangles || 0 };
+    /* ⚠️ sizeMm AND resinMl DESCRIBE THE CAP, not the raw figure. They used to
+       be the bounding box and divergence volume of the mesh exactly as the
+       generator emitted it - glTF units, typically a 1 x 1 x 1 box - printed
+       on the card as "1×1×1 mm" and "0.00 ml" for a design that really makes
+       an 18 x 18 x 17.5 mm cap out of 1.54 ml. They are now measured on the
+       seated cap at save time and travel with the record. A record saved
+       before that simply has no millimetres, and says so with a dash rather
+       than with a number that is wrong. */
     if (rec.facts) {
       out.resinMl = rec.facts.resinMl;
       out.sizeMm = rec.facts.sizeMm;
       out.bytes = rec.facts.bytes;
-    } else if (rec.positions && root.keycapLibrary && root.keycapLibrary.measure) {
-      var m = root.keycapLibrary.measure(rec.positions);
-      if (m) { out.resinMl = m.resinMl; out.sizeMm = m.sizeMm; out.bytes = m.bytes; }
+      out.profile = rec.facts.profile;
+      out.row = rec.facts.row;
+      out.sizeU = rec.facts.sizeU;
+      out.fits = rec.facts.fits;
     }
     /* A mesh is 9 floats a triangle, so this is exact even with no facts. */
     if (!out.bytes) out.bytes = out.triangles * 9 * 4;
@@ -104,9 +113,15 @@
     row('made', fmtDate(rec.at));
     row('triangles', f.triangles ? f.triangles.toLocaleString() : '—');
     row('resin', f.resinMl != null ? f.resinMl.toFixed(2) + ' ml' : '—',
-        'solid volume of the mesh, before supports');
+        f.resinMl != null ? 'the finished cap, supports included'
+                          : 'saved before the cap was measured');
     row('size', f.sizeMm
-        ? f.sizeMm.map(function (v) { return v.toFixed(0); }).join('×') + ' mm' : '—');
+        ? f.sizeMm.map(function (v) { return v.toFixed(1); }).join(' × ') + ' mm' : '—',
+        f.sizeMm ? 'the finished cap' : 'saved before the cap was measured');
+    /* Which cap it was. Two designs from the same figure on different profiles
+       print differently, and the Library is where you go to print one again. */
+    if (f.profile) row('cap', f.profile + ' ' + (f.row || '') + ' · ' + (f.sizeU || 1) + 'u');
+    if (f.fits === false) row('fit', 'does not fit the plate at any lean');
     row('kind', rec.kind || 'sculpt');
     row('stored', fmtBytes(f.bytes));
     body.appendChild(fl);
@@ -165,6 +180,13 @@
       /* Handed to the keycap card through the door it already has, so the
          restore path is the one that is already tested. */
       if (root.keycapUseSaved) root.keycapUseSaved(id);
+      /* The TOOL as well as the room. The Create room shows one tool at a time
+         and remembers which in localStorage, so opening a keycap design while
+         'model' was the remembered tool changed rooms and left the owner
+         looking at the model card with the keycap card display:none behind it.
+         A button that appears to do nothing is worse than one that is not
+         there. */
+      if (root.studioStage) root.studioStage('cap');
       if (root.studioGo) root.studioGo('create');
     }).catch(function (e) { note(e.message, true); });
   }

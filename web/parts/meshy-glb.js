@@ -271,6 +271,23 @@
         }
       }
     }
+    /* ⚠️ NaN TRAVELS, AND NOTHING DOWNSTREAM STOPS IT. An index pointing past
+       the end of the POSITION accessor reads undefined; apply() turns that into
+       NaN; and from there it is invisible. mesh-health's bounding box compares
+       with < and >, both of which are FALSE for NaN, so the model reports a
+       plausible size; the broken triangle grades as "1 zero-area triangle",
+       which reads like rounding; and the slicer prints a part with a hole where
+       that face should have been. stl-read.js:105 sweeps for exactly this and
+       says why it has to; the GLB reader beside it did not.
+
+       Checked once, here, over the finished array rather than per-vertex in the
+       hot loop - one pass over a few hundred thousand floats is nothing against
+       the parse that produced them. */
+    for (var q = 0; q < positions.length; q++) {
+      if (!isFinite(positions[q]))
+        throw new Error('This model has broken numbers in it - an index points past ' +
+                        'its own vertex list, or the download was truncated.');
+    }
     return { positions: positions, uvs: uvs, triangles: tris.length, yUpApplied: yUp };
   }
 

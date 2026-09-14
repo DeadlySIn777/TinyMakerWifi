@@ -147,6 +147,13 @@
   Array.prototype.forEach.call(segs, function (b) {
     b.addEventListener('click', function () { setStage(b.dataset.st); });
   });
+  /* The Library room has to be able to say WHICH tool, not just which room.
+     Without this its "Open in Create" loaded the design into #kcCard and then
+     left whatever tool was last used on screen - and if that was Models, the
+     owner was looking at an unrelated card with stOff hiding the one that had
+     just been filled in. Exported rather than reached for by selector, so the
+     shell keeps owning its own DOM. */
+  window.studioStage = setStage;
 
   function stageMeta(text) { var e = $('stStageMeta'); if (e) e.textContent = text || ''; }
   /* The size line the keycap card already computes is the right caption for

@@ -479,6 +479,13 @@
 #kcCard .kcHero span{font:600 clamp(10px,1.05cqw,14px)/1 ui-sans-serif,system-ui;
   letter-spacing:.12em;
   text-transform:uppercase;color:var(--subh)}
+/* A cap that cannot be printed gets the same hero slot as the print-time
+   estimate, because that is where the eye already is - and it says so in the
+   warning colour instead of a confident number under a picture of a cap that
+   will never come off the plate. */
+#kcCard .kcHero.kcHeroBad b{color:var(--warncol)}
+#kcCard .kcHero.kcHeroBad span{text-transform:none;letter-spacing:0;font-weight:500;
+  color:var(--subh);max-width:46ch}
 #kcCard .kcOpen{margin-top:14px}
 #kcCard .kcOpen summary{cursor:pointer;font:600 10.5px/1 ui-sans-serif,system-ui;
   letter-spacing:.11em;text-transform:uppercase;color:var(--subh);padding:4px 0}

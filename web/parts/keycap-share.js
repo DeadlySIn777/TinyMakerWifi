@@ -35,8 +35,16 @@
   /* Short keys, because the whole point is that this fits in a message. The
      map is explicit rather than positional so an older code still opens after
      a field is added. */
+  /* `l` IS THE LEGEND SWITCH, and leaving it out was not a missing field, it
+     was a wrong cap. Turning Legend off does not clear st.digit - the render
+     path suppresses it through legendOn() - so a code for a deliberately BLANK
+     cap still carried digit:'5', and the far end, having no switch to read,
+     rebuilt it with a 5 on it. The owner approves a blank cap and prints a
+     numbered one. An older code has no 'l' and decodes as true, which is the
+     old default. */
   var K2S = { profile:'p', row:'r', sizeU:'u', icon:'i', digit:'d', braille:'b',
-              depth:'h', raised:'a', prompt:'m', key:'k', name:'n', wall:'w', roof:'f' };
+              depth:'h', raised:'a', prompt:'m', key:'k', name:'n', wall:'w', roof:'f',
+              legendOn:'l' };
   var S2K = {};
   Object.keys(K2S).forEach(function (k) { S2K[K2S[k]] = k; });
 

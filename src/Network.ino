@@ -3088,6 +3088,25 @@ bool meshyUrlAllowed(const String &u) {
   return host == "meshy.ai" || host.endsWith(".meshy.ai");
 }
 
+// The same URL, in the form the resolver will accept: a trailing dot on the
+// host is legal in DNS and meshyUrlAllowed deliberately ignores it, but lwIP's
+// gethostbyname does not, so passing it through produced a guaranteed 502 for a
+// URL the guard had just approved. Rewrites only the host, only the dots, and
+// only after the URL has already been accepted - it is a spelling fix, never a
+// re-interpretation, and it can never turn a refused URL into an allowed one.
+String meshyUrlNormalised(const String &u) {
+  int hs = 8, he = u.length();
+  for (int i = hs; i < (int)u.length(); i++) if (u[i] == '/') { he = i; break; }
+  String auth = u.substring(hs, he);
+  String hostPart = auth, portPart = "";
+  int colon = auth.indexOf(':');
+  if (colon >= 0) { hostPart = auth.substring(0, colon); portPart = auth.substring(colon); }
+  bool had = false;
+  while (hostPart.endsWith(".")) { hostPart = hostPart.substring(0, hostPart.length() - 1); had = true; }
+  if (!had) return u;
+  return u.substring(0, hs) + hostPart + portPart + u.substring(he);
+}
+
 // ---- fetching a generated model on the browser's behalf ---------------------
 //
 // CORS IS A BROWSER RULE, NOT A NETWORK ONE. api.meshy.ai returns
@@ -3132,6 +3151,7 @@ void handleApiFetch() {
     sendApiError(403, "only https URLs on meshy.ai can be fetched here");
     return;
   }
+  u = meshyUrlNormalised(u);          // after the check, never before it
 
   WiFiClientSecure client;
   client.setInsecure();               // same footing as the self-update path
@@ -3161,7 +3181,7 @@ void handleApiFetch() {
         sendApiError(502, "meshy.ai redirected somewhere this will not follow");
         return;
       }
-      target = next;
+      target = meshyUrlNormalised(next);   // checked raw, fetched normalised
       continue;
     }
     opened = true;

@@ -93,6 +93,16 @@
 
   /* Same reasoning as the keycap card: a model that finished and cannot be
      fetched by script is still a model, and the link is what makes it one. */
+  function bboxOf(p) {
+    var mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9], i, k, v;
+    for (i = 0; i < p.length; i += 3) for (k = 0; k < 3; k++) {
+      v = p[i + k];
+      if (v < mn[k]) mn[k] = v;
+      if (v > mx[k]) mx[k] = v;
+    }
+    return [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]];
+  }
+
   function keepInLibrary(prompt, state) {
     if (!window.keycapLibrary || !last || !last.positions) return;
     var thumb = null;
@@ -105,7 +115,19 @@
         thumb = t.toDataURL('image/jpeg', 0.72);
       }
     } catch (e) { /* a thumbnail is a nicety; the mesh is the point */ }
+    /* This path DOES have millimetres: intoSlicer scales a generated mesh to
+       mm before anything keeps it ("a generated mesh arrives in whatever unit
+       the generator felt like"). Pass them, so the Library card is measuring
+       the same object the slicer will. */
+    var mm = null;
+    try {
+      var b = bboxOf(last.positions);
+      mm = { sizeMm: [+b[0].toFixed(2), +b[1].toFixed(2), +b[2].toFixed(2)] };
+      if (window.keycap && window.keycap.volumeMm3)
+        mm.resinMl = +(window.keycap.volumeMm3(last.positions) / 1000).toFixed(2);
+    } catch (e) { mm = null; }
     window.keycapLibrary.save({
+      facts: mm,
       name: (prompt || 'model').slice(0, 48),
       prompt: prompt || '',
       kind: 'model',

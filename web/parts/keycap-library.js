@@ -91,19 +91,36 @@
         if (v < mn[k]) mn[k] = v;
         if (v > mx[k]) mx[k] = v;
       }
-    var out = { sizeMm: [+(mx[0]-mn[0]).toFixed(2), +(mx[1]-mn[1]).toFixed(2),
-                         +(mx[2]-mn[2]).toFixed(2)],
+    /* ⚠️ THESE ARE NOT MILLIMETRES. `positions` is the mesh as the generator
+       produced it - meshy-glb applies node transforms and the Y-up flip and
+       nothing else - so on a typical Meshy asset this box is about 1 x 1 x 1
+       in glTF units, and calling it sizeMm made the Library card say a cap
+       that really prints 18 x 18 x 17.5 mm was 1 mm across and cost 0.00 ml.
+       The unit is unknown, so the field is named for what it is; anything that
+       wants millimetres passes them in (see `facts` below), because the cap
+       that will be printed is what the card is actually about. */
+    var out = { sizeRaw: [+(mx[0]-mn[0]).toFixed(3), +(mx[1]-mn[1]).toFixed(3),
+                          +(mx[2]-mn[2]).toFixed(3)],
                 bytes: positions.length * 4 };
-    /* The same divergence-theorem sum the cost estimate uses, so the card and
-       the report cannot quote different resin for the same mesh. */
-    if (root.keycap && root.keycap.volumeMm3) {
-      try { out.resinMl = +(root.keycap.volumeMm3(positions) / 1000).toFixed(3); }
-      catch (e) { /* a broken mesh still gets a card */ }
-    }
     return out;
   }
 
-  /* entry: { name, prompt, kind:'sculpt'|'skin'|'icon', positions?, thumb?, design? } */
+  /* entry: { name, prompt, kind:'sculpt'|'skin'|'icon', positions?, thumb?, design?,
+             facts? }
+
+     `facts` is what the SEATED CAP measures - { sizeMm: [x,y,z], resinMl,
+     profile, row, sizeU } - handed in by whoever saves, because only they
+     know the scale the raw mesh was seated at. Without it a card can say
+     how many triangles a design has and not how big it prints, which is
+     the honest answer; with it the card says what will come off the
+     plate. */
+  function withRaw(facts, raw) {
+    var out = {};
+    if (raw) { out.sizeRaw = raw.sizeRaw; out.bytes = raw.bytes; }
+    if (facts) Object.keys(facts).forEach(function (k) { out[k] = facts[k]; });
+    return out;
+  }
+
   function save(entry) {
     var e = entry || {};
     if (!e.name && !e.prompt) return Promise.reject(new Error('A saved design needs a name or a prompt.'));
@@ -119,7 +136,10 @@
          IndexedDB, and the reason picking one costs nothing. */
       positions: e.positions || null,
       triangles: e.positions ? e.positions.length / 9 : 0,
-      facts: measure(e.positions)
+      /* The caller's own measurements win, because only the caller knows the
+         scale. measure() contributes what it honestly can from the raw mesh:
+         its byte size, and its extent in whatever unit the generator used. */
+      facts: withRaw(e.facts, measure(e.positions))
     };
     return tx('readwrite', function (os) { os.put(rec); return rec; })
       .then(function (r) { return trim().then(function () { return r; }); });

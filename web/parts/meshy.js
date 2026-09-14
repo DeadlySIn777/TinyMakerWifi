@@ -264,12 +264,31 @@
      the model finishes whether or not this page is still watching, and the
      credits are spent either way. */
   var PENDING = 'tmMeshyPending';
+  /* ⚠️ `from` SAYS WHICH CARD ASKED, and its absence was a real loss of work.
+     There is ONE pending slot, two cards on the page generate models into it,
+     and only the keycap card had a resumer - which claimed the slot 1.2 s
+     after every load without checking. So a model started in "Generate a
+     model", interrupted by a reload, came back SEATED ON A KEYCAP: the owner's
+     model gone, a stranger on the cap, the credits spent. opts.from carries
+     the answer; a record written before this field existed has none, and those
+     still belong to the keycap card, because that is where they used to go. */
   function remember(id, prompt, opts) {
     try {
       localStorage.setItem(PENDING, JSON.stringify(
-        { id: id, prompt: prompt, opts: opts || null, at: Date.now() }));
+        { id: id, prompt: prompt, opts: opts || null, at: Date.now(),
+          from: (opts && opts.from) || null }));
     } catch (e) {}
   }
+  /* Does this error prove the task can never be delivered? Anything else -
+     offline, rate-limited, 5xx, timed out, or "the browser cannot read the
+     asset" - leaves the record where it is. */
+  function terminal(e) {
+    if (!e) return false;
+    if (e.modelUrl) return false;                 // the model exists, we just cannot fetch it
+    if (e.status === 404 || e.status === 410) return true;
+    return /\b(FAILED|CANCELED|CANCELLED|EXPIRED)\b/.test(String(e.message || ''));
+  }
+
   function forget() { try { localStorage.removeItem(PENDING); } catch (e) {} }
   function pending(maxAgeMs) {
     var raw;
@@ -304,7 +323,21 @@
       state.glb = buf; forget();
       return state;
     }).catch(function (e) {
-      forget();
+      /* ⚠️ ONLY FORGET WHAT CANNOT COME BACK. This used to forget() on ANY
+         failure, and the failure it was written for is the common one: the
+         phone screen locks mid-generation, the page reloads, the resume poll
+         hits a three-second WiFi blip or a 429 from Meshy's edge, and the
+         record for a task that is still running - and already billed - was
+         deleted. Nothing could recover it afterwards; the only remedy was to
+         pay for it again.
+
+         A task is unrecoverable when Meshy says so: a 404/410 on the task
+         itself, or a terminal FAILED/CANCELED status. A transport error, a
+         rate limit, a 5xx, a deadline, and every fetchModel failure (those
+         carry e.modelUrl - the model exists, this browser just cannot read
+         it) all leave the record alone. generate() already has this rule: it
+         forgets only once the bytes are in hand. */
+      if (terminal(e)) forget();
       throw e;
     });
   }
@@ -395,6 +428,13 @@
         if (!out.internet) return null;
         /* A GET to the tasks list: cheap, generates nothing, and its STATUS is
            the answer - 200 fine, 401 the key is wrong, 402 out of credits. */
+        /* ⚠️ NO KEY IS NOT A REFUSAL. meshyFetch rejects at its first line when
+           nothing is stored - "No Meshy API key set." - before any request
+           leaves the browser, and that rejection used to land in out.meshy and
+           come back out as "Reached Meshy, and it refused". Nothing was
+           reached and nothing refused. It is the sentence the owner acts on,
+           so it has to be about the thing that is actually wrong. */
+        if (!out.key && !PROXY) { out.meshy = 'no key'; return null; }
         return meshyFetch('/text-to-3d?page_size=1')
           .then(function () { out.meshy = 'ok'; })
           .catch(function (e) {
@@ -405,6 +445,8 @@
         out.ms = Date.now() - t0;
         out.verdict = !out.internet
           ? 'This device has no route to the internet. If you are on the printer\'s own WiFi, that network has none.'
+          : out.meshy === 'no key'
+            ? 'The internet is fine. There is no Meshy key stored yet - paste one above.'
           : out.meshy === 'ok'
             ? 'Reachable, and the key works.'
             : out.meshy === 'unreachable'

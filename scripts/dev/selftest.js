@@ -81,12 +81,27 @@
 
   // ---- every step, every art mode ----------------------------------------
   keys.find(x => x.textContent.trim() === '4').click(); await wait(250);
+  /* ⚠️ START WHERE YOU MEAN TO START. "Click Next three times" only reaches
+     step 4 from step 1, and the card now restores the step the owner left off
+     on - so a session sitting on step 4 turned the first Next into a real Send
+     to slicer, which hands off to the Models tool and hid the card for the rest
+     of the run. Nine checks failed on a card that was working. A test may not
+     depend on what a previous session left in localStorage. */
+  document.querySelector('#kcSteps li[data-step="1"]').click(); await wait(300);
+  check('the wizard starts where it was told to',
+        document.querySelector('#kcSteps li.on').dataset.step === '1');
   for (let i = 0; i < 3; i++) { $('kcNext').click(); await wait(330); }
   hush();
   check('step 4 is reached', document.querySelector('#kcSteps li.on').dataset.step === '4');
   check('the report has a time', /\d+h|\d+m/.test($('kcReport').textContent));
   check('the report names the stem slot', /slot/.test($('kcReport').textContent));
   check('the hero canvas has pixels', $('kcTop').width > 100);
+  /* The inset re-renders at display size once nothing has moved for 520 ms
+     (see refresh()'s `sharpen`), so this has to outwait it. It used to pass
+     without waiting for a reason that was itself a bug: the card was
+     already at step 4, so the three Next clicks did nothing at all and the
+     timer had fired long before. A green check standing on a dead button. */
+  await wait(750);
   check('the legend inset is not upscaled', $('kcFlat').width >= 200,
         $('kcFlat').width + ' backing for ' + Math.round($('kcFlat').getBoundingClientRect().width) + ' css');
 
@@ -168,6 +183,25 @@
     check('action ' + id + ' is enabled', $(id) && !$(id).disabled);
   }
 
+  /* THE LAST STEP'S BUTTON DOES SOMETHING. It used to be renamed to "Done" and
+     then fall through the `st.step < 4` guard - the biggest, reddest control on
+     the card, wired to nothing. Pressing it is the forward action of the step
+     it is on, which is Send to slicer, and that hands off to the Models tool
+     where the slicer actually lives. */
+  {
+    check('the last step has a forward action, not a label',
+          /slicer/i.test($('kcNext').textContent), JSON.stringify($('kcNext').textContent));
+    const before = $('kcCard').className;
+    $('kcNext').click(); await wait(900); hush();
+    const cap = document.querySelector(".stStageBar .stSeg button[data-st='cap']");
+    const moved = getComputedStyle($('stModelTool')).display !== 'none';
+    const said = ($('kcState').textContent || '').length > 0;
+    check('pressing it does something visible', moved || said,
+          'model tool ' + (moved ? 'shown' : 'hidden') + ', said ' + JSON.stringify(($('kcState').textContent || '').slice(0, 50)));
+    cap.click(); await wait(400); hush();
+    check('and the keycap card comes back', getComputedStyle($('kcCard')).display !== 'none', before);
+  }
+
   // ---- the model reader ---------------------------------------------------
   check('the STL reader is loaded', typeof window.stlRead === 'object');
   check('the file door exists', !!$('kcFile'));
@@ -187,6 +221,20 @@
   }
 
   // ---- library ------------------------------------------------------------
+  /* THE LIBRARY OPENS THE RIGHT TOOL. "Open in Create" changed rooms and left
+     whichever tool was last used on screen - so with Models remembered, the
+     design loaded into a card with display:none and the button looked dead. */
+  {
+    const modelSeg = document.querySelector(".stStageBar .stSeg button[data-st='model']");
+    if (modelSeg) { modelSeg.click(); await wait(250); }     // the wrong tool, on purpose
+    if (window.studioStage) {
+      window.studioStage('cap'); await wait(250);
+      check('the shell can be told which tool to show',
+            getComputedStyle($('kcCard')).display !== 'none');
+    } else {
+      fails.push('the shell exposes no way to pick a tool (studioStage)');
+    }
+  }
   window.studioGo('library'); await wait(600); hush();
   check('the library room renders', ($('stLibrary').textContent || '').length > 20);
   check('the library has a heading', /Your designs/.test($('stLibrary').textContent));
