@@ -120,6 +120,7 @@
        want the skirt treatment, which is a separate job. */
     st.digit = (k[0] && k[0].length === 1 && k[0] !== ' ') ? k[0] : '';
     if ($('kcDigit')) $('kcDigit').value = st.digit;
+    paintLegendRow();
     if (K.PROFILES[st.profile].uniform) st.row = Object.keys(K.PROFILES[st.profile].rows)[0];
     go(2);
   }
@@ -248,8 +249,7 @@
        finish this session is restoring. */
     st.art = d.art || 'gen';
     st.legendOn = d.legendOn !== false;
-    if ($('kcLegendOn')) $('kcLegendOn').checked = st.legendOn;
-    if ($('kcDigit')) $('kcDigit').disabled = !st.legendOn;
+    setTimeout(function () { try { paintLegendRow(); } catch (e) {} }, 0);
     st.icon = d.icon || null;
     st.digit = d.digit || '';
     st.braille = d.braille || '';
@@ -1512,11 +1512,31 @@
     refresh();
   });
 
+  function paintLegendRow() {
+    var box = $('kcLegendOn');
+    if (!box) return;
+    var on = st.legendOn !== false;
+    box.checked = on;
+    var row = box.closest('.kcLegendRow');
+    if (row) row.classList.toggle('off', !on);
+    if ($('kcDigit')) $('kcDigit').disabled = !on;
+    /* Say WHICH character, not just that there is one - the whole point is that
+       the board filled it in without being asked, and a switch labelled
+       "Legend" does not tell you what it is about to remove. */
+    var w = $('kcLegendWhich');
+    if (w) w.textContent = !on
+      ? 'off \u2014 a blank cap, no character'
+      : (st.digit ? 'currently "' + st.digit + '", from the key you picked'
+                  : 'this key has no single character, so nothing is added');
+  }
+
   $('kcLegendOn') && $('kcLegendOn').addEventListener('change', function () {
     st.legendOn = this.checked;
-    if ($('kcDigit')) $('kcDigit').disabled = !this.checked;
+    paintLegendRow();
     refresh();
   });
+
+  window.keycapPaintLegendRow = paintLegendRow;
 
   $('kcDigit').addEventListener('input', function () {
     st.digit = (this.value || '').trim().slice(0, 1); refresh();

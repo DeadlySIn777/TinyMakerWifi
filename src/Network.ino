@@ -2940,6 +2940,28 @@ void handleApiLiveSlices() {
 }
 
 
+// A Stream that forwards straight into the reply the browser is already
+// reading. It exists so HTTPClient::writeToStream() can do the de-chunking:
+// getStreamPtr() gives the RAW socket, so a chunked response arrives with its
+// "ffa\r\n" length prefixes and "\r\n0\r\n\r\n" terminator embedded in the
+// bytes, and copying that verbatim produced a file that was 20 bytes too long
+// and wrong from the first byte. Measured, not guessed - a real file fetched
+// both ways differed at offset 0.
+class SendContentStream : public Stream {
+ public:
+  size_t written = 0;
+  size_t write(uint8_t b) override { return write(&b, 1); }
+  size_t write(const uint8_t *buf, size_t n) override {
+    server.sendContent((const char *)buf, n);
+    written += n;
+    return n;
+  }
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+  void flush() override {}
+};
+
 // Is this a URL handleApiFetch is allowed to touch? Applied to the URL the
 // dashboard supplies AND to every redirect it is offered, because an allowlist
 // checked once and then handed to an automatic redirect follower is not an
@@ -3057,33 +3079,27 @@ void handleApiFetch() {
     return;
   }
 
-  // Straight through. 1 KB at a time so the heap cost is the TLS session and
-  // nothing else - there is never a copy of the model on this device.
+  // ⚠️ NOT getStreamPtr() IN A HAND-ROLLED LOOP. That is the raw socket, so a
+  // chunked response arrives with its framing in the bytes - and the first
+  // version of this copied that framing into the file. A real file fetched both
+  // ways came back 15,426 bytes against 15,406, differing from byte zero: it
+  // began with a hex chunk length and ended with the terminating chunk. Corrupt
+  // in the worst way, too - HTTP 200, right order of magnitude, no error
+  // anywhere, and the GLB reader would have blamed Meshy for it.
+  //
+  // getSize() returning -1 was the tell: that means chunked, and the loop's
+  // "read until the stream ends" then faithfully copied the framing to the end.
+  // HTTPClient already undoes all of this; it only wanted somewhere to write.
   server.setContentLength(total > 0 ? (size_t)total : CONTENT_LENGTH_UNKNOWN);
   server.sendHeader("Cache-Control", "no-store");
   server.send(200, "application/octet-stream", "");
 
-  WiFiClient *st = http.getStreamPtr();
-  uint8_t buf[1024];
-  uint32_t sent = 0;
-  uint32_t lastByte = millis();
-  while (http.connected() && (total < 0 || sent < (uint32_t)total)) {
-    if (!server.client().connected()) break;      // the browser gave up
-    size_t avail = st->available();
-    if (avail) {
-      int n = st->readBytes(buf, avail > sizeof(buf) ? sizeof(buf) : avail);
-      if (n <= 0) break;
-      server.sendContent((const char *)buf, n);
-      sent += n;
-      lastByte = millis();
-    } else {
-      if (millis() - lastByte > 15000) break;     // stalled - do not hang the loop
-      delay(2);                                   // yields; feeds the watchdog
-    }
-  }
+  SendContentStream out;
+  int wrote = http.writeToStream(&out);
   server.sendContent("");                         // terminate the chunked body
   http.end();
-  DBGLN("api/fetch streamed " + String(sent) + " bytes");
+  DBGLN("api/fetch streamed " + String((int)out.written) +
+        " bytes (writeToStream said " + String(wrote) + ")");
 }
 
 void handleApiStatus() {
