@@ -111,6 +111,31 @@
         JSON.stringify(($('kcLegendWarn').textContent || '').slice(0, 60)));
   document.querySelector('#kcModes button[data-mode="gen"]').click(); await wait(300);
 
+  /* EVERY STEP MUST HAVE CONTROLS. Moving the key picker in beside the stage
+     left its <div> unclosed, so groups 2, 3 and 4 became CHILDREN of group 1 -
+     and hiding group 1 hid all of them. Steps 2 and 3 rendered a stage and an
+     empty column, and the node suites saw nothing wrong because the ids all
+     still existed. This walks every step and demands something on screen. */
+  for (const n of ['1', '2', '3', '4']) {
+    document.querySelector('#kcSteps li[data-step="' + n + '"]').click();
+    await wait(360); hush();
+    const g = document.querySelector('#kcCard .kcGroup[data-for="' + n + '"]');
+    check('step ' + n + ' has a group', !!g);
+    check('step ' + n + ' shows it', !!(g && g.offsetParent));
+    check('step ' + n + ' has controls in it',
+      !!(g && g.querySelector('button, input, textarea, .kcTile, .kcKey')),
+      g ? g.querySelectorAll('button, input, textarea, .kcTile, .kcKey').length + ' controls' : '-');
+    check('step ' + n + ' does not nest the others',
+      !!(g && !g.querySelector('.kcGroup')));
+  }
+  /* And the stage never leaves - that was the point of the move. */
+  for (const n of ['1', '2', '3', '4']) {
+    document.querySelector('#kcSteps li[data-step="' + n + '"]').click();
+    await wait(320);
+    const stage = document.querySelector('#kcCard .kcStage');
+    check('the preview is on screen at step ' + n, !!(stage && stage.offsetParent));
+  }
+
   // ---- the legend switch --------------------------------------------------
   const tog = $('kcLegendOn');
   check('the legend switch exists', !!tog);

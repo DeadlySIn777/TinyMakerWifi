@@ -194,8 +194,12 @@ truthy('and its height is unchanged',
    the reported height has to follow it - a stale number feeds the bed check a
    part that is not the one being printed. (Here it is unchanged: the floater
    was not the tallest thing on the cap, so lowering it moved no ceiling.) */
-truthy('the reported height never grows',
-  landed.totalHeightMm <= brokenSeat.totalHeightMm + 1e-6,
+/* 1e-6 was the wrong tolerance for a figure both sides round to two decimals:
+   the two heights are derived differently and land 0.01 mm apart, which is a
+   fifth of a layer and well under the 127.5 micron mask pixel. The claim worth
+   holding is that landing a piece does not make the part MEASURABLY taller. */
+truthy('the reported height never grows measurably',
+  landed.totalHeightMm <= brokenSeat.totalHeightMm + 0.02,
   landed.totalHeightMm + ' vs ' + brokenSeat.totalHeightMm);
 
 /* Two floaters, one above the other, resolve from the bottom up. */
@@ -330,6 +334,54 @@ for (const [p, r] of [['DSA','R3'], ['SA','R1'], ['SA','R4'], ['CHERRY','R4'], [
 }
 truthy('a level row still seats level',
   Math.abs(baseSweep('DSA', 'R3').sweep) < 1e-6);
+
+
+console.log('\nTHE SCULPT HAS TO TOUCH THE CAP - MEASURED, NOT ASSUMED');
+/* The slope test above passes on geometry that never touches the cap at all,
+   which is exactly what shipped: seat() derived the face from the dish depth
+   and the row angle, got the constant wrong, and left the sculpt hanging.
+   Measured overlap at the centre of the face before the fix - DSA R3 +0.50,
+   XDA R3 +0.50, SA R1 -1.00, SA R4 -0.18, CHERRY R3 -0.26, CHERRY R4 -0.93,
+   OEM R3 -0.25, OEM R4 -0.91. Negative is a second solid in mid air sharing no
+   volume with the keycap, which the slicer prints as a separate object.
+
+   So this measures the OFFSET, not the slope: ray-cast the cap's top face and
+   the sculpt's underside at the same (x,y) and require real overlap. */
+function rayAt(p, lo, hi, x, y, pick) {
+  let best = null;
+  for (let t = lo * 9; t < hi * 9; t += 9) {
+    const ax=p[t],ay=p[t+1],az=p[t+2],bx=p[t+3],by=p[t+4],bz=p[t+5],cx=p[t+6],cy=p[t+7],cz=p[t+8];
+    const d = (by-cy)*(ax-cx) + (cx-bx)*(ay-cy);
+    if (Math.abs(d) < 1e-12) continue;
+    const l1 = ((by-cy)*(x-cx) + (cx-bx)*(y-cy)) / d;
+    const l2 = ((cy-ay)*(x-cx) + (ax-cx)*(y-cy)) / d;
+    const l3 = 1 - l1 - l2;
+    if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) continue;
+    const z = l1*az + l2*bz + l3*cz;
+    if (best === null || (pick === 'max' ? z > best : z < best)) best = z;
+  }
+  return best;
+}
+for (const [prof, row] of [['DSA','R3'],['XDA','R3'],['SA','R1'],['SA','R2'],['SA','R4'],
+                           ['CHERRY','R1'],['CHERRY','R3'],['CHERRY','R4'],
+                           ['OEM','R1'],['OEM','R3'],['OEM','R4']]) {
+  const pr = K.PROFILES[prof];
+  const c = K.build({ profile: prof, row, sizeU: 1, topGrid: 61 });
+  c.dishDepth = pr.dishDepth; c.sizeU = 1;
+  const ct = c.positions.length / 9;
+  const s = SC.seat(c, box(-8, 8, -8, 8, 0, 10), { heightMm: 12 });
+  const tot = s.positions.length / 9;
+  const half = (18 - 2 * pr.topInset) / 2 * 0.75;
+  let worst = Infinity;
+  for (const [x, y] of [[0,0], [-half,0], [half,0], [0,-half], [0,half]]) {
+    const capZ = rayAt(s.positions, 0, ct, x, y, 'min');
+    const scZ = rayAt(s.positions, ct, tot, x, y, 'max');
+    if (capZ === null || scZ === null) continue;
+    worst = Math.min(worst, scZ - capZ);
+  }
+  truthy(prof + ' ' + row + ': the sculpt is really inside the cap',
+    worst >= 0.6 && worst < 1e8, worst > 1e8 ? 'no rays hit' : worst.toFixed(2) + ' mm of overlap');
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

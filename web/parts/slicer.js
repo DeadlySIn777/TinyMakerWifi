@@ -2008,6 +2008,9 @@ $('slicerSave').addEventListener('click',async()=>{
      nedingsta, jis tik susiskleidzia (V 08-20). */
   slicerOpen(false);
   if(typeof pickModel==='function')pickModel(openName);
+  /* The file is on the printer. Say so where the person is standing rather than
+     leaving them to find Start in another room - see studio.js printReady. */
+  if(typeof window.studioPrintReady==='function')window.studioPrintReady(openName);
   /* Ar perziura is tikruju atsidare. `pickModel` ir `dashPreview` turi tylius
      ankstyvus isejimus (printeris dar dirba, web valdymas isjungtas, vyksta
      dalijimasis), o varda jie uzsiraso PRIES pirma `await` - tad iskart po

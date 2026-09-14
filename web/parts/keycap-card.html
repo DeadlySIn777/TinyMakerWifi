@@ -19,27 +19,10 @@
   </ol>
 
   <!-- ---- step 1: the board is the hero -------------------------------- -->
-  <div class='kcPane' data-pane='1'>
-    <!-- KEPT, and given something real to measure: the jaws open to how much
-         of the 40.8 mm bed this cap eats, so the tool answers the question the
-         bed actually asks rather than restating the cap's width. -->
-    <div class='kcCal' id='kcCal' style='--jaw:.44'>
-      <i class='kcJawA'></i><i class='kcJawB'></i>
-      <span class='kcCalBed'>40.8 mm bed</span>
-      <b id='kcJawVal'>18.00 mm</b>
-    </div>
-
-    <div id='kcBoard' class='kcBoard'></div>
-
-    <div class='kcKeyLegend'>
-      <span><i class='kcSw'></i>prints flat</span>
-      <span><i class='kcSw t'></i>prints leaning, with supports</span>
-      <span><i class='kcSw n'></i>will not fit the bed</span>
-    </div>
-  </div>
-
   <!-- ---- steps 2-4 ----------------------------------------------------- -->
-  <div class='kcPane' data-pane='2 3 4' hidden>
+  <!-- One pane now: the split is always on screen, and .kcGroup[data-for]
+       switches only the controls beside the stage. -->
+  <div class='kcPane' data-pane='1 2 3 4'>
     <div class='kcSplit'>
       <div class='kcStageWrap'>
         <!-- KEPT: a seamless sweep - one gradient, no horizon, no floor plane -
@@ -64,6 +47,32 @@
       </div>
 
       <div class='kcOptions'>
+        <!-- THE BOARD LIVES HERE NOW, beside the stage rather than instead
+             of it. Picking a key settles the size, the row, the legend and
+             whether it can print flat - and it used to happen with nothing
+             on screen but a keyboard, the cap appearing one click later.
+             The keys are sized in cqw, so a narrower column gives smaller
+             keys rather than a scrollbar. -->
+        <div class='kcGroup' data-for='1'>
+
+    <!-- KEPT, and given something real to measure: the jaws open to how much
+         of the 40.8 mm bed this cap eats, so the tool answers the question the
+         bed actually asks rather than restating the cap's width. -->
+    <div class='kcCal' id='kcCal' style='--jaw:.44'>
+      <i class='kcJawA'></i><i class='kcJawB'></i>
+      <span class='kcCalBed'>40.8 mm bed</span>
+      <b id='kcJawVal'>18.00 mm</b>
+    </div>
+
+    <div id='kcBoard' class='kcBoard'></div>
+
+    <div class='kcKeyLegend'>
+      <span><i class='kcSw'></i>prints flat</span>
+      <span><i class='kcSw t'></i>prints leaning, with supports</span>
+      <span><i class='kcSw n'></i>will not fit the bed</span>
+        </div>
+        </div>
+
         <div class='kcGroup' data-for='2'>
           <p class='kcLbl'>Profile</p>
           <div id='kcProfiles' class='kcTiles'></div>
@@ -321,7 +330,12 @@
 #kcCard .kcSplit{display:grid;grid-template-columns:1fr;
   gap:clamp(14px,2.4cqw,30px);align-items:start}
 @container kc (min-width:700px){
-  #kcCard .kcSplit{grid-template-columns:minmax(0,1.25fr) minmax(0,1fr)}}
+  #kcCard .kcSplit{grid-template-columns:minmax(0,1.25fr) minmax(0,1fr)}
+  /* Step one is the exception: a 61-key board needs width more than the cap
+     does, and the cap at that point is a plain blank anyway - there is nothing
+     on it yet to look at closely. The stage stays on screen, which was the
+     point, and hands some of its room to the thing being chosen. */
+  #kcCard.kcStep1 .kcSplit{grid-template-columns:minmax(0,1fr) minmax(0,1.35fr)}}
 /* A browser without container queries falls back to the window, which is right
    whenever the card is the full width of the page - which it now is. */
 @supports not (container-type:inline-size){

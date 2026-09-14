@@ -139,9 +139,13 @@
     Array.prototype.forEach.call($('kcCard').querySelectorAll('.kcGroup'), function (g) {
       g.hidden = g.getAttribute('data-for') !== String(n);
     });
+    $('kcCard').classList.toggle('kcStep1', n === 1);
     $('kcNext').textContent = n >= 4 ? 'Done' : 'Next';
     $('kcBack').disabled = false;
-    if (n >= 2) refresh();
+    /* Every step now, not just from 2. The stage is on screen at step 1 and an
+       empty stage beside a keyboard is worse than no stage - the whole reason
+       for moving the board here was so the cap is visible while you choose. */
+    refresh();
   }
 
   // ---- tiles -------------------------------------------------------------
@@ -1214,7 +1218,42 @@
            printPlan: built && built.printPlan }];
     if (!caps[0] || !caps[0].positions) return;
     var lay = K.layout(caps);
-    if (!window.slicerLoadMesh) { say('kcState', 'The slicer engine is not loaded - open the slicer card once, then retry.', 'bad'); return; }
+    /* THE ENGINE HAS TO BE THERE FIRST, and this used to test the wrong thing:
+       window.slicerLoadMesh always exists, so the guard always passed, and the
+       call then returned false because slicerMod was still null. The owner got
+       "the slicer would not take it" about a design that was perfectly fine,
+       over a WASM module nobody had asked for yet. Both other callers - the
+       Meshy card and the slicer's own file input - load it on demand; this one
+       did not, which is the whole reason the seamless path fell at the first
+       hop and left "export it, then import it somewhere else" as the only way
+       through. */
+    if (typeof window.slicerLoadMesh !== 'function') {
+      say('kcState', 'The slicer is missing from this build.', 'bad');
+      return;
+    }
+    kcEnsureSlicer().then(function (ready) {
+      if (!ready) {
+        say('kcState', 'Could not load the slicer engine - it lives on the SD card, ' +
+                       'so check the card is in and try again.', 'bad');
+        return;
+      }
+      sendToSlicer(caps, lay);
+    });
+  });
+
+  /* The same on-demand load the other two callers do. slicerLoadMod is a
+     top-level const in the assembled page, so it is in scope here - that is how
+     meshy-ui.js reaches it too. */
+  function kcEnsureSlicer() {
+    if (typeof slicerMod !== 'undefined' && slicerMod) return Promise.resolve(true);
+    if (typeof slicerLoadMod !== 'function') return Promise.resolve(false);
+    say('kcState', 'loading the slicer engine\u2026');
+    return Promise.resolve(slicerLoadMod()).then(function () {
+      return (typeof slicerMod !== 'undefined' && !!slicerMod);
+    }).catch(function () { return false; });
+  }
+
+  function sendToSlicer(caps, lay) {
     /* keepPose, or the slicer stands the cap back up on its "best" face and
        undoes printPose - the lean that keeps the sculpt off the plate, the
        height the clock counted, the footprint the plate was packed against.
@@ -1243,8 +1282,9 @@
     }
     say('kcState', ok ? ('sent ' + lay.placed.length + ' cap' + (lay.placed.length > 1 ? 's' : '') +
                          ' to the slicer — it is open below')
-                      : 'the slicer would not take it', ok ? '' : 'bad');
-  });
+                      : 'the slicer refused the mesh - it may have no usable triangles',
+      ok ? '' : 'bad');
+  }
 
   $('kcStl').addEventListener('click', function () {
     var caps = st.plate.length ? st.plate

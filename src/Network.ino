@@ -2973,16 +2973,43 @@ class SendContentStream : public Stream {
 // .com" (endsWith without the dot).
 bool meshyUrlAllowed(const String &u) {
   if (!u.startsWith("https://")) return false;
+
+  // ⚠️ THE AUTHORITY ENDS AT '/' AND NOWHERE ELSE, because that is where
+  // HTTPClient::beginInternal ends it. The first version of this stopped at the
+  // first of '/', '?' or '#' instead, and that one difference was a live SSRF:
+  //
+  //     https://meshy.ai?@example.com/
+  //
+  // This checker read the host as "meshy.ai" - no '@' in that slice, so the
+  // credentials guard never fired - and allowed it. HTTPClient read the
+  // authority as "meshy.ai?@example.com", discarded "meshy.ai?" as userinfo,
+  // and connected to example.com. Demonstrated on this device: that URL
+  // returned Example Domain's HTML, and the same trick aimed at 192.168.1.1
+  // reached the gateway over TLS, from inside the network, behind the firewall.
+  //
+  // Two parsers reading one string and disagreeing is the bug class that
+  // defeats allowlists. So there is one parse now, it matches the fetcher's,
+  // and anything ambiguous is REFUSED rather than interpreted.
   int hs = 8, he = u.length();
   for (int i = hs; i < (int)u.length(); i++) {
-    char c = u[i];
-    if (c == '/' || c == '?' || c == '#') { he = i; break; }
+    if (u[i] == '/') { he = i; break; }
   }
-  String host = u.substring(hs, he);
-  if (host.indexOf('@') >= 0) return false;           // credentials in the authority
+  String auth = u.substring(hs, he);
+  if (auth.length() == 0) return false;               // https:///path
+  // An '@' is credentials - HTTPClient would drop everything before it, so the
+  // host is not the one this string appears to name. A '?' or '#' inside the
+  // authority can only mean the two readings differ. Refuse all three.
+  if (auth.indexOf('@') >= 0) return false;
+  if (auth.indexOf('?') >= 0) return false;
+  if (auth.indexOf('#') >= 0) return false;
+  if (auth.indexOf(' ') >= 0 || auth.indexOf('\\') >= 0) return false;
+  if (auth.indexOf('\t') >= 0 || auth.indexOf('\r') >= 0 || auth.indexOf('\n') >= 0) return false;
+
+  String host = auth;
   int colon = host.indexOf(':');
   if (colon >= 0) host = host.substring(0, colon);
   host.toLowerCase();
+  while (host.endsWith(".")) host = host.substring(0, host.length() - 1);  // trailing dot
   return host == "meshy.ai" || host.endsWith(".meshy.ai");
 }
 

@@ -374,6 +374,46 @@
     }
   })();
 
+  /* ---- the last step, brought to where you are standing ------------------
+
+     Slicing ends with the file on the printer and the Start button in the SD
+     list - which is in Monitor, while you are in Create. Every other step of
+     this card has one obvious forward action; the last one sent you to another
+     room to hunt for it. On a phone that is the difference between finishing
+     and giving up.
+
+     It calls window.startPrint, the same function the SD list calls, so the
+     low-resin confirmation, the busy check and the homing behave identically.
+     The only thing that is new is where the button is. */
+  function printReady(name) {
+    if (!name) return;
+    var bar = $('stPrintReady');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'stPrintReady';
+      bar.className = 'stReady';
+      mCre.insertBefore(bar, mCre.firstChild);
+    }
+    bar.classList.remove('stOff');
+    bar.innerHTML =
+      "<div class='stReadyText'><b></b><small>on the printer, ready to go</small></div>" +
+      "<button type='button' id='stPrintGo'>Print it now</button>" +
+      "<button type='button' id='stPrintLater' class='later'>Later</button>";
+    bar.querySelector('b').textContent = name;
+    $('stPrintLater').addEventListener('click', function () { bar.classList.add('stOff'); });
+    $('stPrintGo').addEventListener('click', function () {
+      if (!window.startPrint) { bar.classList.add('stOff'); return; }
+      $('stPrintGo').disabled = true;
+      $('stPrintGo').textContent = 'Starting\u2026';
+      try { window.startPrint(encodeURIComponent(name)); } catch (e) {}
+      setTimeout(function () { bar.classList.add('stOff'); }, 1500);
+    });
+    /* Put it where the eye already is rather than making it a notification
+       somewhere else - the whole complaint was about having to go looking. */
+    try { bar.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {}
+  }
+  window.studioPrintReady = printReady;
+
   // ---- the mark, live -----------------------------------------------------
   /* Tag the shapes that already exist in the header logo. They were drawn
      with fixed fills and opacities; this only names them so they can be

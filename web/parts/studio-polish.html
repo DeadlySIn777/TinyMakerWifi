@@ -292,6 +292,24 @@ main.wrap{
   border-radius:12px;
   box-shadow:0 10px 30px rgba(0,0,0,.45)}
 
+/* The one control that finishes the job. Loud on purpose: it is the end of a
+   five-minute piece of work and the only thing between a design and a print. */
+.stReady{display:flex;align-items:center;gap:var(--st-3);flex-wrap:wrap;
+  padding:var(--st-3) var(--st-4);border-radius:14px;
+  background:var(--accent-soft);border:1px solid var(--accent-line)}
+.stReady .stReadyText{flex:1 1 220px;min-width:0}
+.stReady b{display:block;color:var(--text);font:650 var(--sf-lg)/1.25 inherit;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stReady small{display:block;margin-top:2px;color:var(--muted);
+  font:400 var(--sf-sm)/1.4 inherit}
+.stReady button{width:auto;margin:0;padding:12px 22px;border:0;border-radius:10px;
+  background:var(--accent);color:#fff;font:650 var(--sf-md)/1 inherit;cursor:pointer}
+.stReady button:hover{background:var(--accent-deep)}
+.stReady button.later{background:transparent;color:var(--muted);
+  border:1px solid var(--line2);padding:12px 16px}
+.stReady button[disabled]{background:var(--dis);color:var(--dis-t)}
+@media(max-width:560px){ .stReady button{flex:1 1 100%} }
+
 /* ---- motion ----------------------------------------------------------- */
 @media(prefers-reduced-motion:no-preference){
   #stMonitor,#stCreate,#stLibrary{animation:stIn .18s ease-out}

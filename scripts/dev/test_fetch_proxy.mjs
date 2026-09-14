@@ -100,6 +100,21 @@ const shouldRefuse = [
   ['a file URL',                 'file:///etc/passwd'],
   ['an empty authority',         'https:///etc/passwd'],
   ['a trailing dot',             'https://assets.meshy.ai./x'],
+  /* THE PARSER DIFFERENTIAL. Every attack above is a variation on one idea - a
+     lookalike hostname - and all nine passed while the endpoint was WIDE OPEN,
+     because the real hole was two parsers reading one string differently.
+     meshyUrlAllowed stopped the host at the first of '/', '?' or '#';
+     HTTPClient stops the authority at '/' only and then drops everything before
+     an '@' as userinfo. So "https://meshy.ai?@example.com/" looked like
+     meshy.ai to the guard and was example.com to the fetcher. Demonstrated on
+     the live device: 200, with Example Domain's HTML. Aimed at 192.168.1.1 it
+     reached the gateway over TLS, from inside the network. */
+  ['a query smuggling a second host',    'https://meshy.ai?@example.com/'],
+  ['a fragment smuggling a second host', 'https://meshy.ai#@example.com/'],
+  ['the same aimed at the gateway',      'https://meshy.ai?@192.168.1.1/'],
+  ['the same with a port',               'https://meshy.ai?@192.168.1.1:443/'],
+  ['userinfo before a real host',        'https://meshy.ai@example.com/'],
+  ['a backslash instead of a slash',     'https://meshy.ai\@example.com/'],
 ];
 for (const [name, u] of shouldRefuse) {
   let body = '', status = 0;

@@ -71,6 +71,7 @@
        than half the room it actually has - and for a scene with two figures on
        it that is the difference between two characters and two blobs. Depth is
        always one unit: keys are wider than 1u, never deeper. */
+    var sxc = o.x || 0, syc = o.y || 0;          // where the sculpt is centred
     var pitchW = o.pitch || (19.05 * (cap.sizeU || 1));
     var pitchD = o.pitchD || 19.05;
     var spread = o.spread == null ? 1.06 : o.spread;
@@ -81,11 +82,34 @@
     var k = Math.min(maxW / sb.size[0], maxD / sb.size[1], maxH / sb.size[2]);
     if (o.scale) k = o.scale;
 
-    /* How deep it sinks into the cap. It has to clear the dish, or the first
-       layers of the sculpt hang over a hollow. */
-    var seatDepth = o.seatDepth == null
-      ? Math.max(0.8, (cap.dishDepth || 0.8) + 0.5)
-      : o.seatDepth;
+    /* ⚠️ WHERE THE FACE IS, MEASURED - NOT COMPUTED FROM THE PROFILE.
+
+       This used to be max(0.8, dishDepth + 0.5): a guess at how far down the
+       face sits, made from the dish depth alone. It ignored the row angle
+       entirely, and then my attempt to add the row angle got the constant
+       wrong - build() normalises the cap so its HIGHEST point is z = 0, and on
+       a tilted row that point is the back corner of the face, putting the face
+       at dish(x,y) + (y + topD/2)*|tan|. Adding y*tan without the topD/2 term
+       leaves the base parallel to the face and 1.43 mm too shallow on a 13
+       degree row.
+
+       Measured overlap between the sculpt's underside and the face, before:
+       DSA R3 +0.50, XDA R3 +0.50, SA R1 -1.00, SA R4 -0.18, CHERRY R3 -0.26,
+       CHERRY R4 -0.93, OEM R3 -0.25, OEM R4 -0.91. Negative is not a thin
+       joint - it is a second solid hanging in the air, sharing no volume with
+       the cap, which the slicer prints as a separate object that comes off in
+       the vat. Six of the eight combinations this engine ships.
+
+       surfaceUnder() is in this file, ray-casts the cap, and reseat() already
+       trusts it for exactly this question. Ask it. */
+    var capTris = cap.positions.length / 9;
+    var BITE = o.bite == null ? 0.8 : o.bite;      // check() calls under 0.60 an issue
+    var footBox = { mn: [sxc - maxW * 0.25, syc - maxD * 0.25, 0],
+                    mx: [sxc + maxW * 0.25, syc + maxD * 0.25, 0] };
+    var faceZ = surfaceUnder(cap.positions, null, 0, capTris, footBox, o.rays || 5);
+    var seatDepth = o.seatDepth != null ? o.seatDepth
+                  : (faceZ != null ? faceZ + BITE
+                                   : Math.max(0.8, (cap.dishDepth || 0.8) + 0.5));
 
     /* The cap's z runs from its top face DOWN to the mouth, so the sculpt has
        to grow in -z. Negating one axis is a MIRROR, not a rotation: it flips
@@ -106,7 +130,7 @@
        on its own. Tilting the base by the same tangent the cap uses puts the
        whole underside on the face. */
     var out = new Float32Array(sculptPositions.length);
-    var t, c, sx = o.x || 0, sy = o.y || 0;
+    var t, c, sx = sxc, sy = syc;
     var tanRow = Math.tan((o.rowAngle != null ? o.rowAngle : (cap.angle || 0)) * Math.PI / 180);
     var ORDER = [0, 2, 1];                       // the winding fix
     for (t = 0; t < sculptPositions.length; t += 9) {
@@ -114,8 +138,12 @@
         var src = t + ORDER[c] * 3, dst = t + c * 3;
         out[dst]     = (sculptPositions[src]     - sb.mid[0]) * k + sx;
         out[dst + 1] = (sculptPositions[src + 1] - sb.mid[1]) * k + sy;
+        /* The slope pivots about the point that was SAMPLED, so the measured
+           bite is the bite there and the base stays parallel to the face
+           everywhere else. Pivoting about y = 0 instead is what made the
+           constant wrong in the first place. */
         out[dst + 2] = -((sculptPositions[src + 2] - sb.mn[2]) * k) + seatDepth
-                     + out[dst + 1] * tanRow;
+                     + (out[dst + 1] - syc) * tanRow;
       }
     }
 
