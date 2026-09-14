@@ -154,7 +154,9 @@
   }
 
   function drawProfiles() {
-    tiles('kcProfiles', Object.keys(K.PROFILES).map(function (p) {
+    tiles('kcProfiles', Object.keys(K.PROFILES).filter(function (p) {
+      return !K.PROFILES[p].hidden;      // the stem coupon is not a keycap
+    }).map(function (p) {
       var pr = K.PROFILES[p], rows = Object.keys(pr.rows);
       var h = pr.rows[rows[0]].h;
       return { id: p, label: p, sub: pr.uniform ? 'uniform' : rows.length + ' rows',

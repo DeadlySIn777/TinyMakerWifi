@@ -329,5 +329,55 @@ truthy('the footprint lean still governs', entRaised.printPlan.tilt > 25,
   entRaised.printPlan.tilt + ' degrees');
 ok('and it still fits', entRaised.printPlan.ok, true);
 
+
+console.log('\nTHE FIT COMB - the one print that settles slotClearance');
+/* It used to lay 18 mm caps in a line at a 10 mm pitch, so they overlapped by
+   8 mm and fused into one slab with five buried holes, 58 mm long on a 40.8 mm
+   bed. Neither fault shows up in a triangle count; both show up the moment you
+   measure the box and compare it to BED, which is what these do. */
+const fitComb = K.stemTestComb(1.15, 1.35, 0.04);
+truthy('it fits the bed', fitComb.sizeMm.x <= K.BED.x && fitComb.sizeMm.y <= K.BED.y,
+  fitComb.sizeMm.x + ' x ' + fitComb.sizeMm.y + ' on ' + K.BED.x + ' x ' + K.BED.y);
+truthy('with more than two steps on it', fitComb.stems.length >= 5, fitComb.stems.length + ' coupons');
+truthy('the coupons do not touch each other', (function () {
+  const pitch = fitComb.couponMm + 1.6;
+  return fitComb.stems.every(a => fitComb.stems.every(b =>
+    a === b || Math.abs(a.x - b.x) >= pitch - 1e-6 || Math.abs(a.y - b.y) >= pitch - 1e-6));
+})());
+truthy('the slots widen monotonically',
+  fitComb.stems.every((s2, i) => i === 0 || s2.slotMm > fitComb.stems[i - 1].slotMm),
+  fitComb.stems.map(s2 => s2.slotMm.toFixed(2)).join(' '));
+ok('the range asked for is the range delivered', fitComb.stems[0].slotMm, 1.15);
+ok('both ends of it', fitComb.stems[fitComb.stems.length - 1].slotMm, 1.35);
+truthy('it is watertight', (function () {
+  const q = fitComb.positions, E = new Map();
+  for (let t = 0; t < q.length; t += 9) {
+    const v = [[q[t],q[t+1],q[t+2]],[q[t+3],q[t+4],q[t+5]],[q[t+6],q[t+7],q[t+8]]]
+      .map(a => a.map(x => Math.round(x * 2000)).join(','));
+    for (let i = 0; i < 3; i++) {
+      const a = v[i], b = v[(i + 1) % 3], k2 = a < b ? a + '|' + b : b + '|' + a;
+      E.set(k2, (E.get(k2) || 0) + (a < b ? 1 : -1));
+    }
+  }
+  return [...E.values()].every(v => v === 0);
+})());
+
+/* Asking for a step finer than the bed can hold must widen the step, not
+   truncate the range - a comb that stops before the answer is worthless. */
+const fine = K.stemTestComb(1.15, 1.45, 0.01);
+ok('a too-fine request still starts where asked', fine.stems[0].slotMm, 1.15);
+ok('and still ends where asked', fine.stems[fine.stems.length - 1].slotMm, 1.45);
+truthy('it says the step was widened', /widened/.test(fine.note));
+truthy('and it still fits', fine.sizeMm.x <= K.BED.x && fine.sizeMm.y <= K.BED.y);
+
+/* The coupon is not offered as a keycap. */
+truthy('the coupon profile is hidden from the picker', K.PROFILES.TEST.hidden === true);
+truthy('and the stem in it is the SAME stem a cap gets', (function () {
+  const cap = K.build({ profile: 'TEST', widthMm: 11, depthMm: 11, topGrid: 9 });
+  const real = K.build({ profile: 'DSA', row: 'R3', topGrid: 9 });
+  return Math.abs(cap.stemDepth - real.stemDepth) < 1e-6 ||
+         (cap.stemDepth > 3 && real.stemDepth > 3);
+})(), 'coupon stem is built by build(), not a copy');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

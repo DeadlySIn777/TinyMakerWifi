@@ -92,7 +92,19 @@
     OEM:    { dish: 'cylindrical', uniform: false, topInset: 2.90, dishDepth: 0.90,
               rows: { R1: { h: 11.2, angle: -3 }, R2: { h: 9.5, angle: 3 },
                       R3: { h:  9.0, angle:  7 }, R4: { h: 9.4, angle: 13 } },
-              note: 'sculpted, a bit taller than Cherry - the stock-keyboard shape' }
+              note: 'sculpted, a bit taller than Cherry - the stock-keyboard shape' },
+    /* NOT A KEYCAP AND NOT OFFERED AS ONE - hidden:true keeps it out of the
+       picker. It exists so stemTestComb can print a coupon small enough to
+       tile a 40.8 x 30.6 mm bed: the real cap is 18 mm square and only two of
+       those fit, which makes a fit comb of two useless steps. Nearly no inset
+       and no dish, so an 11 mm block still leaves the top face wide enough for
+       the post the guard insists on. The stem is not reimplemented here - it
+       comes out of the same build() as every cap, which is the entire reason
+       the number this measures can be trusted. */
+    TEST:   { dish: 'spherical',   uniform: true,  topInset: 0.60, dishDepth: 0.00,
+              hidden: true,
+              rows: { R3: { h:  7.0, angle:  0 } },
+              note: 'stem fit coupon - not a keycap' }
   };
 
   var UNIT = 19.05;       // key pitch
@@ -257,7 +269,10 @@
 
     var mx = Object.assign({}, MX, o.mx || {});
     var sizeU = o.sizeU || 1;
-    var W = capWidth(sizeU), D = DEPTH;
+    /* Size normally comes from the unit count, because that is what a keycap
+       is. A coupon is not on a keyboard and has no unit count, so it may state
+       its own - nothing else about the build changes. */
+    var W = o.widthMm || capWidth(sizeU), D = o.depthMm || DEPTH;
     var wall = o.wall || 1.35;
     /* The roof is the material between the dish and the top of the stem hole,
        and it FOLLOWS the top contour rather than sitting at one flat height.
@@ -761,26 +776,107 @@
   }
 
   /* ---- the tuning print --------------------------------------------------
-     A row of stems, each slot a little wider than the last. Print it, try a
+     Several stems, each slot a little wider than the last. Print it, try a
      switch in each, keep the first that clicks on without force, then set
      mx.slotClearance to that slot minus crossWide. This is how the number gets
-     found; assuming it is how twenty caps come out unusable. */
+     found; assuming it is how twenty caps come out unusable.
+
+     ⚠️ THIS USED TO BUILD A PART THAT COULD NOT BE PRINTED, and it is the one
+     function in the file where that is unforgivable - it is the only thing
+     standing between a guessed slotClearance and twenty ruined caps.
+
+     It laid 18 mm caps in a line at a 10 mm pitch. Two things wrong with that,
+     both fatal and neither visible in a triangle count. The caps INTERPENETRATE
+     by 8 mm, so the slicer unions them into one slab of plastic with five holes
+     buried in it - you cannot get a switch in, let alone judge the fit. And the
+     line came to 58 mm on a 40.8 mm bed, so the slicer would have refused it
+     anyway. Both were found by measuring the bounding box of what came out and
+     comparing it to BED, which is now an assertion rather than an afterthought.
+
+     So: a real pitch (the cap plus a finger's worth of gap), a grid packed into
+     the bed the long way first, and a hard check at the end. And when the range
+     asks for more coupons than the bed holds, the STEP is widened to cover the
+     same range with the number that fit - a coarser answer you can print beats
+     a precise one you cannot. What it will not do is hand back a part that does
+     not fit and let the printer be the one to say so. */
   function stemTestComb(from, to, step, opts) {
-    var o = opts || {}, s = new Soup(), stems = [], x = 0, pitch = 10;
-    for (var w = from; w <= to + 1e-9; w += step) {
+    var o = opts || {};
+    var profile = o.profile || 'TEST';
+    var sizeU = o.sizeU || 1;
+    var gap = o.gapMm == null ? 1.6 : o.gapMm;     // enough to get a fingernail in
+    var bed = o.bed || BED;
+
+    /* A coupon, not a cap. An 18 mm keycap leaves room for two on this bed and
+       a two-step fit comb answers nothing; an 11 mm coupon tiles six. */
+    var coupon = profile === 'TEST' ? (o.couponMm || 11) : 0;
+    var w = coupon || capWidth(sizeU), d = coupon || DEPTH;
+    var pitchX = w + gap, pitchY = d + gap;
+    /* The bed's own edge is not usable - the mask's first and last columns are
+       the least even on any MSLA machine - so keep a margin off each side. */
+    var margin = o.marginMm == null ? 1.0 : o.marginMm;
+    var cols = Math.max(1, Math.floor((bed.x - 2 * margin + gap) / pitchX));
+    var rows = Math.max(1, Math.floor((bed.y - 2 * margin + gap) / pitchY));
+    var room = cols * rows;
+
+    var want = Math.max(1, Math.round((to - from) / step) + 1);
+    var n = Math.min(want, room);
+    /* Cover the SAME range with however many fit, rather than truncating it -
+       a comb that stops before the answer is worse than a coarse one. */
+    var useStep = n > 1 ? (to - from) / (n - 1) : 0;
+
+    var s = new Soup(), stems = [], i, j;
+    for (i = 0; i < n; i++) {
+      var slot = from + useStep * i;
       var one = build({
-        profile: 'DSA', sizeU: 1, topGrid: 7,
-        mx: Object.assign({}, MX, o.mx || {}, { slotClearance: w - MX.crossWide })
+        profile: profile, sizeU: sizeU, topGrid: o.topGrid || 9,
+        widthMm: coupon || undefined, depthMm: coupon || undefined,
+        mx: Object.assign({}, MX, o.mx || {}, { slotClearance: slot - MX.crossWide })
       });
-      var p = one.positions;
-      for (var i = 0; i < p.length; i += 9) {
-        s.tri([p[i]+x, p[i+1], p[i+2]], [p[i+3]+x, p[i+4], p[i+5]], [p[i+6]+x, p[i+7], p[i+8]]);
+      var col = i % cols, row = Math.floor(i / cols);
+      var ox = col * pitchX, oy = row * pitchY;
+      var q = one.positions;
+      for (j = 0; j < q.length; j += 9) {
+        s.tri([q[j]+ox, q[j+1]+oy, q[j+2]],
+              [q[j+3]+ox, q[j+4]+oy, q[j+5]],
+              [q[j+6]+ox, q[j+7]+oy, q[j+8]]);
       }
-      stems.push({ x: +x.toFixed(2), slotMm: +w.toFixed(3) });
-      x += pitch;
+      stems.push({ index: i + 1, x: +ox.toFixed(2), y: +oy.toFixed(2),
+                   col: col + 1, row: row + 1, slotMm: +slot.toFixed(3),
+                   clearanceMm: +(slot - MX.crossWide).toFixed(3) });
     }
-    return { positions: s.toFloat32(), triangles: s.count(), stems: stems,
-             note: 'left to right, slot widens by ' + step + ' mm each cap' };
+
+    var positions = s.toFloat32();
+    var mn = [1e9, 1e9, 1e9], mx2 = [-1e9, -1e9, -1e9];
+    for (i = 0; i < positions.length; i += 3)
+      for (j = 0; j < 3; j++) {
+        var v = positions[i + j];
+        if (v < mn[j]) mn[j] = v;
+        if (v > mx2[j]) mx2[j] = v;
+      }
+    var sizeMm = { x: +(mx2[0]-mn[0]).toFixed(2), y: +(mx2[1]-mn[1]).toFixed(2),
+                   z: +(mx2[2]-mn[2]).toFixed(2) };
+    /* The assertion the old one did not have. If this ever throws the layout
+       is wrong, and a throw here is a hundred times cheaper than a failed
+       print and a still-unknown clearance. */
+    if (sizeMm.x > bed.x || sizeMm.y > bed.y)
+      throw new Error('keycap: the fit comb came out ' + sizeMm.x + ' × ' + sizeMm.y +
+        ' mm on a ' + bed.x + ' × ' + bed.y + ' mm bed - the layout is wrong');
+
+    var note = n + ' cap' + (n > 1 ? 's' : '') + ', slot ' + from.toFixed(2) +
+      ' to ' + (from + useStep * (n - 1)).toFixed(2) + ' mm in ' +
+      useStep.toFixed(3) + ' mm steps. They read left to right along the front ' +
+      'row first, then the row behind it. Put a switch in each and keep the ' +
+      'first that clicks on without force.';
+    if (n < want)
+      note += ' The ' + step + ' mm step you asked for needs ' + want +
+        ' caps and the bed holds ' + room + ', so the step was widened to cover ' +
+        'the whole range in one print.';
+
+    return { positions: positions, triangles: s.count(), stems: stems,
+             sizeMm: sizeMm, cols: cols, rows: rows, perPlate: room,
+             stepMm: +useStep.toFixed(4), capWidthMm: +w.toFixed(2),
+             couponMm: coupon || null,
+             fitsBed: true, note: note };
   }
 
   root.keycap = {
