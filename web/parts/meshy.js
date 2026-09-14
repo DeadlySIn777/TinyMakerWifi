@@ -184,32 +184,64 @@
   /* Fetch the GLB bytes. Kept separate from the task call because the asset
      lives on a different host with its own CORS behaviour - if this is the
      thing that breaks, it breaks HERE and the message says so. */
+  /* Getting the finished model, through whichever door is open.
+
+     CORS IS A RULE ABOUT WHAT A SCRIPT MAY READ, not about what can be
+     reached. api.meshy.ai returns Access-Control-Allow-Origin for this
+     printer's origin; assets.meshy.ai, where the model actually lives, returns
+     no such header at all - so the browser refuses to hand the page bytes it
+     can otherwise fetch perfectly well. The model exists and the credits are
+     spent; only the last hop is blocked.
+
+     Three doors, in the order that costs the owner least:
+       1. straight at the asset host, which works wherever Meshy allows it;
+       2. the PRINTER, which is not a page and so is not subject to the rule -
+          it fetches the signed URL itself and streams it back over the
+          connection the browser already has open, same-origin;
+       3. the owner, by hand, with the link - because a model that is paid for
+          and finished should never end in three words and a dead stop.
+     Whatever happens, the error carries the URL, so door three is always
+     available even when doors one and two both fail. */
   function fetchModel(t, which) {
     var urls = (t && t.model_urls) || {};
     var u = urls[which || 'glb'];
     if (!u) throw new Error('That Meshy task returned no ' + (which || 'glb') + ' file.');
-    var url = PROXY ? (PROXY + '/asset?u=' + encodeURIComponent(u)) : u;
-    return fetch(url).then(function (r) {
-      if (!r.ok) {
-        var e1 = new Error('Meshy refused the download (' + r.status + ').');
-        e1.modelUrl = u;
-        throw e1;
-      }
-      return r.arrayBuffer();
+
+    function manual(why) {
+      var e = new Error((why ? why + ' ' : '') +
+        'The model finished and nothing was wasted - open the link and bring the ' +
+        'file back in with "Open a .glb".');
+      e.modelUrl = u;
+      e.corsBlocked = true;
+      return e;
+    }
+
+    function viaPrinter(why) {
+      return fetch('/api/fetch?u=' + encodeURIComponent(u), { cache: 'no-store' })
+        .then(function (r) {
+          if (r.ok) return r.arrayBuffer();
+          return r.json().catch(function () { return null; }).then(function (j) {
+            throw manual((j && j.error)
+              ? 'The printer could not fetch it either: ' + j.error + '.'
+              : 'The printer could not fetch it either (' + r.status + ').');
+          });
+        }, function () {
+          throw manual(why || 'This browser is not allowed to download it directly, ' +
+                              'and the printer could not be reached.');
+        });
+    }
+
+    var direct = PROXY ? (PROXY + '/asset?u=' + encodeURIComponent(u)) : u;
+    return fetch(direct).then(function (r) {
+      if (r.ok) return r.arrayBuffer();
+      /* A real HTTP answer, so the bytes were reachable and Meshy said no -
+         a signed URL that has expired, usually. The printer would be told the
+         same thing, so do not make it try. */
+      throw manual('Meshy refused the download (' + r.status + ').');
     }, function () {
-      /* THE MODEL EXISTS AND IS PAID FOR; only the last hop is blocked.
-         api.meshy.ai allows this origin, assets.meshy.ai sends no CORS header
-         at all, so a script cannot read the bytes - but a PERSON can open the
-         link, because CORS restricts what a script may read, not what a browser
-         may navigate to. Carry the URL out with the error so the card can offer
-         it instead of dead-ending on three words. */
-      var e2 = new Error('The model finished, but this browser is not allowed to ' +
-        'download it directly - Meshy\'s asset host sends no cross-origin header. ' +
-        'Nothing was wasted: open the link below, then bring the file back in ' +
-        'with "Open a .glb".');
-      e2.modelUrl = u;
-      e2.corsBlocked = true;
-      throw e2;
+      /* No HTTP answer at all: the browser blocked it before it started. This
+         is the case the printer can solve. */
+      return viaPrinter();
     });
   }
 

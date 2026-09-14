@@ -2939,6 +2939,153 @@ void handleApiLiveSlices() {
   server.sendContent("");   // terminate the chunked body
 }
 
+
+// Is this a URL handleApiFetch is allowed to touch? Applied to the URL the
+// dashboard supplies AND to every redirect it is offered, because an allowlist
+// checked once and then handed to an automatic redirect follower is not an
+// allowlist - the first hop passes and the second goes wherever it likes.
+//
+// The host is what sits between :// and the next / ? or #, minus any user:pass@
+// and any :port. Taking it any other way is how these checks end up trusting
+// "https://evil.com/?x=meshy.ai" (substring anywhere) or "https://meshy.ai.evil
+// .com" (endsWith without the dot).
+bool meshyUrlAllowed(const String &u) {
+  if (!u.startsWith("https://")) return false;
+  int hs = 8, he = u.length();
+  for (int i = hs; i < (int)u.length(); i++) {
+    char c = u[i];
+    if (c == '/' || c == '?' || c == '#') { he = i; break; }
+  }
+  String host = u.substring(hs, he);
+  if (host.indexOf('@') >= 0) return false;           // credentials in the authority
+  int colon = host.indexOf(':');
+  if (colon >= 0) host = host.substring(0, colon);
+  host.toLowerCase();
+  return host == "meshy.ai" || host.endsWith(".meshy.ai");
+}
+
+// ---- fetching a generated model on the browser's behalf ---------------------
+//
+// CORS IS A BROWSER RULE, NOT A NETWORK ONE. api.meshy.ai returns
+// Access-Control-Allow-Origin for this printer's origin; assets.meshy.ai, where
+// the finished model actually lives, returns no such header at all - so the
+// browser refuses to let the page read bytes it can otherwise reach perfectly
+// well. The model exists, the credits are spent, and the only thing in the way
+// is a rule that applies to scripts in a page and to nothing else.
+//
+// This printer is not a page. It fetches the URL itself and streams the bytes
+// back down the connection the browser already has open, which is same-origin
+// and therefore not CORS's business. The owner gets the model with no download,
+// no Downloads folder and no second step.
+//
+// ⚠️ A PROXY ON A LAN DEVICE IS AN SSRF HOLE IF YOU LET IT BE. Anything that
+// fetches a URL somebody else supplies can be pointed at a router's admin page,
+// a NAS, a cloud metadata endpoint - and it would be doing that from INSIDE the
+// network, with the firewall already behind it. So this is not a proxy. It is a
+// Meshy download endpoint that happens to take a URL:
+//   - https only, so it cannot be aimed at a plaintext service;
+//   - the host must be meshy.ai or a subdomain, checked on the real host field
+//     after stripping any user:pass@ and :port, because "evil.com/?x=meshy.ai"
+//     and "meshy.ai.evil.com" are the two ways this check is usually got wrong;
+//   - redirects may not leave the host they started on;
+//   - the request must come from the printer's own dashboard (#95), and
+//   - it refuses outright while a print is running, because this loop is the
+//     same one that drives the machine and a multi-megabyte TLS download would
+//     stall it mid-layer.
+void handleApiFetch() {
+  if (rejectIfWebControlOff()) return;
+  if (!requestFromOwnUi()) {
+    sendApiError(403, "request must come from the printer's own dashboard");
+    return;
+  }
+  if (printerBusy()) {
+    sendApiError(409, "the printer is printing - fetching a model now would stall a layer");
+    return;
+  }
+
+  String u = server.arg("u");
+  if (!meshyUrlAllowed(u)) {
+    sendApiError(403, "only https URLs on meshy.ai can be fetched here");
+    return;
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure();               // same footing as the self-update path
+  HTTPClient http;
+  // NOT setFollowRedirects: this core's only same-host option does not exist,
+  // and the ones that do would carry the request off the allowlist without
+  // telling anybody. Followed by hand below, three hops at most, each one put
+  // back through meshyUrlAllowed().
+  http.setTimeout(20000);
+  const char *hdrs[] = { "Location" };
+  int code = 0;
+  String target = u;
+  bool opened = false;
+  for (int hop = 0; hop < 3; hop++) {
+    if (!http.begin(client, target)) {
+      sendApiError(502, "could not open a connection to meshy.ai");
+      return;
+    }
+    http.collectHeaders(hdrs, 1);
+    code = http.GET();
+    if (code == HTTP_CODE_MOVED_PERMANENTLY || code == HTTP_CODE_FOUND ||
+        code == HTTP_CODE_SEE_OTHER || code == HTTP_CODE_TEMPORARY_REDIRECT ||
+        code == 308) {
+      String next = http.header("Location");
+      http.end();
+      if (!meshyUrlAllowed(next)) {
+        sendApiError(502, "meshy.ai redirected somewhere this will not follow");
+        return;
+      }
+      target = next;
+      continue;
+    }
+    opened = true;
+    break;
+  }
+  if (!opened || code != HTTP_CODE_OK) {
+    http.end();
+    String m = "meshy.ai answered " + String(code);
+    sendApiError(502, m.c_str());
+    return;
+  }
+
+  int total = http.getSize();
+  if (total > 0 && total > 48 * 1024 * 1024) {
+    http.end();
+    sendApiError(413, "that model is larger than this can pass through");
+    return;
+  }
+
+  // Straight through. 1 KB at a time so the heap cost is the TLS session and
+  // nothing else - there is never a copy of the model on this device.
+  server.setContentLength(total > 0 ? (size_t)total : CONTENT_LENGTH_UNKNOWN);
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/octet-stream", "");
+
+  WiFiClient *st = http.getStreamPtr();
+  uint8_t buf[1024];
+  uint32_t sent = 0;
+  uint32_t lastByte = millis();
+  while (http.connected() && (total < 0 || sent < (uint32_t)total)) {
+    if (!server.client().connected()) break;      // the browser gave up
+    size_t avail = st->available();
+    if (avail) {
+      int n = st->readBytes(buf, avail > sizeof(buf) ? sizeof(buf) : avail);
+      if (n <= 0) break;
+      server.sendContent((const char *)buf, n);
+      sent += n;
+      lastByte = millis();
+    } else {
+      if (millis() - lastByte > 15000) break;     // stalled - do not hang the loop
+      delay(2);                                   // yields; feeds the watchdog
+    }
+  }
+  server.sendContent("");                         // terminate the chunked body
+  http.end();
+  DBGLN("api/fetch streamed " + String(sent) + " bytes");
+}
+
 void handleApiStatus() {
   bool busy = printerBusy();
   bool connected = WiFi.status() == WL_CONNECTED;
@@ -5239,6 +5386,9 @@ void network_setup() {
   });
   server.on("/api/status", HTTP_GET, handleApiStatus);
   server.on("/api/files", HTTP_GET, handleApiFiles);
+  // Bytes the browser is allowed to reach but not allowed to READ - see
+  // handleApiFetch for why that is a sentence that makes sense.
+  server.on("/api/fetch", HTTP_GET, handleApiFetch);
   server.on("/api/files/model", HTTP_GET, handleApiFileModel);
   // PWA: manifest + home-screen icon (bytes in PwaIcon.ino, declared below)
   server.on("/manifest.json", HTTP_GET, []() {
