@@ -94,15 +94,28 @@
        itself, and a slicer that cares about winding would see it inside out.
        So each triangle's last two corners are swapped back as it is written -
        one mirror, one reversal, handedness restored. */
+    /* THE FACE IS NOT LEVEL AND THE BASE PLANE WAS. seat() wrote a single
+       constant z for the whole underside while keycap.js topField() tilts the
+       top face by the row angle - so on a sculpted row the figure is welded to
+       the high side and hangs over air on the low one. CHERRY R4 sweeps 3.71 mm
+       across the face against a 1.35 mm seatDepth: a 2.4 mm gap that looked
+       perfect on screen and prints as an overhang with nothing under it.
+
+       The old anchorage test could not see it either, because it compared
+       against z = 0 - the cap's highest point - which the high side satisfies
+       on its own. Tilting the base by the same tangent the cap uses puts the
+       whole underside on the face. */
     var out = new Float32Array(sculptPositions.length);
     var t, c, sx = o.x || 0, sy = o.y || 0;
+    var tanRow = Math.tan((o.rowAngle != null ? o.rowAngle : (cap.angle || 0)) * Math.PI / 180);
     var ORDER = [0, 2, 1];                       // the winding fix
     for (t = 0; t < sculptPositions.length; t += 9) {
       for (c = 0; c < 3; c++) {
         var src = t + ORDER[c] * 3, dst = t + c * 3;
         out[dst]     = (sculptPositions[src]     - sb.mid[0]) * k + sx;
         out[dst + 1] = (sculptPositions[src + 1] - sb.mid[1]) * k + sy;
-        out[dst + 2] = -((sculptPositions[src + 2] - sb.mn[2]) * k) + seatDepth;
+        out[dst + 2] = -((sculptPositions[src + 2] - sb.mn[2]) * k) + seatDepth
+                     + out[dst + 1] * tanRow;
       }
     }
 

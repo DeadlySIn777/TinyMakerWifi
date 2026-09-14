@@ -676,8 +676,16 @@
     var grid = mode === 'print'
       ? K.gridForFace(topW)                  // one sample per printer pixel
       : 31;                                  // enough to judge, cheap to spin
+    /* BRAILLE IN A BOWL. The dots are 0.75 mm tall and the profile's own dish
+       is 0.80 mm on XDA, 1.10 on DSA and 1.30 on SA - so on every profile the
+       cap ships with, the top of a dot sits BELOW the rim of the dish it stands
+       in. A finger tracking across the cap feels the rim, not the dot, which
+       makes the one feature whose entire purpose is to be felt unreadable.
+       Braille caps are flat-topped in real life for exactly this reason.
+       build() already honours o.dishDepth, so this is the whole fix. */
     var cap = K.build({ profile: st.profile, row: st.row, sizeU: st.sizeU,
-                        relief: rel, topGrid: grid });
+                        relief: rel, topGrid: grid,
+                        dishDepth: st.art === 'braille' ? 0 : undefined });
     if (st.sculpt && window.keycapSculpt) {
       var SCp = window.keycapSculpt;
       cap.dishDepth = pr.dishDepth;

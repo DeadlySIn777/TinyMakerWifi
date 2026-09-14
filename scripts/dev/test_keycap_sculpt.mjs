@@ -296,5 +296,40 @@ ok('stillFloating agrees with an independent check of the same mesh',
   archLanded.stillFloating, SC.check(archLanded).anchorage.floating.length);
 ok('and it agrees on the sound scene too', SC.reseat(seatedScene).stillFloating,
   SC.check(seatedScene).anchorage.floating.length);
+
+console.log('\nTHE FACE IS NOT LEVEL, AND THE BASE PLANE WAS');
+/* seat() wrote one constant z for the whole underside while keycap.js tilts the
+   top face by the row angle - so on a sculpted row the figure was welded to the
+   high side and hung over air on the low one. The old anchor test compared
+   against z = 0, the cap's HIGHEST point, which the high side satisfies on its
+   own, so nothing noticed. */
+function baseSweep(profile, row) {
+  const cap = K.build({ profile, row, topGrid: 31 });
+  cap.dishDepth = K.PROFILES[profile].dishDepth; cap.sizeU = 1;
+  const s = SC.seat(cap, box(-8, 8, -8, 8, 0, 10), { heightMm: 12 });
+  const sc = s.positions.subarray(s.capTriangles * 9);
+  let front = -Infinity, back = -Infinity, fy = Infinity, by = -Infinity;
+  for (let i = 0; i < sc.length; i += 3) {
+    const y = sc[i + 1], z = sc[i + 2];
+    if (y < fy) fy = y;
+    if (y > by) by = y;
+  }
+  for (let i = 0; i < sc.length; i += 3) {
+    const y = sc[i + 1], z = sc[i + 2];
+    if (y < fy + 0.5 && z > front) front = z;
+    if (y > by - 0.5 && z > back) back = z;
+  }
+  return { sweep: back - front, span: by - fy, angle: cap.angle };
+}
+for (const [p, r] of [['DSA','R3'], ['SA','R1'], ['SA','R4'], ['CHERRY','R4'], ['OEM','R4']]) {
+  const b = baseSweep(p, r);
+  const want = Math.tan(b.angle * Math.PI / 180) * b.span;
+  truthy(p + ' ' + r + ': the base follows the face at ' + b.angle + String.fromCharCode(176),
+    Math.abs(b.sweep - want) < 0.15,
+    'sweeps ' + b.sweep.toFixed(2) + ' mm, the face wants ' + want.toFixed(2));
+}
+truthy('a level row still seats level',
+  Math.abs(baseSweep('DSA', 'R3').sweep) < 1e-6);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

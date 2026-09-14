@@ -418,5 +418,58 @@ for (const [name, opts] of [['DSA R3', { profile: 'DSA', row: 'R3', topGrid: 9 }
 truthy('and perPlate still answers without a plan, for the flat comparison',
   K.perPlate(1).count > 0);
 
+
+console.log('\nA BRAILLE DOT HAS TO CLEAR THE DISH IT STANDS IN');
+/* The dots are 0.75 mm tall. The profile's own dish is 0.80 mm on XDA, 1.10 on
+   DSA and 1.30 on SA - so on every profile this engine ships, the top of a dot
+   sat BELOW the rim of the bowl around it, and a finger tracking across the cap
+   felt the rim instead. The one feature whose entire purpose is to be felt.
+   Real braille caps are flat-topped for exactly this reason. */
+function topAt(p, x, y) {
+  let best = Infinity;
+  for (let i = 0; i < p.length; i += 9) {
+    const ax=p[i],ay=p[i+1],bx=p[i+3],by=p[i+4],cx=p[i+6],cy=p[i+7];
+    const d=(by-cy)*(ax-cx)+(cx-bx)*(ay-cy);
+    if (Math.abs(d) < 1e-12) continue;
+    const l1=((by-cy)*(x-cx)+(cx-bx)*(y-cy))/d, l2=((cy-ay)*(x-cx)+(ax-cx)*(y-cy))/d, l3=1-l1-l2;
+    if (l1<-1e-9||l2<-1e-9||l3<-1e-9) continue;
+    const z = l1*p[i+2]+l2*p[i+5]+l3*p[i+8];
+    if (z < best) best = z;
+  }
+  return best;
+}
+/* XDA's dish is 0.80 against a 0.75 mm dot, so there it was marginal rather
+   than swallowed - a 0.05 mm proud dot you would not feel through a fingertip
+   either. DSA (1.10) and SA (1.30) buried it outright. Both are fixed by the
+   same flattening; only the deeper two get the "was swallowed" assertion. */
+for (const prof of ['DSA', 'SA']) {
+  const dished = K.build({ profile: prof, row: 'R3', topGrid: 81 });
+  const flat = K.build({ profile: prof, row: 'R3', topGrid: 81, dishDepth: 0 });
+  const dotTopDished = topAt(dished.positions, 0, 0) - 0.75;
+  const rimDished = topAt(dished.positions, 5.8, 0);
+  const dotTopFlat = topAt(flat.positions, 0, 0) - 0.75;
+  const rimFlat = topAt(flat.positions, 5.8, 0);
+  truthy(prof + ': the dish really did swallow the dot', dotTopDished > rimDished,
+    'dot ' + dotTopDished.toFixed(2) + ' vs rim ' + rimDished.toFixed(2));
+  truthy(prof + ': flattened, the dot stands proud', dotTopFlat < rimFlat - 0.5,
+    'dot ' + dotTopFlat.toFixed(2) + ' vs rim ' + rimFlat.toFixed(2));
+}
+for (const prof of ['XDA']) {
+  const dished = K.build({ profile: prof, row: 'R3', topGrid: 81 });
+  const flat = K.build({ profile: prof, row: 'R3', topGrid: 81, dishDepth: 0 });
+  const proudDished = topAt(dished.positions, 5.8, 0) - (topAt(dished.positions, 0, 0) - 0.75);
+  const proudFlat = topAt(flat.positions, 5.8, 0) - (topAt(flat.positions, 0, 0) - 0.75);
+  /* 0.18 mm of a 0.75 mm dot: less than a quarter of it clears the bowl, and
+     a fingertip resolves nothing that shallow - the ADA figure is 0.6 to 0.9. */
+  truthy(prof + ': the shallow dish still buried three quarters of the dot',
+    proudDished < 0.25,
+    proudDished.toFixed(2) + ' mm of 0.75 above the rim - a fingertip feels nothing');
+  truthy(prof + ': flattened, it is properly proud', proudFlat > 0.7,
+    proudFlat.toFixed(2) + ' mm');
+}
+truthy('and dishDepth:0 does not change anything else',
+  K.build({ profile: 'DSA', row: 'R3', topGrid: 9, dishDepth: 0 }).size.x ===
+  K.build({ profile: 'DSA', row: 'R3', topGrid: 9 }).size.x);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
