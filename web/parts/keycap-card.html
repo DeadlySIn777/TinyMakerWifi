@@ -149,6 +149,7 @@
               <output id='kcSculptHeightVal' for='kcSculptHeight'>19 mm</output></label><button type='button' class='designerHelp' data-designer-help='kcHeightHelp' data-help-title='Artwork size' aria-label='About artwork size'>?</button></div>
             <p id='kcHeightHelp' hidden>Artwork keeps its proportions and fits between neighboring keys; relief depth only changes lettering and flat artwork. The height is a maximum, so a wide model can be shorter. Check Actual artwork below after importing or generating.</p>
             <details class='kcGenerationOptions'><summary>Generation settings</summary>
+            <label class='kcLegendRow'><input id='kcAutoFinish' type='checkbox' checked><span><b>Automatically finish the fit</b><small>Checks the new sculpt and adjusts its size within your chosen height. Keeps your socket fit.</small></span></label>
             <div class='calRow'>
               <label class='grow' for='kcMeshyDetail'>Meshy detail<select id='kcMeshyDetail'><option value='30000'>Standard · 30k target</option><option value='100000'>Fine · 100k target</option></select></label>
               <label class='grow' for='kcSculptStyle'>Art direction<select id='kcSculptStyle'><option value='cuteartisan'>Cute artisan</option><option value='faithfulsubject'>Faithful subject</option></select></label>
@@ -162,6 +163,7 @@
                 style='flex:1 1 90px' disabled>Clear</button>
             </div>
             <p id='kcGenNote' class='hint'></p>
+            <button id='kcReviewArt' class='button secondary' type='button' hidden>Review &amp; improve artwork</button>
             <section id='kcPlacement' hidden>
               <div class='designerLabel'><p class='kcLbl'>Artwork placement</p><button type='button' class='designerHelp' data-designer-help='kcPlacementHelp' data-help-title='Artwork placement' aria-label='About artwork placement'>?</button></div>
               <label class='kcNum grow' for='kcSculptRotation'><span>Turn artwork</span>
@@ -228,6 +230,7 @@
 
         <div class='kcGroup' data-for='4' hidden>
           <div id='kcReport' class='kcReport'></div>
+          <button id='kcReviewFinish' class='button secondary' type='button' hidden>Review &amp; improve artwork</button>
           <details id='kcFitPanel' class='kcDisclosure'>
             <summary>Adjust fit</summary>
           <section class='kcFit' aria-labelledby='kcFitLabel'>

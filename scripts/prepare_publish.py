@@ -14,7 +14,7 @@ import shutil
 import subprocess
 
 BASE_COMMIT = "0a797c3ec4abdc744820c2124a2344b8f57ed6d2"
-BRANCH = "codex/0.18.12-library-toppers"
+BRANCH = "codex/0.18.13-artisan-review"
 TOP = {".gitignore", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE.md",
        "README.md", "ROADMAP.md", "platformio.ini"}
 SOURCE_DIRS = {"src", "web", "include", "wasm", "PrusaSlicer", "test", ".github", "docs"}

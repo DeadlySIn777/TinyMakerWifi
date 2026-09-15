@@ -123,6 +123,27 @@ measured socket geometry, confirms the full sculpt stays unchanged, and checks
 pending imports and failed saves. The Library and Models checks exercise real
 backup/STL downloads and preserve texture and fit data through restore.
 
+## Artisan automation and revision checks
+
+The artisan automation and revision checks need no paid generation or device:
+
+```sh
+node scripts/dev/test_keycap_autofinish.cjs
+node scripts/dev/test_keycap_autofinish_integration.cjs
+node scripts/dev/test_artisan_review.cjs
+node scripts/dev/test_meshy_revision.cjs
+node scripts/dev/test_artisan_delivery.cjs
+node scripts/dev/browser_artisan_review.cjs
+node scripts/dev/test_artisan_workflow_browser.cjs
+```
+
+The browser harnesses use synthetic models and inert local responses. They
+verify reachable paid-task confirmation, preservation of original artwork,
+candidate saving, missing-texture recovery, local geometry fitting, and stale
+completion handling. Pure tests exercise bounded fitting and the two task
+families, including uncertain submission recovery without duplicate paid POSTs.
+These checks do not establish aesthetic quality of a real Meshy revision.
+
 ## Pinned slicer integration checks
 
 `browser_keycap_actions.cjs`, `test_send_transfer.cjs`, and

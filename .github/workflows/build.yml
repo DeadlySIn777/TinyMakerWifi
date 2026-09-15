@@ -58,6 +58,11 @@ jobs:
           node scripts/dev/test_keycap_texture.cjs
           node scripts/dev/test_texture_lifecycle.cjs
           node scripts/dev/test_texture_backup.cjs
+          node scripts/dev/test_keycap_autofinish.cjs
+          node scripts/dev/test_keycap_autofinish_integration.cjs
+          node scripts/dev/test_artisan_review.cjs
+          node scripts/dev/test_meshy_revision.cjs
+          node scripts/dev/test_artisan_delivery.cjs
           node scripts/dev/test_color_backup.cjs
           node scripts/dev/test_includes.mjs
           python -m unittest discover -s scripts/tests -p 'test_tm_send*.py' -v

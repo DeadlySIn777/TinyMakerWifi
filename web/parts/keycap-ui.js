@@ -73,7 +73,7 @@
     if(!source||typeof source.previewId!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(source.previewId))return null;
     return {previewId:source.previewId,refineId:typeof source.refineId==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(source.refineId)?source.refineId:null};
   }
-  function setSourceReference(colors,kind,texture,provenance){
+  function setSourceReference(colors,kind,texture,provenance,quiet){
     var valid=!!colors&&!!st.sculpt&&colors.length===st.sculpt.length;
     if(valid)for(var i=0;i<colors.length;i++)if(!Number.isFinite(colors[i])||colors[i]<0||colors[i]>1){valid=false;break;}
     st.sourceColors=valid?new Float32Array(colors):null;
@@ -92,7 +92,7 @@
       for(var t=0;t<colors.length;t+=9)for(var k=0;k<3;k++)for(var a=0;a<3;a++)
         st.seatedColors[t+k*3+a]=colors[t+order[k]*3+a];
     }
-    paintReference();
+    if(!quiet)paintReference();
   }
   function paintReference(){
     if($('kcColorMode')&&$('kcColorMode').querySelectorAll)Array.prototype.forEach.call($('kcColorMode').querySelectorAll('button'),function(b){var on=b.getAttribute('data-color-mode')===(st.colorMode||'solid');b.classList.toggle('on',on);b.setAttribute('aria-pressed',String(on));});
@@ -298,6 +298,194 @@
     if($('kcStyleDraftCancel'))$('kcStyleDraftCancel').addEventListener('click',function(){cancelArtisanStyleDraft(true);});
     if($('kcPrompt'))$('kcPrompt').addEventListener('input',function(){rememberSession();if(artisanStyleDraft){rememberArtisanStyleDraft();paintArtisanStyleDraft();}});
   }
+
+  // Physical automation uses measured geometry, never an invented beauty score.
+  var autoFinishBusy=false, reviewSession=null, autoFinishLast=null;
+  var sculptTextureExpected=new WeakSet();
+  function automationEnabled(){
+    try{return localStorage.getItem('tmKeycapAutoFinish')!=='off';}catch(e){return true;}
+  }
+  function automationStamp(){return JSON.stringify([designOf(),stemFitMx(),sculptLoadSerial]);}
+  function inArtworkState(state,work){var before=st;st=state;try{return work();}finally{st=before;}}
+  function artworkState(){return Object.assign({},st,{plate:[],name:st.name||(typeof lastSavedProduct!=='undefined'&&lastSavedProduct&&lastSavedProduct.source===st.sculpt&&lastSavedProduct.name)||''});}
+  function candidateSettings(){return {heightMm:sculptureHeight(),scalePercent:st.sculptScalePercent||100,rotationDeg:st.sculptRotationDeg||0};}
+  function evaluateArtwork(base,candidate){
+    var checks=[],result={score:1,checks:checks},copy=Object.assign({},base,{
+      sculptHeightMm:candidate.heightMm,sculptScalePercent:candidate.scalePercent,sculptRotationDeg:candidate.rotationDeg});
+    function check(name,pass,reason,unresolved){checks.push({name:name,status:pass?'pass':unresolved?'unresolved':'fail',reason:reason||''});}
+    return inArtworkState(copy,function(){
+      var cap;
+      try{cap=capFor('print',relief());meshUsable(cap.positions);check('geometry',true);}
+      catch(e){['geometry','attachment','socket','print-fit'].forEach(function(n){check(n,false,e.message,!!e.attachmentAnalysis);});result.terminal=!!e.attachmentAnalysis;return result;}
+      var sc=cap.sculptCheck;
+      check('attachment',!!sc&&sc.ok,sc&&sc.issues&&sc.issues.join(' ')||'Attachment is not verified.',sc&&sc.anchorage&&sc.anchorage.unresolved);
+      var v=K.validate(cap.positions.subarray(0,cap.seated.capTriangles*9),{sizeU:st.sizeU,mx:stemFitMx()});
+      check('socket',v.ok,v.issues&&v.issues.join(' '));
+      try{
+        if(!cap.printPlan||cap.printPlan.ok===false)throw Error(cap.printPlan&&cap.printPlan.why||'No valid print pose.');
+        var p=K.orientAsPrinted(cap.positions,cap.angle,cap.printPlan.tilt||0,{mouthDown:!!cap.printPlan.mouthDown});
+        meshUsable(p);
+        var lay=K.layout([{positions:p,size:cap.size,name:cap.name,printPlan:cap.printPlan}]);
+        if(lay.leftOver||lay.placed.length!==1)throw Error('The complete keycap does not fit the print volume.');
+        meshUsable(lay.positions);
+        var b=window.keycapSculpt.bounds(lay.positions),bed=K.usableBed(),z=lay.supports?K.BED.zSupported:K.BED.zFlat;
+        if(b.size[0]>bed.x+.01||b.size[1]>bed.y+.01||b.size[2]>z+.01)throw Error('The complete keycap exceeds the usable print volume.');
+        window.keycapProduct.capture({positions:lay.positions,recipe:window.keycapShare.encode(designOf()),fit:{slotMm:+(K.MX.crossWide+stemFitClearance).toFixed(2)},issues:[]});
+        check('print-fit',true);
+      }catch(e){check('print-fit',false,e.message);}
+      result.score=cap.seated.scale;result.metrics={sizeMm:cap.seated.sculptMm};return result;
+    });
+  }
+  function physicalSummary(assessment){
+    var checks=assessment&&assessment.checks||[],bad=checks.filter(function(c){return c.status!=='pass';});
+    return {state:checks.length===4&&!bad.length?'ready':'needs-attention',
+      summary:checks.length===4&&!bad.length?'Geometry, attachment, socket and print bounds checked.':'The physical checks need attention.',
+      issues:bad.map(function(c){return c.reason||c.name+' is not verified.';}).filter(function(s,i,a){return a.indexOf(s)===i;})};
+  }
+  function paintAutomation(){
+    ['kcReviewArt','kcReviewFinish'].forEach(function(id){if($(id)){$(id).hidden=!st.sculpt;$(id).disabled=autoFinishBusy||!!($('kcGen')&&$('kcGen').disabled);}});
+  }
+  function optimizeArtwork(base,mode,isCancelled,onProgress){
+    return window.keycapAutoFinish.run({initial:inArtworkState(base,candidateSettings),mode:mode||'preserve-height',maxHeightMm:mode==='fill'?30:base.sculptHeightMm||19,
+      heightStepMm:.5,scaleStepPercent:1,maxEvaluations:8,timeBudgetMs:6000,isCancelled:isCancelled,evaluate:function(c){return evaluateArtwork(base,c);},onProgress:onProgress});
+  }
+  async function finishCurrentArtwork(mode,quiet,cancelled){
+    if(!st.sculpt||!window.keycapAutoFinish||autoFinishBusy) return null;
+    var base=artworkState(),source=st.sculpt,stamp=automationStamp();autoFinishBusy=true;paintAutomation();
+    function stale(){return st.sculpt!==source||automationStamp()!==stamp||!!(cancelled&&cancelled());}
+    try{
+      var outcome=await optimizeArtwork(base,mode,stale,function(){if(!stale())say('kcGenNote','Checking the artwork fit…');});
+      if(stale()||outcome.status==='cancelled')return null;
+      autoFinishLast=outcome;
+      if(outcome.status==='accepted'){
+        st.sculptHeightMm=outcome.candidate.heightMm;st.sculptScalePercent=outcome.candidate.scalePercent;st.plate=[];
+        paintSculptSettings();refreshNow();
+        var appliedStamp=automationStamp();
+        var saved=await keepCurrent(st.skinFrom||'Artisan keycap');
+        if(!saved||!saved.id)throw Error('The finished artwork was not saved. Your original Library design is kept.');
+        if(st.sculpt!==source||automationStamp()!==appliedStamp||!!(cancelled&&cancelled()))return null;
+        if(!saved.product||saved.product.state!=='ready')return {physical:{state:'needs-attention',summary:'Saved artwork still needs a print check.',issues:saved.product&&saved.product.issues||['The final print mesh is not verified.']},message:'Artwork saved. Resolve its print checks before slicing.',canApplyLocal:true};
+        say('kcGenNote','');if(!quiet&&window.designerFeedback)window.designerFeedback.notice('Fit checked and saved. Review the artwork from every side.');
+        return {physical:physicalSummary(outcome),message:'Largest passing size tested. Socket unchanged.',canApplyLocal:true};
+      }
+      var message=outcome.reason||'This artwork still needs adjustment.';
+      say('kcGenNote',message,'warn');return {physical:physicalSummary(outcome),message:message,canApplyLocal:true};
+    }finally{autoFinishBusy=false;paintAutomation();}
+  }
+  function reviewRender(canvas,view,artOnly){
+    var cap=capFor('preview',relief()),poses={perspective:[-.62,.52],front:[0,0],side:[Math.PI/2,0],back:[Math.PI,0]},pose=poses[view]||poses.perspective;
+    canvas.width=canvas.height=512;
+    var v=window.keycapView3d.attach(canvas,{az:pose[0],el:pose[1],spin:false,interactive:false,tokens:viewTokens()});
+    var artStart=cap.seated.capTriangles*9,positions=artOnly?cap.positions.subarray(artStart):cap.positions;
+    v.setAppearance({mode:st.sourceTexture||st.sourceColors?'color':'solid',base:st.baseColor,art:st.artColor,useSourceColors:true},{draw:false});
+    v.setMesh(positions,{artStart:artOnly?0:artStart,artColors:st.seatedColors,artTexture:st.seatedTexture});v.stop();v.draw();
+  }
+  var correctionText={
+    'too-small':'Make the character broad and substantial.',
+    'larger-face':'Enlarge the face and head with expressive eyes and a short muzzle.',
+    'sturdier-parts':'Thicken ears and limbs; join thin details to the body.',
+    'extra-parts':'Correct extra or duplicated ears, limbs and facial features.',
+    'simpler-silhouette':'Use bold smooth connected forms and readable features.',
+    'compact-character':'Compact head-and-shoulders portrait, large face, small joined paws, no long legs.'};
+  function revisionPrompt(payload){
+    var selected=Array.isArray(payload.corrections)?payload.corrections:[],lines=[];
+    selected.forEach(function(k){if(Object.prototype.hasOwnProperty.call(correctionText,k)&&lines.indexOf(correctionText[k])<0)lines.push(correctionText[k]);});
+    var feedback=String(payload.feedback||'').trim();if(feedback.length>180)throw Error('Keep the correction under 180 characters.');
+    if(feedback)lines.push(feedback);if(!lines.length)throw Error('Choose a correction first.');
+    var prompt='Revise this character. Preserve its identity and main colors. '+lines.join(' ')+
+      ' One connected printable sculpture. No keycap shell, pedestal, keyboard or socket. Plain background.';
+    if(prompt.length>800)throw Error('Shorten the correction before submitting to Meshy.');
+    return prompt;
+  }
+  // Decode a recovery recipe without painting controls, clearing the current
+  // sculpture, changing the local socket fit, or starting any asynchronous UI.
+  function revisionRecipeState(base,design){
+    var copy=Object.assign({},base,{plate:[]});if(!design)return copy;
+    var profile=knownProfile(design.profile);if(!profile)throw Error('The saved revision profile is unavailable. Its Meshy task is kept.');
+    copy.profile=profile;copy.row=knownRow(profile,design.row);copy.sizeU=knownSizeU(design.sizeU,copy.sizeU);
+    inArtworkState(copy,function(){restoreSculptSettings(design,true);});
+    copy.art='gen';copy.icon=null;copy.digit=design.digit||'';copy.braille='';
+    if(design.depth)copy.depth=design.depth;
+    copy.raised=design.raised!==false;copy.legendOn=design.legendOn!==false;
+    copy.key=safeKeyLabel(design.key);copy.name=typeof design.name==='string'?design.name.slice(0,120):'';
+    copy.skinFrom=typeof design.prompt==='string'?design.prompt:'';
+    copy.colorMode=design.colorMode==='color'?'color':'solid';
+    copy.baseColor=typeof design.baseColor==='string'&&/^#[0-9a-f]{6}$/i.test(design.baseColor)?design.baseColor:'#f3bdd6';
+    copy.artColor=typeof design.artColor==='string'&&/^#[0-9a-f]{6}$/i.test(design.artColor)?design.artColor:'#a9dbcc';
+    copy.useSourceColors=design.useSourceColors!==false;return copy;
+  }
+  async function deliverArtworkRevision(state,base,stale){
+    function changed(){return !!(stale&&stale());}
+    function kept(){throw Error('The revision is kept for recovery. Your current artwork is unchanged.');}
+    if(changed())kept();
+    var parsed=window.meshyParseGLB(state.glb),ref=await parsedReference(parsed);
+    if(changed())kept();
+    var candidate=Object.assign({},base,{sculpt:new Float32Array(parsed.positions),libId:null,name:(base.name||'Artisan').slice(0,108)+' · revision',plate:[]});
+    if(!candidate.sculpt.length||candidate.sculpt.length%9)throw Error('The revised artwork has no complete triangles. Its task is kept for recovery.');
+    inArtworkState(candidate,function(){setSourceReference(ref.colors,ref.kind,ref.textureReference,state,true);});
+    var result=await optimizeArtwork(candidate,'preserve-height',changed);
+    if(changed()||result.status==='cancelled')kept();
+    if(result.status==='accepted'){candidate.sculptHeightMm=result.candidate.heightMm;candidate.sculptScalePercent=result.candidate.scalePercent;}
+    var product,design,thumb=null;
+    inArtworkState(candidate,function(){
+      design=window.keycapShare.encode(designOf());product=captureProduct(design);
+      // A failed preview must not prevent preserving the paid source artwork.
+      try{var c=document.createElement('canvas');reviewRender(c,'perspective',false);thumb=c.toDataURL('image/jpeg',.86);}catch(e){}
+    });
+    var record={kind:'sculpt',name:candidate.name,prompt:candidate.skinFrom||'',positions:new Float32Array(candidate.sculpt),design:design,product:product,thumb:thumb,
+      sourceColors:candidate.sourceColors,sourceColorKind:candidate.sourceColorKind,sourceTexture:candidate.sourceTexture,meshySource:null,
+      facts:product&&product.sizeMm?{sizeMm:product.sizeMm,bytes:candidate.sculpt.byteLength}:null};
+    var saved=await window.keycapLibrary.save(record);
+    if(!saved||typeof saved.id!=='string'||!saved.id.trim())throw Error('The revised artwork was not saved. Its Meshy task is kept for recovery.');
+    if(!saved.positions||!sameSculptSnapshot(saved.positions,record.positions))throw Error('The saved revision does not match its source. Its task is kept and your current artwork is unchanged.');
+    var textureExpected=!state.opts||state.opts.texture!==false;
+    if((!textureExpected||saved.sourceTexture)&&state.deliveryId)window.meshy.acknowledge(state.deliveryId);
+    drawShelf();
+    if(changed())return {message:'Revision saved to Library. Your current selection is unchanged.'};
+    var ready=result.status==='accepted'&&physicalSummary(result).state==='ready'&&saved.product&&saved.product.state==='ready'&&
+      window.keycapProduct&&window.keycapProduct.validate(saved.product)&&saved.product.recipe===design;
+    if(!ready)return {message:'Revision saved to Library for repair. Kept your current artwork.'};
+    // No awaited Library read between the final stale check and adoption.
+    // A Close, fit edit or different model chosen during saving wins.
+    applyDesign(window.keycapShare.decode(saved.design));
+    st.sculpt=new Float32Array(saved.positions);st.art='gen';st.libId=saved.id;st.skinFrom=saved.prompt||'';
+    setSourceReference(saved.sourceColors,saved.sourceColorKind,saved.sourceTexture,saved.meshySource);
+    if(textureExpected&&!saved.sourceTexture&&state.deliveryId){sculptDeliveries.set(st.sculpt,state.deliveryId);sculptTextureExpected.add(st.sculpt);}
+    rememberLoadedProduct(saved);rememberSession();paintArt('gen');refresh();
+    var message=textureExpected&&!saved.sourceTexture?'Revised shape saved. Texture could not be decoded; the Meshy task is kept for recovery.':'Revised artwork checked and saved to Library.';
+    if(window.designerFeedback)window.designerFeedback.notice(message,{kind:textureExpected&&!saved.sourceTexture?'warn':'success'});
+    return {close:true,message:message};
+  }
+  async function reviseArtwork(payload,session){
+    if(!session||session.closed||reviewSession!==session||!st.sculpt)throw Error('Open the current artwork review again.');
+    if(!window.meshy||!window.meshy.reviseFromImage||!window.meshy.hasKey())throw Error('Add your Meshy API key in Settings first.');
+    if(window.meshy.pending())throw Error('Recover the existing Meshy task before revising this artwork.');
+    var base=artworkState(),source=st.sculpt,stamp=automationStamp(),prompt=revisionPrompt(payload),image=document.createElement('canvas');
+    function stale(){return session.closed||reviewSession!==session||st.sculpt!==source||automationStamp()!==stamp;}
+    reviewRender(image,payload.view,true);var reference=image.toDataURL('image/png'),code=window.keycapShare.encode(designOf());
+    if(!session.api||typeof session.api.confirm!=='function')throw Error('Reopen the artwork review before revising.');
+    var approved=await session.api.confirm({message:'This uses two paid Meshy tasks: an image revision and a new textured 3D sculpture. Your original stays in Library.',ok:'Use two Meshy tasks',cancel:'Keep current'});
+    if(!approved)return {message:'Kept the current artwork.'};if(stale())throw Error('The selected artwork changed. Open its review again.');
+    var original=await keepCurrent(st.skinFrom||'Original artisan');if(!original||!original.id)throw Error('Save the original successfully before spending credits on a revision.');
+    if(stale())throw Error('The selected artwork changed. No revision was submitted.');
+    genBusy(true);
+    try{
+      var state=await window.meshy.reviseFromImage(prompt,{imageDataUrl:reference,from:'keycap',designCode:code,polycount:base.meshyPolycount,texture:true},function(m){if(!stale())say('kcGenNote',m);});
+      return await deliverArtworkRevision(state,base,stale);
+    }finally{genBusy(false);}
+  }
+  function openArtworkReview(){
+    if(!st.sculpt||autoFinishBusy||!window.artisanReview)return;
+    var source=st.sculpt,session={closed:false};reviewSession=session;
+    var api=window.artisanReview.open({title:st.name||st.skinFrom||'Artisan keycap',physical:physicalSummary(evaluateArtwork(artworkState(),candidateSettings())),
+      canGenerate:!!(window.meshy&&window.meshy.hasKey()&&window.meshy.reviseFromImage&&!window.meshy.pending()),generateUnavailableReason:'Add your Meshy key or recover its pending task first.',canApplyLocal:true,
+      renderPreview:function(c,v){if(st.sculpt!==source)throw Error('The selected artwork changed. Reopen its review.');reviewRender(c,v,false);},
+      onApplyLocal:async function(){if(st.sculpt!==source)throw Error('The selected artwork changed. Reopen its review.');return await finishCurrentArtwork('fill',true,function(){return session.closed;});},
+      onGenerate:function(p){return reviseArtwork(p,session);},onKeep:function(){},onClose:function(){session.closed=true;if(reviewSession===session)reviewSession=null;}});
+    session.api=api;
+  }
+  ['kcReviewArt','kcReviewFinish'].forEach(function(id){if($(id))$(id).addEventListener('click',openArtworkReview);});
+  if($('kcAutoFinish')){$('kcAutoFinish').checked=automationEnabled();$('kcAutoFinish').addEventListener('change',function(){try{localStorage.setItem('tmKeycapAutoFinish',this.checked?'on':'off');}catch(e){actionMessage('The automatic-fit preference could not be saved.',true);}});}
 
   // ---- local stem fit preference -----------------------------------------
   // Fit belongs to this printer/resin/browser, not to an imported design.
@@ -690,7 +878,7 @@
   function rememberLoadedProduct(rec){
     var p=rec&&rec.product;
     lastSavedProduct=p&&typeof p.recipe==='string'&&p.fit&&typeof p.fit.slotMm==='number'&&Number.isFinite(p.fit.slotMm)?
-      {source:st.sculpt,key:productRecipeKey(p.recipe)+'|'+p.fit.slotMm.toFixed(2),product:p}:null;
+      {source:st.sculpt,key:productRecipeKey(p.recipe)+'|'+p.fit.slotMm.toFixed(2),product:p,name:rec.name||''}:null;
   }
   function currentProductKey(recipe){
     return productRecipeKey(recipe)+'|'+(K.MX.crossWide+stemFitClearance).toFixed(2);
@@ -704,7 +892,7 @@
     if(st.sculpt!==source||!rec||!rec.id||!sameSculptSnapshot(source,positions))return false;
     try{if(currentProductKey(window.keycapShare.encode(designOf()))!==key)return false;}
     catch(e){return false;}
-    st.libId=rec.id;lastSavedProduct={source:source,key:key,product:product};
+    st.libId=rec.id;lastSavedProduct={source:source,key:key,product:product,name:rec.name||''};
     rememberSession();paintProductState();
     return true;
   }
@@ -716,7 +904,7 @@
     var current=false;
     try{current=!!lastSavedProduct&&lastSavedProduct.source===st.sculpt&&lastSavedProduct.key===currentProductKey(window.keycapShare.encode(designOf()));}catch(e){}
     var p=current&&lastSavedProduct.product;
-    var title=$('kcProductName');if(title&&document.activeElement!==title)title.value=st.name||'';
+    var title=$('kcProductName');if(title&&document.activeElement!==title)title.value=st.name||(lastSavedProduct&&lastSavedProduct.source===st.sculpt&&lastSavedProduct.name)||'';
     if($('kcSaveProduct'))$('kcSaveProduct').disabled=!!($('kcGen')&&$('kcGen').disabled)||!!artisanStyleDraft||current;
     if($('kcDownloadProduct'))$('kcDownloadProduct').disabled=!p||p.state!=='ready';
     say('kcProductStatus',p?(p.state==='ready'?'Ready to slice · '+p.fit.slotMm.toFixed(2)+' mm socket':
@@ -794,7 +982,8 @@
         if (!rec || !rec.id) throw new Error('the Library did not confirm the saved model');
         cacheEntry.rec=rec;
         var deliveryId=sculptDeliveries.get(source);
-        if(deliveryId&&window.meshy&&window.meshy.acknowledge&&(!record.meshySource||!record.meshySource.refineId||record.sourceTexture)){window.meshy.acknowledge(deliveryId);sculptDeliveries.delete(source);}
+        if(deliveryId&&window.meshy&&window.meshy.acknowledge&&(!record.meshySource||!record.meshySource.refineId||record.sourceTexture)&&
+          (typeof sculptTextureExpected==='undefined'||!sculptTextureExpected.has(source)||record.sourceTexture)){window.meshy.acknowledge(deliveryId);sculptDeliveries.delete(source);}
         adoptSavedProduct(source,productKey,positions,rec,product);
         drawShelf();
         if(product&&product.state!=='ready'){
@@ -917,6 +1106,7 @@
     st.sculpt = positions;
     setSourceReference(reference&&reference.colors,reference&&reference.kind,reference&&reference.textureReference,provenance);
     if(deliveryId)sculptDeliveries.set(positions,deliveryId);
+    if(provenance&&provenance.sourceFamily==='image-to-3d'&&(!provenance.opts||provenance.opts.texture!==false)&&typeof sculptTextureExpected!=='undefined')sculptTextureExpected.add(positions);
     st.libId = null;
     st.icon = null;
     st.skinFrom = label || '';
@@ -987,6 +1177,7 @@
     ['kcGen', 'kcGenClear', 'kcNext', 'kcBack', 'kcPrompt', 'kcSculptHeight', 'kcMeshyDetail','kcMeshyUltra', 'kcSculptStyle', 'kcBrowseStyles', 'kcStyleDraftCancel','kcSculptRotation','kcSculptSize','kcSculptFill','kcSaveProduct','kcProductName','kcAddTexture'].forEach(function (id) {
       var e = $(id); if (e) e.disabled = !!on;
     });
+    if(typeof paintAutomation==='function')paintAutomation();
     if (!on) {syncClear();paintProductState();paintReference();if($('kcBack'))$('kcBack').disabled=st.step===1;}
   }
 
@@ -1055,17 +1246,28 @@
        here, because this card is where they used to go. */
     if (d.from && d.from !== 'keycap') return;
     var load=nextSculptLoad();
+    var revisionRecovery=d.family==='visual-revision';
+    var recoveryBase=revisionRecovery?artworkState():null,recoverySource=st.sculpt,recoveryStamp=revisionRecovery?automationStamp():null;
+    function revisionStale(){return load!==sculptLoadSerial||st.sculpt!==recoverySource||automationStamp()!==recoveryStamp;}
     genBusy(true);
     say('kcGenNote', 'a generation was still running - picking it up\u2026');
     return window.meshy.resume(function (m) { if(load===sculptLoadSerial)say('kcGenNote', m); })
       .then(function (state) {
         if (!state || !state.glb) { genBusy(false); return; }
         if(load!==sculptLoadSerial)return false;
-        var parsed = window.meshyParseGLB(state.glb);
         var recoveredCode = d.designCode || d.opts && d.opts.designCode, recoveredDesign = null;
         if (recoveredCode && window.keycapShare) {
           recoveredDesign = window.keycapShare.decode(recoveredCode);
         }
+        if(revisionRecovery){
+          if(!recoveredDesign)throw Error('The revision recipe is missing. Its task is kept; recover the artwork from Meshy history.');
+          var candidateBase=revisionRecipeState(recoveryBase,recoveredDesign);
+          return deliverArtworkRevision(state,candidateBase,revisionStale).then(function(result){
+            if(result&&result.message&&!revisionStale())say('kcGenNote',result.message,result.close?'':'warn');
+            return result;
+          });
+        }
+        var parsed = window.meshyParseGLB(state.glb);
         return parsedReference(parsed).then(function(ref){
           if(load!==sculptLoadSerial)return false;
           if(recoveredDesign)applyDesign(recoveredDesign);
@@ -1187,6 +1389,7 @@
            stem - is untouched. */
         if(request.styleDraft)cancelArtisanStyleDraft(false);
         applyDesign(generatedDesign);
+        load=sculptLoadSerial; // applying the accepted recipe advances selection
         st.sculpt = parsed.positions;
         setSourceReference(delivered.reference.colors,delivered.reference.kind,delivered.reference.textureReference,state);
         if(state.deliveryId)sculptDeliveries.set(st.sculpt,state.deliveryId);
@@ -1216,7 +1419,12 @@
         /* Filed immediately. A generation costs credits and takes a minute, so
            losing it to a page reload - which is what used to happen - is the
            one outcome worth engineering against. */
-        return keepCurrent(request.subject || prompt);
+        var deliveredLoad=sculptLoadSerial,deliveredSource=st.sculpt,deliveredStamp=typeof automationStamp==='function'?automationStamp():null;
+        return keepCurrent(request.subject || prompt).then(function(record){
+          if(record&&record.id&&window.keycapAutoFinish&&automationEnabled()&&deliveredLoad===sculptLoadSerial&&deliveredSource===st.sculpt&&deliveredStamp===automationStamp())
+            return finishCurrentArtwork('preserve-height',true).then(function(){return record;});
+          return record;
+        });
       })
       /* ⚠️ offerManualDownload, NOT say(). fetchModel attaches e.modelUrl when
          the asset exists but this browser cannot read it - assets.meshy.ai
@@ -1537,6 +1745,7 @@
     if($('kcInsets'))$('kcInsets').hidden=!!st.sculpt&&!rel;
     paintProductState();
     paintSculptMeasurements();
+    paintAutomation();
   }
 
   /* The hero: the actual cap mesh, in 3D, spinnable. A keycap is an object and

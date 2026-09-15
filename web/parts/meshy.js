@@ -96,7 +96,9 @@
      this HTTP page could inject script that reads its storage. */
   function meshyFetch(path, opts) {
     var o = opts || {};
-    var url = PROXY ? (PROXY + path) : (API + path);
+    // V1 revision endpoints are explicit; never accept an arbitrary API host.
+    var url = PROXY ? (PROXY + (o.apiVersion === 1 ? '/v1' : '') + path)
+      : ((o.apiVersion === 1 ? 'https://api.meshy.ai/openapi/v1' : API) + path);
     var h = { 'Content-Type': 'application/json' };
     if (!PROXY) {
       var k;
@@ -195,8 +197,13 @@
     }
     return id;
   }
-  function task(id) {
+  function task(id, family) {
     if (!validTaskId(id)) return Promise.reject(new Error('The saved Meshy task ID is invalid.'));
+    if (family != null) {
+      if (family !== 'image-to-image' && family !== 'image-to-3d')
+        return Promise.reject(new Error('The saved Meshy task family is not supported.'));
+      return meshyFetch('/' + family + '/' + encodeURIComponent(id), { apiVersion: 1 });
+    }
     return meshyFetch('/text-to-3d/' + encodeURIComponent(id));
   }
 
@@ -210,7 +217,7 @@
     return new Promise(function (resolve, reject) {
       (function step() {
         if (Date.now() > deadline) return reject(new Error('Meshy took longer than expected - the task may still finish; check your Meshy dashboard.'));
-        task(id).then(function (t) {
+        task(id, o.family).then(function (t) {
           var st = t && t.status;
           if (t && t.id != null && t.id !== id)
             return reject(new Error('Meshy returned a different task than requested. The original task is kept for recovery.'));
@@ -437,6 +444,8 @@
     var say = ui || function () {};
     var d = pending();
     if (!d) return Promise.resolve(null);
+    if (d.family === 'visual-revision') return runRevision(d, say, true);
+    if (d.family) return Promise.reject(new Error('This saved Meshy task uses an unsupported family. Keep it for recovery in the version that created it.'));
     var state = { previewId: d.previewId || d.id, refineId: d.stage === 'refine' ? d.id : null,
       deliveryId: d.id, prompt: d.prompt, resumed: true, designCode: d.designCode, topperRecipe:d.topperRecipe,
       opts: savedOptions(d.opts) };
@@ -523,6 +532,132 @@
         return fetchModel(t, 'glb');
       }).then(function (buf) { state.glb = buf; return state; })
         .catch(function (e) { if (state.deliveryId && terminal(e)) forget(state.deliveryId); throw e; });
+    });
+  }
+
+  /* An explicitly requested visual revision authorizes two paid tasks: edit a
+     render of the sculpture, then reconstruct that edited image as a new mesh.
+     A durable submitting marker is written BEFORE either POST. If the page
+     closes or its reply is lost, recovery never guesses and repeats that POST.
+     Source images stay with the editor; only task IDs and the recipe are saved
+     here, avoiding a large PNG in the small localStorage recovery slot. */
+  function revisionError(message, uncertain) {
+    var e = new Error(message);
+    e.recoveryNeeded = true;
+    if (uncertain) e.submissionUncertain = true;
+    return e;
+  }
+  function sameRevision(a, b) {
+    return !!a && !!b && a.family === 'visual-revision' && a.revisionId === b.revisionId && a.id === b.id && a.stage === b.stage;
+  }
+  function writeRevision(d, expected) {
+    var current = pending();
+    if (expected ? !sameRevision(current, expected) : !!current) {
+      var conflict = revisionError('The saved Meshy task changed in another page. Its recovery record was kept.' +
+        (d.stage === 'image' || d.stage === 'model' ? ' Meshy also created task ' + d.id + '; keep this ID.' : '') +
+        ' Check the task history before continuing.');
+      if (d.stage === 'image' || d.stage === 'model') conflict.taskId = d.id;
+      throw conflict;
+    }
+    var encoded = JSON.stringify(d);
+    try {
+      localStorage.setItem(PENDING, encoded);
+      if (localStorage.getItem(PENDING) !== encoded) throw new Error('not retained');
+    } catch (ignored) {
+      var e = revisionError('Could not save the Meshy revision recovery record. Keep task ID ' + d.id + ' and check Meshy task history before continuing.');
+      e.taskId = d.id; throw e;
+    }
+    return d;
+  }
+  function revisionOptions(o) {
+    var polycount = o.polycount == null ? 100000 : o.polycount;
+    if (polycount !== 30000 && polycount !== 100000) throw new Error('Revision detail must be 30000 or 100000 polygons. Nothing has been submitted.');
+    if (o.texture != null && typeof o.texture !== 'boolean') throw new Error('Revision texture must be on or off. Nothing has been submitted.');
+    var from = o.from || 'keycap';
+    if (from !== 'keycap' && from !== 'model' && from !== 'topper') throw new Error('Choose the editor that owns this revision. Nothing has been submitted.');
+    return { from: from, polycount: polycount, texture: o.texture !== false };
+  }
+  function assertRevision(d) {
+    if (!validTaskId(d.revisionId) || typeof d.prompt !== 'string' || !d.prompt.trim() || d.prompt.length > 800 ||
+        !d.opts || d.opts.from !== d.from || (d.opts.polycount !== 30000 && d.opts.polycount !== 100000) || typeof d.opts.texture !== 'boolean')
+      throw revisionError('The saved revision settings are incomplete. Keep the task and recover it from Meshy history.');
+    if (d.stage === 'image' && d.imageId !== d.id ||
+        d.stage === 'model' && (d.modelId !== d.id || !validTaskId(d.imageId)))
+      throw revisionError('The saved revision task identity is incomplete. Recover it from Meshy history.');
+  }
+  function submitRevision(d, phase, body) {
+    var marker = Object.assign({}, d, { stage: phase + '-submitting' });
+    writeRevision(marker, d);
+    return meshyFetch('/' + (phase === 'image' ? 'image-to-image' : 'image-to-3d'), { apiVersion: 1, method: 'POST', body: body })
+      .then(createdTaskId).then(function (id) {
+        var next = Object.assign({}, marker, { id: id, stage: phase });
+        next[phase + 'Id'] = id;
+        return writeRevision(next, marker);
+      }).catch(function (e) {
+        if (sameRevision(pending(), marker)) {
+          // Explicit validation/auth/credit/quota refusals did not create a
+          // task. A timeout, server error or interrupted reply proves no such
+          // thing and deliberately keeps the submitting marker.
+          if ([400, 401, 402, 403, 404, 413, 422, 429].indexOf(e.status) !== -1) {
+            if (phase === 'image') forget(marker.id);
+            else writeRevision(Object.assign({}, marker, { stage: 'blocked', error: String(e.message).slice(0, 300) }), marker);
+          } else {
+            e.recoveryNeeded = true; e.submissionUncertain = true;
+          }
+        }
+        throw e;
+      });
+  }
+  function runRevision(d, say, resumed) {
+    assertRevision(d);
+    if (d.stage === 'image-submitting' || d.stage === 'model-submitting')
+      return Promise.reject(revisionError('The ' + (d.stage === 'image-submitting' ? 'image revision' : '3D revision') + ' submission could not be verified. It may have used credits. Check Meshy task history before submitting again; recovery will not repeat this paid request.', true));
+    if (d.stage === 'blocked') return Promise.reject(revisionError((d.error || 'The revision could not continue.') + ' The existing task is kept. Check Meshy task history before starting another revision.'));
+    if (d.stage !== 'image' && d.stage !== 'model') return Promise.reject(revisionError('The saved revision stage is not recognized. Nothing new has been submitted.'));
+    var family = d.stage === 'image' ? 'image-to-image' : 'image-to-3d';
+    return waitFor(d.id, function (status, progress) {
+      say((d.stage === 'image' ? 'Revising artwork: ' : 'Building revised sculpture: ') + String(status).toLowerCase() + ' ' + progress + '%' + (resumed ? ' (resumed)' : ''));
+    }, { family: family }).then(function (t) {
+      if (!t || t.id !== d.id) throw revisionError('Meshy did not identify the requested revision task. The original task is kept for recovery.');
+      if (!sameRevision(pending(), d)) throw revisionError('Another page changed the saved Meshy task. Its recovery record was kept.');
+      if (d.stage === 'image') {
+        if (!Array.isArray(t.image_urls) || t.image_urls.length !== 1 || typeof t.image_urls[0] !== 'string' || !t.image_urls[0])
+          throw revisionError('Meshy did not return exactly one edited reference image. The paid image task is kept; no 3D task was submitted.');
+        say('Reference ready. Building the revised sculpture…');
+        return submitRevision(d, 'model', { input_task_id: d.imageId, model_type: 'standard', ai_model: 'meshy-7',
+          image_enhancement: false, should_texture: d.opts.texture, should_remesh: true,
+          target_polycount: d.opts.polycount, target_formats: ['glb'] }).then(function (next) { return runRevision(next, say, resumed); });
+      }
+      say('Downloading the revised sculpture…');
+      return fetchModel(t, 'glb').then(function (buf) {
+        return { sourceFamily: 'image-to-3d', imageId: d.imageId, modelId: d.modelId, deliveryId: d.id,
+          prompt: d.prompt, opts: Object.assign({}, d.opts), designCode: d.designCode,
+          resumed: !!resumed, task: t, glb: buf };
+      });
+    }).catch(function (e) {
+      if (terminal(e) && sameRevision(pending(), d)) {
+        if (d.stage === 'image') forget(d.id);
+        else writeRevision(Object.assign({}, d, { stage: 'blocked', error: String(e.message).slice(0, 300) }), d);
+      }
+      throw e;
+    });
+  }
+  function reviseFromImage(prompt, opts, ui) {
+    var o = Object.assign({}, opts || {}), say = ui || function () {};
+    return exclusiveGeneration(function () {
+      if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 800)
+        throw new Error('Describe the revision in 1 to 800 characters. Nothing has been submitted.');
+      var settings = revisionOptions(o), data = o.imageDataUrl;
+      if (typeof data !== 'string' || data.length > 4 * 1024 * 1024 || !/^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/]+={0,2}$/.test(data) || data.slice(data.indexOf(',') + 1).length % 4 !== 0)
+        throw new Error('Use a PNG or JPEG sculpture reference under 3 MB. Nothing has been submitted.');
+      if (!PROXY) { var k = key(); if (!k || keyProblem(k)) throw new Error('Save a valid Meshy API key before revising. Nothing has been submitted.'); }
+      requireNoPending();
+      var localId = 'revision-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+      var d = writeRevision({ family: 'visual-revision', revisionId: localId, id: localId, stage: 'ready',
+        prompt: prompt, from: settings.from, opts: settings, designCode: savedDesignCode(o.designCode), at: Date.now() }, null);
+      say('Revising the sculpture reference…');
+      return submitRevision(d, 'image', { ai_model: 'nano-banana-2', prompt: prompt,
+        reference_image_urls: [data], remove_background: true }).then(function (next) { return runRevision(next, say, false); });
     });
   }
 
@@ -621,7 +756,7 @@
     setProxy: function (p) { PROXY = p || null; },
     createPreview: createPreview, refine: refine, task: task, waitFor: waitFor,
     fetchModel: fetchModel, textureUrl: textureUrl,
-    generate: generate, generateTexture: generateTexture, intoSlicer: intoSlicer,
+    generate: generate, generateTexture: generateTexture, reviseFromImage: reviseFromImage, intoSlicer: intoSlicer,
     resume: resume, pending: pending, acknowledge: acknowledge,
     busy: function () { return generationActive; }, forgetPending: forget
   };

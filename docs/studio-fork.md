@@ -1,6 +1,6 @@
 # DeadlySIn777 TinyMaker Studio
 
-This is the 0.18.12 Studio development build of the DeadlySIn777 fork. The
+This is the 0.18.13 Studio development build of the DeadlySIn777 fork. The
 upstream TinyMakerWifi project and its documentation remain credited in the
 main README; its current release numbering is separate from this fork.
 
@@ -9,6 +9,22 @@ Meshy artwork import/generation, editable Library products, color references,
 socket-fit adjustment, and the browser resin slicer. AI artwork still needs
 visual review and a fit sample: generation does not guarantee printable or
 mechanically sound geometry.
+
+In 0.18.13, new keycap generations can automatically check and adjust sculpture
+size within the chosen height. The bounded search keeps the source artwork and
+socket unchanged, and only accepts passing geometry, attachment and print-fit
+checks. Review & improve artwork opens four views, with a local fit action and
+focused corrections for a larger face, compact silhouette or sturdier details.
+Local fitting chooses the largest passing size it tested; it is not a guarantee
+of a global optimum or physical fit.
+
+Revise with Meshy uses a rendered image of the current sculpture, without its
+cap/socket, as the reference for an image revision and a new textured 3D model.
+The confirmation states the two paid tasks. The original stays in Library; a
+new candidate replaces it on screen only after saving and passing print checks.
+Interrupted tasks remain recoverable, and uncertain submissions are not retried
+automatically. No separate vision provider is used. Anatomy corrections are
+instructions to Meshy, not a claim that firmware detects visual defects.
 
 In 0.18.12, Library cards emphasize opening a design; details and secondary
 actions expand on demand. The topper editor has compact fit and sculpt controls,
