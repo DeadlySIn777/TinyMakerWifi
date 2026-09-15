@@ -67,6 +67,15 @@ function fixture() {
 let passed=0;
 async function test(name,fn){await fn();console.log('OK '+name);passed++;}
 (async()=>{
+  await test('failed redraw keeps the visible saved gallery and reports a storage error',async()=>{
+    const f=fixture();f.add();await f.draw();f.ctx.keycapLibrary.list=()=>Promise.reject(Error('Storage unavailable'));
+    await f.draw();assert.match(f.el('stLibrary').textContent,/Big puppy/);assert.match(f.el('stLibNote').textContent,/Could not load.*Storage unavailable/);assert.equal(f.records.size,1);
+  });
+  await test('topper summaries filter separately from ordinary Models without loading meshes',async()=>{
+    const f=fixture();f.add('model','model');const topper=f.add('topper','model');topper.name='Pencil fox';topper.sourceTool='topper';await f.draw();
+    const filter=f.all().find(e=>e.tagName==='select');filter.value='topper';filter.listeners.change();
+    assert.match(f.el('stLibrary').textContent,/Pencil fox/);assert.doesNotMatch(f.el('stLibrary').textContent,/Cherry blossom/);assert.equal(f.calls.some(c=>c[0]==='get'),false);
+  });
   await test('keycap opening waits for actual restore and suppresses duplicate opens',async()=>{
     const f=fixture();f.add();await f.draw();let finish;
     f.ctx.keycapUseSaved=id=>{f.calls.push(['open',id]);return new Promise(resolve=>{finish=resolve;});};

@@ -1,6 +1,6 @@
 # DeadlySIn777 TinyMaker Studio
 
-This is the 0.18.11 Studio development build of the DeadlySIn777 fork. The
+This is the 0.18.12 Studio development build of the DeadlySIn777 fork. The
 upstream TinyMakerWifi project and its documentation remain credited in the
 main README; its current release numbering is separate from this fork.
 
@@ -9,6 +9,12 @@ Meshy artwork import/generation, editable Library products, color references,
 socket-fit adjustment, and the browser resin slicer. AI artwork still needs
 visual review and a fit sample: generation does not guarantee printable or
 mechanically sound geometry.
+
+In 0.18.12, Library cards emphasize opening a design; details and secondary
+actions expand on demand. The topper editor has compact fit and sculpt controls,
+a plain socket fit-test export, and a view of the socket. A pending model import
+cannot send the previous model by accident. Saved Models export preserved
+texture data in a portable design backup alongside the printable STL.
 
 In 0.18.11, the keycap Finish screen has one Send to slicer action, a compact
 product summary, and expandable fit, print details, and export tools. Blocking

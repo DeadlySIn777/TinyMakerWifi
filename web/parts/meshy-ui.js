@@ -102,12 +102,12 @@
     if (typeof o.flatBase === 'boolean') $('meshyFlat').checked = o.flatBase;
     $('meshyPrompt').value = prompt;
     return loadIntoSlicer(state.glb, prompt, {
-      previewId: state.previewId, task: state.task, textured: !!state.refineId,
+      previewId: state.previewId, refineId: state.refineId, task: state.task, textured: !!state.refineId,
       deliveryId: state.deliveryId, prompt: prompt
     }, version).then(function () { requireLoad(version);return keepInLibrary(prompt, prompt); })
       .then(function (record) {
         if (record && record.id && state.refineId && !record.sourceTexture) {
-          say('meshyInfo', 'Geometry saved. Export the GLB to keep its texture; it could not be retained here. The task stays available for recovery.');
+          if(version===loadVersion)say('meshyInfo', 'Geometry saved. Export the GLB to keep its texture; it could not be retained here. The task stays available for recovery.');
         } else if (record && record.id && window.meshy.acknowledge) window.meshy.acknowledge(state.deliveryId);
         return record;
       });
@@ -119,7 +119,7 @@
     busy(true); say('meshyInfo', 'Recovering the existing task; no new generation is submitted.');
     return window.meshy.resume(function (m) { if(version===loadVersion)say('meshyState', m); })
       .then(function(state){return receiveModel(state,version);})
-      .catch(function (e) { say('meshyState', ''); showFail(e); })
+      .catch(function (e) { if(version===loadVersion){say('meshyState', ''); showFail(e);} })
       .then(function () { if(version===loadVersion)busy(false); });
   }
   function generateModel(prompt) {
@@ -132,7 +132,7 @@
       refine: false
     }, function (m) { if(version===loadVersion)say('meshyState', m); })
       .then(function(state){return receiveModel(state,version);})
-      .catch(function (e) { say('meshyState', ''); showFail(e); })
+      .catch(function (e) { if(version===loadVersion){say('meshyState', ''); showFail(e);} })
       .then(function () { if(version===loadVersion)busy(false); });
   }
   $('meshyGo').addEventListener('click', function () {
@@ -258,7 +258,7 @@
      spending a generation, or creating another Library record. */
   window.meshyModelOpened = function (name, positions, record, version) {
     if(version!=null)requireLoad(version);else loadVersion++;
-    last = { name: name, positions: positions, textured: false,
+    last = { name: name, prompt: record && record.prompt || '', positions: positions, textured: false,
       sourceColors: record && record.sourceColors ? new Float32Array(record.sourceColors) : null,
       sourceColorKind: record && record.sourceColorKind || null,
       sourceTexture:record&&record.sourceTexture&&window.keycapColor?window.keycapColor.cloneTextureReference(record.sourceTexture):null,
@@ -289,7 +289,7 @@
     if (!last || !last.previewId) return;
     var accepted = last, version=++loadVersion;
     busy(true);
-    window.meshy.generateTexture(accepted.previewId, {
+    return window.meshy.generateTexture(accepted.previewId, {
       from: 'model', prompt: accepted.prompt || accepted.name || '',
       heightMm: parseFloat($('meshyHeight').value) || null, flatBase: $('meshyFlat').checked
     }, function (m) { if(version===loadVersion)say('meshyState', m); }).then(function (state) {
@@ -303,7 +303,7 @@
             .catch(function () { /* preview stays untextured; not worth failing over */ });
         }
       });
-    }).catch(function (e) { showFail(e); })
+    }).catch(function (e) { if(version===loadVersion)showFail(e); })
       .then(function () { if(version===loadVersion)busy(false); });
   });
 
@@ -362,14 +362,31 @@
   }
   $('meshyExport').addEventListener('click', function () {
     if (!last) return;
-    var stamp = ($('slicerName') && $('slicerName').value) || 'model';
+    var ownsSlicer=typeof slicerRaw!=='undefined'&&slicerRaw===last.positions;
+    var stamp = (ownsSlicer && $('slicerName') && $('slicerName').value) || last.name || 'model';
+    stamp=String(stamp).replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').slice(0,100)||'model';
     try {
+      var positions=modelPositions(),backup=null;
+      // A reopened Library model no longer has its original GLB container,
+      // but its stored colours/UV pixels are still real data. Export those in
+      // TinyMaker's lossless backup alongside the print-only STL.
+      if(!last.glb&&(last.sourceTexture||last.sourceColors)){
+        if(!window.studioLibrary||!window.studioLibrary.backup||!window.studioLibrary.backup.encode)
+          throw new Error('The design backup exporter is unavailable. Reload TinyMaker before exporting this colored model.');
+        backup=window.studioLibrary.backup.encode({name:last.name||stamp,prompt:last.prompt||'',kind:'model',
+          positions:positions,sourceColors:last.sourceColors||null,sourceColorKind:last.sourceColorKind||null,
+          sourceTexture:last.sourceTexture||null,meshySource:last.previewId?{previewId:last.previewId,
+            refineId:last.refineId||last.textured&&last.deliveryId||null}:null});
+      }
       if (last.glb) {
         save(new Blob([last.glb], { type: 'model/gltf-binary' }), stamp + '.glb');
         if (last.deliveryId && window.meshy.acknowledge) window.meshy.acknowledge(last.deliveryId);
       }
-      if (last.positions) save(binarySTL(modelPositions()), stamp + '.stl');
-      say('meshyInfo', (last.glb ? 'GLB and STL downloads started. Keep the GLB to preserve any texture. ' : 'STL download started; this Library entry contains geometry only. ') + 'Check your browser downloads before closing this page.');
+      if(backup)save(backup,stamp+'.tm-design');
+      if (positions) save(binarySTL(positions), stamp + '.stl');
+      say('meshyInfo', (last.glb ? 'GLB and STL downloads started. Keep the GLB to preserve any texture. ' : backup?
+        'Design backup and STL downloads started. The .tm-design keeps colors and texture; the STL contains geometry only. ':
+        'STL download started (geometry only). ') + 'Check your browser downloads before closing this page.');
     } catch (e) { say('meshyInfo', e.message, true); }
   });
 

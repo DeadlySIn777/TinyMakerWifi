@@ -181,7 +181,12 @@
 .stLibHead{display:flex;align-items:baseline;gap:var(--st-3);flex-wrap:wrap}
 .stLibHead h2{margin:0;font:650 var(--sf-xl)/1.2 inherit;letter-spacing:-.02em}
 .stLibHead .hint{margin:0}
-.stLibGrid{display:grid;gap:var(--st-3);
+.stLibHead>h2{flex:1 1 auto}
+.stLibHead>.hint{flex-basis:100%;order:2}
+.stLibHead>.hint:empty{display:none}
+.stLibHeadActions{display:flex;align-items:center;gap:16px;flex-wrap:wrap;max-width:100%;min-width:0}
+.stLibHeadActions>button{max-width:100%}
+.stLibGrid{display:grid;gap:var(--st-3);align-items:start;
   grid-template-columns:repeat(auto-fill,minmax(clamp(200px,22vw,268px),1fr))}
 .stLibCard{display:flex;flex-direction:column;background:var(--st-surface);
   border:1px solid var(--line);border-radius:var(--st-r);overflow:hidden;
@@ -193,11 +198,23 @@
 .stLibShot.none{display:flex;align-items:center;justify-content:center;
   color:var(--ink3);font:500 var(--sf-xs)/1 inherit}
 .stLibBody{padding:var(--st-3);display:grid;gap:var(--st-2)}
+.stLibType{margin:0;color:var(--muted);font-size:12px;line-height:1.35}
+.stLibProductStatus{font-size:13px}
+.stLibDetails{border-top:1px solid var(--line);margin:0}
+.stLibDetails>summary,.stLibTools>summary{cursor:pointer;color:var(--muted);font-size:13px;font-weight:600;line-height:1.5;padding:12px var(--st-3)}
+.stLibDetails>summary:hover,.stLibTools>summary:hover{color:var(--text)}
+.stLibDetails>summary:focus-visible,.stLibTools>summary:focus-visible{outline:2px solid var(--accent);outline-offset:-3px;border-radius:var(--st-r-sm)}
+.stLibDetailBody{padding:0 var(--st-3) var(--st-3);display:grid;gap:var(--st-3)}
+.stLibDetails[open]{background:var(--st-sunken)}
+.stLibTools{max-width:100%;min-width:0}
+.stLibTools>summary{padding:4px 0}
+.stLibTools>.hint{max-width:38ch;margin:8px 0}
+.stLibPrimary button{min-height:40px}
 .stLibName{margin:0;font:650 var(--sf-md)/1.3 inherit;color:var(--text);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .stLibPrompt{margin:0;color:var(--muted);font:400 var(--sf-sm)/1.45 inherit;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.stLibFacts{display:grid;grid-template-columns:1fr 1fr;gap:2px var(--st-2);margin:0;
+.stLibFacts{display:grid;grid-template-columns:1fr;gap:2px var(--st-2);margin:0;
   font-variant-numeric:tabular-nums}
 .stLibFacts div{display:flex;justify-content:space-between;gap:var(--st-2);
   font:500 var(--sf-xs)/1.7 inherit;color:var(--ink3)}

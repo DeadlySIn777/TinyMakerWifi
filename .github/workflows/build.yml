@@ -54,6 +54,7 @@ jobs:
           node scripts/dev/test_slicer_fit_gate.cjs
           node scripts/dev/test_slicer_import_wait.cjs
           node scripts/dev/test_topper_meshy.cjs
+          node scripts/dev/test_topper_pending_actions.cjs
           node scripts/dev/test_keycap_texture.cjs
           node scripts/dev/test_texture_lifecycle.cjs
           node scripts/dev/test_texture_backup.cjs

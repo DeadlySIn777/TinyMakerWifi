@@ -193,7 +193,7 @@ async function test(name, fn) { await fn(); console.log('OK '+name); passed++; }
   });
   await test('opening a finished keycap still uses its raw-artwork editor restore path',async()=>{
     const f=fixture();await f.save();await f.draw();
-    f.descendants().find(e=>e.textContent==='Open in Create').click();await flush();await flush();
+    f.descendants().find(e=>e.tagName==='button'&&e.textContent==='Open in Create').click();await flush();await flush();
     assert.ok(f.calls.some(c=>c[0]==='edit-source'&&c[1]==='cap'));
     assert.deepEqual(f.calls.filter(c=>c[0]==='stage'),[['stage','cap']]);
     assert.equal(f.calls.some(c=>c[0]==='blob'),false);

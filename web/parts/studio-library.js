@@ -32,6 +32,10 @@
     return p && p.version === 1 && p.kind === 'keycap' &&
       (p.state === 'ready' || p.state === 'needs-attention') ? p : null;
   }
+  function designType(rec){
+    if(rec.sourceTool==='topper'||rec.topperRecipe||rec.facts&&rec.facts.sourceTool==='topper')return 'topper';
+    return rec.kind==='model'?'model':'keycap';
+  }
 
   function fmtDate(ms) {
     if (!ms) return '—';
@@ -88,6 +92,7 @@
     var f = facts(rec);
     var model = rec.kind === 'model';
     var product = productOf(rec);
+    var type=designType(rec);
     var el = document.createElement('div');
     el.className = 'stLibCard' + (picked === rec.id ? ' on' : '');
 
@@ -108,12 +113,18 @@
     h.className = 'stLibName'; h.textContent = rec.name || 'design';
     h.title = rec.name || '';
     body.appendChild(h);
+    var kind=document.createElement('p');kind.className='stLibType';
+    kind.textContent=type==='topper'?'Fitted topper':type==='model'?'3D model':'Keycap';body.appendChild(kind);
+    var details=document.createElement('details');details.className='stLibDetails';
+    var summary=document.createElement('summary');summary.textContent='Details & actions';
+    summary.ariaLabel='Details and actions for '+(rec.name||'design');details.appendChild(summary);
+    var detailBody=document.createElement('div');detailBody.className='stLibDetailBody';
 
-    if (product || !model) {
+    {
       var status = document.createElement('p');
       status.className = 'stLibProductStatus';
       status.style.cssText = 'margin:0;font-weight:650;line-height:1.4;overflow-wrap:anywhere';
-      status.textContent = product ? (product.state === 'ready' ? 'Ready to slice' : 'Needs attention') : 'Artwork only';
+      status.textContent = product ? (product.state === 'ready' ? 'Ready to slice' : 'Needs attention') : model?'Saved':'Artwork only';
       status.title = product && product.state === 'ready'
         ? 'Saved assembled keycap in print pose. Geometry checks do not judge appearance. Inspect every side and review supports and print settings.'
         : 'Open in Create to assemble or update this design.';
@@ -124,7 +135,7 @@
         issues.className = 'stLibProductIssues';
         issues.style.cssText = 'margin:0;font-size:12px;line-height:1.45;color:var(--muted);overflow-wrap:anywhere';
         issues.textContent = product.issues.join(' ');
-        body.appendChild(issues);
+        detailBody.appendChild(issues);
       }
     }
 
@@ -133,7 +144,7 @@
       pr.className = 'stLibPrompt';
       pr.textContent = rec.prompt;
       pr.title = rec.prompt;
-      body.appendChild(pr);
+      detailBody.appendChild(pr);
     }
 
     var fl = document.createElement('div');
@@ -162,7 +173,7 @@
     if (f.fits === false) row('fit', 'does not fit the plate at any lean');
     row('kind', product ? 'assembled keycap' : (rec.kind || 'sculpt'));
     row('stored', fmtBytes(f.bytes));
-    body.appendChild(fl);
+    detailBody.appendChild(fl);details.appendChild(detailBody);
     el.appendChild(body);
 
     var actions = document.createElement('div');
@@ -171,7 +182,7 @@
 
     if (product && product.state === 'ready') {
       var download = document.createElement('button');
-      download.type = 'button'; download.className = 'go stLibExportProduct';
+      download.type = 'button'; download.className = 'stLibExportProduct';
       download.textContent = 'Export product STL';
       download.style.cssText = 'width:100%;flex:1 0 100%;min-width:0;margin:0';
       download.title = 'Download this exact saved assembly and socket fit in print pose.';
@@ -180,12 +191,12 @@
     }
 
     var use = document.createElement('button');
-    use.type = 'button'; use.className = product ? '' : 'go'; use.textContent = 'Open in Create';
+    use.type = 'button'; use.className = 'go'; use.textContent = 'Open in Create';
     use.style.cssText = 'width:auto;min-width:0;flex:1 1 120px;margin:0';
     use.title = model ? 'Opens the saved model in Models at its saved size and pose. No generation is spent.'
                       : 'Puts this exact mesh back on the cap. No generation is spent.';
     use.addEventListener('click', function () { return open(rec.id, use); });
-    actions.appendChild(use);
+    var primary=document.createElement('div');primary.className='stLibRow stLibPrimary';primary.appendChild(use);el.appendChild(primary);
 
     var backup = document.createElement('button');
     backup.type = 'button'; backup.textContent = 'Backup design';
@@ -230,7 +241,7 @@
         'Deleted "' + (rec.name || 'design') + '".', 'Could not delete this design');
     });
     actions.appendChild(del);
-    el.appendChild(actions);
+    details.appendChild(actions);el.appendChild(details);
     return el;
   }
 
@@ -622,28 +633,34 @@
   function draw() {
     var host = $(HOST); if (!host) return;
     var version = ++drawVersion;
-    host.innerHTML = '';
-
-    var head = document.createElement('div');
-    head.className = 'stLibHead';
-    head.innerHTML = "<h2>Your designs</h2><p id='stLibNote' class='hint'></p>";
-    host.appendChild(head);
     var initialNote = noteVersion;
+    var currentHead=null;
+    function replaceHead(){
+      var old=$('stLibNote'),message=old&&old.textContent,warning=old&&/warn/.test(old.className||'');
+      host.innerHTML='';var head=document.createElement('div');head.className='stLibHead';
+      head.innerHTML="<h2>Your designs</h2><p id='stLibNote' class='hint'></p>";host.appendChild(head);currentHead=head;
+      if(message&&(warning||initialNote!==noteVersion)){var n=$('stLibNote');if(n){n.textContent=message;n.className='hint'+(warning?' warn':'');}}
+    }
 
     if (!root.keycapLibrary) {
+      replaceHead();
       note('This build has no design store.', true);
       return;
     }
 
     return Promise.resolve().then(function () { return root.keycapLibrary.list(); }).then(function (rows) {
       if (version !== drawVersion) return;
+      var active=document.activeElement,focusId=active&&(active.id==='stLibSearch'||active.id==='stLibFilter')?active.id:null;
+      var selection=focusId==='stLibSearch'?[active.selectionStart,active.selectionEnd]:null;
+      replaceHead();
       var count = $('stLibCount');
       if (count) { count.textContent = rows.length; count.hidden = !rows.length; }
 
       var restoreRow = document.createElement('div');
-      restoreRow.className = 'stLibBar';
+      restoreRow.className = 'stLibHeadActions';
       var restore = document.createElement('button');
       restore.type = 'button'; restore.textContent = 'Import design backup';
+      restore.className='button secondary';
       restore.style.cssText = 'width:auto;margin:0;padding:8px 14px';
       var file = document.createElement('input');
       file.type = 'file'; file.accept = '.tm-design'; file.hidden = true;
@@ -652,15 +669,13 @@
         if (chosen) return importBackup(chosen, restore);
       });
       restore.addEventListener('click', function () { if (!restore.disabled) file.click(); });
-      restoreRow.appendChild(restore); restoreRow.appendChild(file); host.appendChild(restoreRow);
+      restoreRow.appendChild(restore); restoreRow.appendChild(file); currentHead.appendChild(restoreRow);
 
       if (!rows.length) {
         var e = document.createElement('div');
         e.className = 'stLibEmpty';
-        e.innerHTML = '<h3>Nothing here yet</h3><p>Generated designs and models imported in Models are kept ' +
-          'here automatically. Open a saved model in Models or a sculpt in Keycaps, ' +
-          'without spending another generation. Designs are saved in this browser at this printer address; ' +
-          'use a design backup to move them from another browser.</p>';
+        e.innerHTML = '<h3>Your next idea starts here</h3><p>Saved keycaps, toppers and models appear here. ' +
+          'Make something in Create, or import a design backup from another browser.</p>';
         host.appendChild(e);
         return;
       }
@@ -669,12 +684,9 @@
       rows.forEach(function (r) {
         totalBytes += facts(r).bytes || 0;
       });
-      var bar = document.createElement('div');
-      bar.className = 'stLibBar';
-      bar.innerHTML = "<span class='grow'></span>";
-      bar.firstChild.innerHTML = '<b>' + rows.length + '</b> design' +
-        (rows.length > 1 ? 's' : '') + ' · about <b>' + fmtBytes(totalBytes) +
-        '</b> of mesh · stored in this browser. Export backups before clearing browser data.';
+      var tools=document.createElement('details');tools.className='stLibTools';
+      var toolSummary=document.createElement('summary');toolSummary.textContent='Library tools';tools.appendChild(toolSummary);
+      var storage=document.createElement('p');storage.className='hint';storage.textContent=rows.length+' designs saved in this browser · about '+fmtBytes(totalBytes)+' of mesh. Export backups before clearing browser data.';tools.appendChild(storage);
       var clr = document.createElement('button');
       clr.type = 'button'; clr.style.cssText = 'width:auto;margin:0;padding:8px 14px';
       clr.className = 'button secondary';
@@ -686,8 +698,7 @@
         return change(clr, function () { return root.keycapLibrary.clear(); },
           'All saved designs were deleted from this browser.', 'Could not delete the saved designs');
       });
-      bar.appendChild(clr);
-      host.appendChild(bar);
+      tools.appendChild(clr);restoreRow.appendChild(tools);
 
       var grid = document.createElement('div');
       grid.className = 'stLibGrid';
@@ -697,6 +708,7 @@
       searchLabel.textContent = 'Find a design'; searchLabel.style.cssText = 'flex:2 1 220px;min-width:0';
       var query = document.createElement('input');
       query.type = 'search'; query.placeholder = 'Search names or prompts'; query.value = search;
+      query.id='stLibSearch';
       query.ariaLabel = 'Find a design';
       query.style.cssText = 'display:block;width:100%;box-sizing:border-box;margin-top:4px;min-height:40px;' +
         'padding:9px 12px;border-radius:10px;border:1px solid var(--line2);background:var(--st-sunken);color:var(--text);font:inherit';
@@ -704,10 +716,11 @@
       var filterLabel = document.createElement('label');
       filterLabel.textContent = 'Show'; filterLabel.style.cssText = 'flex:1 1 170px;min-width:0';
       var select = document.createElement('select');
+      select.id='stLibFilter';
       select.ariaLabel = 'Show';
       select.style.cssText = 'display:block;width:100%;margin-top:4px;min-height:40px';
-      [['all','All designs'],['ready','Ready to slice'],['needs-attention','Needs attention'],
-       ['artwork','Artwork only'],['model','Models']].forEach(function (option) {
+      [['all','All designs'],['keycap','Keycaps'],['topper','Toppers'],['model','Models'],['ready','Ready to slice'],['needs-attention','Needs attention'],
+       ['artwork','Artwork only']].forEach(function (option) {
         var o = document.createElement('option'); o.value = option[0]; o.textContent = option[1]; select.appendChild(o);
       });
       select.value = filter; filterLabel.appendChild(select); controls.appendChild(filterLabel);
@@ -717,8 +730,8 @@
         search = query.value; filter = select.value;
         var term = search.trim().toLocaleLowerCase();
         var matches = rows.filter(function (r) {
-          var product = productOf(r), state = product ? product.state : r.kind === 'model' ? 'model' : 'artwork';
-          return (filter === 'all' || state === filter) &&
+          var product = productOf(r),type=designType(r), state = product ? product.state : r.kind === 'model' ? 'model' : 'artwork';
+          return (filter === 'all' || (filter==='keycap'||filter==='topper'||filter==='model'?type===filter:state===filter)) &&
             (!term || ((r.name || '') + ' ' + (r.prompt || '')).toLocaleLowerCase().indexOf(term) >= 0);
         });
         grid.innerHTML = '';
@@ -729,14 +742,16 @@
       query.addEventListener('input', filtered); select.addEventListener('change', filtered);
       filtered();
       host.appendChild(grid);
+      if(focusId){var replacement=$(focusId);if(replacement&&replacement.focus){replacement.focus({preventScroll:true});
+        if(selection&&replacement.setSelectionRange)try{replacement.setSelectionRange(selection[0],selection[1]);}catch(e){}
+      }}
 
       if (root.keycapLibrary.usage) {
         Promise.resolve().then(function () { return root.keycapLibrary.usage(); }).then(function (u) {
-          if (version === drawVersion && initialNote === noteVersion && u && u.known) note('Browser storage ' + u.pct + '% used (' +
-            fmtBytes(u.usedBytes) + ' of ' + fmtBytes(u.quotaBytes) + ')');
+          if (version === drawVersion && u && u.known)storage.textContent+=' Browser storage '+u.pct+'% used ('+fmtBytes(u.usedBytes)+' of '+fmtBytes(u.quotaBytes)+').';
         }).catch(function () { /* Optional storage estimates never hide the Library. */ });
       }
-    }).catch(function (e) { if (version === drawVersion) note('Could not load your designs: ' + e.message, true); });
+    }).catch(function (e) { if (version === drawVersion){if(!$('stLibNote'))replaceHead();note('Could not load your designs: ' + e.message, true);} });
   }
 
   root.studioLibrary = { draw: draw, open: open, importBackup: importBackup,

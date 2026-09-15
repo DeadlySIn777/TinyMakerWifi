@@ -45,7 +45,7 @@ function fixture(overrides={}){
     topper:{build:p=>{calls.push(['build',p]);return {ok:!state.buildBad,issues:state.buildBad?['Measured width is not valid.']:[],positions:box()};}},
     keycapView3d:{attach:()=>({setMesh:p=>calls.push(['preview',p])})},
     keycapSculpt:{seat:(cap,p)=>{calls.push(['seat',p]);return {positions:cap.positions};},check:()=>({ok:!state.seatBad,issues:state.seatBad?['Sculpt does not attach.']:[]})},
-    keycapLibrary:{save:r=>{calls.push(['save',r]);return Promise.resolve({id:'saved',...r});}},
+    keycapLibrary:{save:r=>{calls.push(['save',r]);return Promise.resolve({...r,id:'saved'});}},
     slicerLoadMod:()=>Promise.resolve({}),
     slicerLoadMesh:(p,name,size,opts)=>{calls.push(['slice',p,name,size,opts]);return true;},
     studioStage:x=>calls.push(['stage',x]),studioGo:x=>calls.push(['go',x])

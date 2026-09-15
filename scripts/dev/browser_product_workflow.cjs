@@ -29,6 +29,7 @@ fs.mkdirSync(path.join(root,'research/screenshots'),{recursive:true});fs.mkdirSy
   await page.getByRole('tab',{name:/^Library/}).click();
   const card=page.locator('.stLibCard').filter({has:page.getByRole('heading',{name:'QA flower — assembly test',exact:true})});
   await card.waitFor();assert.match(await card.innerText(),/Ready to slice/);
+  await card.locator('summary').click();
   const downloadEvent=page.waitForEvent('download');await card.getByRole('button',{name:'Export product STL',exact:true}).click();
   const download=await downloadEvent,out=path.join(root,'.cache/qa-finished-product.stl');await download.saveAs(out);
   const bytes=fs.readFileSync(out);assert.equal(bytes.length,84+bytes.readUInt32LE(80)*50);

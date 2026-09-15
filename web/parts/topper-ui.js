@@ -2,7 +2,7 @@
   'use strict';
   function $(id){return document.getElementById(id);}
   if(!$('topperCard')||!window.topper)return;
-  var built=null,art=null,artName='',viewer=null,revision=0,sourceRevision=0,saving=false,generating=false;
+  var built=null,art=null,artName='',viewer=null,revision=0,sourceRevision=0,saving=false,generating=false,artReadRevision=null;
   var ids=['tpPreset','tpModel','tpShape','tpWidth','tpSecondWidth','tpDepth','tpWall','tpFit','tpArtHeight','tpArtRotation','tpPrompt'];
   var draftReady=!window.indexedDB,draftWriting=false,pendingDraft=null,fitStored=false,pendingGenerated=null;
   function note(s,bad){$('tpState').textContent=s||'';$('tpState').hidden=!s;$('tpState').className='hint'+(bad?' warn':'');}
@@ -76,14 +76,28 @@
     // explicitly chose after a failed assembly, rather than restoring it.
     if(pendingGenerated){pendingGenerated.active=false;generationNote('Previous Meshy artwork is kept. Use Recover to return to it.');}
   }
-  function requireDraft(){if(!draftReady)throw new Error('Wait for your saved topper draft to finish loading.');}
+  function requireDraft(){
+    if(!draftReady)throw new Error('Wait for your saved topper draft to finish loading.');
+    if(artReadRevision!==null)throw new Error('Wait for the selected artwork to finish loading.');
+    if(generating)throw new Error('Wait for artwork generation to finish.');
+  }
+  function cancelArtworkRead(){artReadRevision=null;$('tpArtFile').value='';}
   function paintGeneration(){
     var task=pendingTask(),other=task&&task.from!=='topper',go=$('tpGenerate'),recover=$('tpRecover');
-    if(go){go.disabled=generating||saving||!!other||!draftReady;go.textContent=generating?'Working…':art||task&&task.from==='topper'?'Regenerate artwork + cap':'Generate artwork + cap';
+    if(go){go.disabled=generating||saving||artReadRevision!==null||!!other||!draftReady;go.textContent=generating?'Working…':art||task&&task.from==='topper'?'Regenerate artwork + cap':'Generate artwork + cap';
       go.title=other?'Recover the task in '+(task.from==='model'?'Models':'Keycaps')+' before starting a topper.':'';}
-    if(recover){recover.hidden=!(task&&task.from==='topper');recover.disabled=generating||saving||!draftReady;}
-    if(generating)['tpSave','tpSlice','tpExport','tpArtFile','tpClearArt'].forEach(function(id){$(id).disabled=true;});
-    else {$('tpSave').disabled=!draftReady||saving||!built&&!activeCandidate();$('tpSlice').disabled=!draftReady||!built;$('tpExport').disabled=!draftReady||!built;$('tpArtFile').disabled=false;$('tpClearArt').disabled=!art;}
+    if(recover){recover.hidden=!(task&&task.from==='topper');recover.disabled=generating||saving||artReadRevision!==null||!draftReady;}
+    if(generating)['tpSave','tpSlice','tpExport','tpFitTest','tpArtFile','tpClearArt'].forEach(function(id){if($(id))$(id).disabled=true;});
+    else {
+      var waiting=!draftReady||artReadRevision!==null;
+      $('tpSave').disabled=waiting||saving||!built&&!activeCandidate();$('tpSlice').disabled=waiting||!built;$('tpExport').disabled=waiting||!built;
+      if($('tpFitTest')){
+        var fitReady=!!built;
+        if(!fitReady&&!waiting)try{make(null);fitReady=true;}catch(e){}
+        $('tpFitTest').disabled=waiting||!fitReady;
+      }
+      $('tpArtFile').disabled=false;$('tpClearArt').disabled=!art&&artReadRevision===null;
+    }
   }
   function recipe(f){
     var r={version:1,fields:f||fields()},out={};
@@ -126,7 +140,7 @@
   }
   function failGeneration(e){generationNote((e&&e.message||'Generation could not finish.')+(activeCandidate()?' Adjust the fit or sculpt height, then Save to Library to retry locally.':pendingGenerated?' Use Recover to return to the kept Meshy artwork.':'') ,true);}
   async function recoverTopper(useCurrent){
-    if(generating||saving||!draftReady)return false;var task=pendingTask();if(!task||task.from!=='topper')return false;
+    if(generating||saving||artReadRevision!==null||!draftReady)return false;var task=pendingTask();if(!task||task.from!=='topper')return false;
     if(!useCurrent&&pendingGenerated&&pendingGenerated.active===false){generationNote('Previous Meshy artwork is kept. Use Recover to return to it.');return false;}
     var stamp=revision;generating=true;paintGeneration();generationNote('Recovering existing Meshy artwork…');
     try{
@@ -139,7 +153,7 @@
   async function generateTopper(){
     if(generating||saving)return;var stamp=revision;
     try{
-      if(!draftReady)throw new Error('Wait for the saved topper draft to finish loading.');
+      requireDraft();
       if(!window.meshy||!window.meshyParseGLB)throw new Error('Meshy tools are unavailable. Reload the page.');
       if(!window.meshy.hasKey())throw new Error('Set your Meshy API key in AI settings in this browser. No generation was submitted.');
       var r=recipe(),subject=r.fields.tpPrompt.trim();if(!subject)throw new Error('Describe the cute artwork you want first.');
@@ -165,7 +179,7 @@
   window.topperUseSaved=function(rec){
     if(!rec||!rec.topperRecipe)throw new Error('The saved topper has no editable recipe.');
     var r=readRecipe(rec.topperRecipe),p=rec.topperSource?sourceOkay(new Float32Array(rec.topperSource)):null;make(p,r.fields);
-    applyRecipe(r);sourceRevision++;art=p;artName=p?r.fields.tpPrompt||rec.name||'Saved topper':'';detachCandidate();
+    applyRecipe(r);cancelArtworkRead();sourceRevision++;art=p;artName=p?r.fields.tpPrompt||rec.name||'Saved topper':'';detachCandidate();
     $('tpArtName').textContent=artName||'Plain socket';refresh();if(!pendingGenerated)generationNote('');return true;
   };
   if(typeof window.addEventListener==='function')window.addEventListener('storage',paintGeneration);
@@ -178,8 +192,8 @@
   });});
   function tweak(d){$('tpFit').value=Math.max(0,Math.min(.6,Number($('tpFit').value)+d)).toFixed(2);refresh();}
   $('tpTight').addEventListener('click',function(){tweak(.02);});$('tpLoose').addEventListener('click',function(){tweak(-.02);});
-  $('tpClearArt').addEventListener('click',function(){sourceRevision++;art=null;artName='';detachCandidate();$('tpArtName').textContent='Plain socket';refresh();if(built)completed('Sculpt cleared. Your socket fit is unchanged.');});
-  $('tpArtFile').addEventListener('change',async function(e){var f=e.target.files&&e.target.files[0];if(!f)return;var seq=++revision;try{
+  $('tpClearArt').addEventListener('click',function(){cancelArtworkRead();sourceRevision++;art=null;artName='';detachCandidate();$('tpArtName').textContent='Plain socket';refresh();if(built)completed('Sculpt cleared. Your socket fit is unchanged.');});
+  $('tpArtFile').addEventListener('change',async function(e){var f=e.target.files&&e.target.files[0];if(!f)return;var seq=++revision;artReadRevision=seq;paintGeneration();note('Reading '+f.name+'…');try{
       if(f.size>60*1024*1024)throw new Error('Choose a sculpt smaller than 60 MB.');
       var raw=await f.arrayBuffer();if(seq!==revision)return;var parsed=window.stlRead.readModelFile(raw,f.name),p=parsed.positions;
       var h=window.meshHealth(p);if(h.fatal||h.severity==='bad')throw new Error('This sculpt failed the mesh check.');
@@ -187,18 +201,37 @@
       // working sculpt, preview or actions. A readable file may still not fit.
       make(p);
       sourceRevision++;art=p;artName=f.name;detachCandidate();$('tpArtName').textContent=artName;refresh();
-    }catch(err){if(seq!==revision)return;note(err.message,true);}e.target.value='';
+    }catch(err){if(seq===revision)note(err.message,true);}
+    finally{if(artReadRevision===seq){artReadRevision=null;e.target.value='';paintGeneration();}}
   });
+  // A fit sample uses the same socket recipe without changing the current art,
+  // draft, or Library. It never sends anything to the printer.
+  if($('tpFitTest'))$('tpFitTest').addEventListener('click',function(){try{
+    requireDraft();var x=make(null),url=URL.createObjectURL(binary(x.positions)),a=document.createElement('a');
+    a.href=url;a.download=name()+'-fit-test.stl';document.body.appendChild(a);a.click();a.remove();
+    setTimeout(function(){URL.revokeObjectURL(url);},2000);completed('Plain socket fit test downloaded. Your sculpt is unchanged.');
+  }catch(e){note(e.message,true);}});
+  function inspectTopper(socket){
+    if(!viewer||!built)return;viewer.stop();viewer.vel=0;viewer.az=socket?0:-.62;viewer.el=socket?-Math.PI/2:.52;viewer.draw();
+    if($('tpView3d'))$('tpView3d').setAttribute('aria-pressed',String(!socket));
+    if($('tpViewSocket'))$('tpViewSocket').setAttribute('aria-pressed',String(socket));
+  }
+  if($('tpView3d'))$('tpView3d').addEventListener('click',function(){inspectTopper(false);});
+  if($('tpViewSocket'))$('tpViewSocket').addEventListener('click',function(){inspectTopper(true);});
+  function freeTopperView(){['tpView3d','tpViewSocket'].forEach(function(id){if($(id))$(id).setAttribute('aria-pressed','false');});}
+  $('tpPreview').addEventListener('mousedown',freeTopperView);
+  $('tpPreview').addEventListener('touchstart',freeTopperView,{passive:true});
   $('tpExport').addEventListener('click',function(){try{requireDraft();var x=make(),url=URL.createObjectURL(binary(x.positions)),a=document.createElement('a');a.href=url;a.download=name()+'.stl';document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url);},2000);completed('Topper STL downloaded.');}catch(e){note(e.message,true);}});
   $('tpSave').addEventListener('click',async function(){if(saving||generating)return;var stamp=revision;try{
       requireDraft();if(activeCandidate()){saving=true;paintGeneration();await finishGenerated(pendingGenerated,true,stamp);return;}
       var x=make();if(!window.keycapLibrary)throw new Error('Library is unavailable.');
       saving=true;$('tpSave').disabled=true;
-      await window.keycapLibrary.save(fittedRecord(x,recipe(),art,name()));
+      var saved=await window.keycapLibrary.save(fittedRecord(x,recipe(),art,name()));
+      if(!saved||typeof saved.id!=='string'||!saved.id.trim())throw new Error('Library did not confirm this save. Export the STL or try saving again.');
       if(stamp===revision)completed('Topper saved to Library.');else note('Saved the previous version to Library. Your current changes still need saving.',true);
     }catch(e){note('Not saved: '+e.message,true);}finally{saving=false;paintGeneration();}});
   $('tpSlice').addEventListener('click',async function(){var stamp=revision;try{requireDraft();var x=make();
-      var ok=typeof slicerLoadMod==='function'?await slicerLoadMod():false;if(stamp!==revision)throw new Error('Topper changed. Send the current version again.');
+      var ok=typeof slicerLoadMod==='function'?await slicerLoadMod():false;requireDraft();if(stamp!==revision)throw new Error('Topper changed. Send the current version again.');
       if(!ok||!window.slicerLoadMesh||!window.slicerLoadMesh(x.positions,name()+'.stl',x.positions.byteLength,{keepPose:true,noScale:true}))throw new Error('Slicer could not load this topper.');
       if(window.studioStage)window.studioStage('model');if(window.studioGo)window.studioGo('create');note('Sent at the exact socket size. Review supports and keep the bore clear before printing.');
     }catch(e){note(e.message,true);}});

@@ -109,11 +109,19 @@ The texture and Finish-screen checks also run without the preview server:
 node scripts/dev/test_keycap_texture_browser.cjs
 node scripts/dev/test_texture_guide_browser.cjs
 node scripts/dev/test_keycap_review_browser.cjs
+node scripts/dev/test_topper_workspace_browser.cjs
+node scripts/dev/test_topper_pending_actions.cjs
+node scripts/dev/test_models_export_browser.cjs
+node scripts/dev/browser_library_polish.cjs
 ```
 
 They test actual rendered texture pixels and the assembled UI with synthetic
 models. The review harness checks desktop and phone layouts, editable fit,
 saved STL geometry, sharing, painting-guide download, and blocked slicing.
+The topper check also compares its plain socket fit-test download with the
+measured socket geometry, confirms the full sculpt stays unchanged, and checks
+pending imports and failed saves. The Library and Models checks exercise real
+backup/STL downloads and preserve texture and fit data through restore.
 
 ## Pinned slicer integration checks
 

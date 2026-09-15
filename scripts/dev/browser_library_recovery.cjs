@@ -41,6 +41,7 @@ const server=http.createServer((req,res)=>{
     const room=page.locator('#stLibrary'),card=room.locator('.stLibCard').filter({has:page.getByRole('heading',{name:'QA Blossom backup',exact:true})});
     await card.waitFor();assert.match(await card.innerText(),/Ready to slice/);
     const designsBefore=await room.locator('.stLibCard').count();
+    await card.locator('summary').click();
     async function download(button,name){const pending=page.waitForEvent('download');await button.click();const d=await pending;const target=path.join(out,name);await d.saveAs(target);return target;}
     const originalSTL=await download(card.getByRole('button',{name:'Export product STL',exact:true}),'library-original-product.stl');
     const backup=await download(card.getByRole('button',{name:'Backup design',exact:true}),'library-test.tm-design');
@@ -51,6 +52,7 @@ const server=http.createServer((req,res)=>{
     await page.waitForFunction(()=>document.querySelector('#stLibNote').textContent.includes('Restored a new Library copy'));
     await card.waitFor();assert.match(await card.innerText(),/Ready to slice/);
     assert.equal(await room.locator('.stLibCard').count(),designsBefore);
+    await card.locator('summary').click();
     const restoredSTL=await download(card.getByRole('button',{name:'Export product STL',exact:true}),'library-restored-product.stl');
     const first=fs.readFileSync(originalSTL),restored=fs.readFileSync(restoredSTL);assert.deepEqual(restored,first);
     assert.match(await card.innerText(),/socket\s+1\.23 mm/);

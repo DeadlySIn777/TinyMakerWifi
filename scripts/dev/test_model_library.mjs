@@ -41,7 +41,7 @@ function fixture({engine=true,store=true}={}) {
     remove(){}
   }
   function el(id){if(!elements.has(id))elements.set(id,new Element(id));return elements.get(id);}
-  const ctx={console,Promise,Math,Number,Date,Float32Array,Float64Array,ArrayBuffer,Uint8Array,DataView,Blob,
+  const ctx={console,Promise,Math,Number,Date,Float32Array,Float64Array,ArrayBuffer,Uint8Array,Uint8ClampedArray,DataView,Blob,TextEncoder,TextDecoder,
     setTimeout:(fn,ms)=>{timers.push({fn,ms});return 0;},confirm:()=>false,
     document:{getElementById:el,createElement:()=>new Element(),body:new Element()},
     URL:{createObjectURL:blob=>{calls.push(['blob',blob]);return '';},revokeObjectURL:()=>{}},
@@ -301,10 +301,12 @@ await test('opening a different model during colour decoding cannot save it unde
   assert.equal(typeof finish,'function');
   const opened=new Float32Array([0,0,0, 4,0,0, 0,4,0]);
   f.ctx.slicerRaw=opened;f.ctx.meshyModelOpened('Opened model',opened,{});
+  const info=f.el('meshyInfo').textContent,status=f.el('meshyState').textContent;
   finish({colors:new Float32Array(9),kind:'vertex'});await work;
   assert.equal(f.ctx.slicerRaw,opened);assert.equal(f.records.size,0);
   assert.equal(g.acks.length,0);assert.ok(g.pending());
-  assert.match(f.el('meshyInfo').textContent,/Another model was opened.*task is kept for recovery/);
+  assert.equal(f.el('meshyInfo').textContent,info,'obsolete colour completion cannot replace the current model status');
+  assert.equal(f.el('meshyState').textContent,status);
 });
 await test('a generated model completing after a Library choice preserves that choice and paid recovery',async()=>{
   const f=fixture(),g=generationSetup(f);let release;
@@ -360,6 +362,70 @@ await test('exporting geometry-only Library contents cannot acknowledge an unrel
   const f=fixture(),g=generationSetup(f);g.seed();await f.importFile('geometry.stl');f.el('meshyExport').click();
   assert.equal(g.acks.length,0);assert.ok(g.pending());assert.equal(g.downloads.length,1);assert.match(g.downloads[0],/\.stl$/);
   assert.match(f.el('meshyInfo').textContent,/geometry only/);
+});
+
+for(const kind of ['texture','vertex'])await test('reopened '+kind+' model export preserves its reference data and exact posed STL in a portable backup',async()=>{
+  const f=fixture(),g=generationSetup(f),Color=require('../../web/parts/keycap-color.js'),positions=triangle();
+  f.ctx.keycapColor=Color;g.seed();
+  const texture={version:1,positionLength:9,baseColors:new Float32Array(9).fill(1),textures:[{start:0,count:3,
+    uvs:new Float32Array([0,0,1,0,0,1]),width:1,height:1,data:new Uint8ClampedArray([255,80,20,255]),wrapS:33071,wrapT:33071,filter:'linear'}]};
+  const rec={name:'Painted miniature',prompt:'Keep this exact painted miniature',positions,
+    sourceColors:new Float32Array([1,0,0,0,1,0,0,0,1]),sourceColorKind:kind,
+    sourceTexture:kind==='texture'?texture:null,meshySource:{previewId:'preview-inert',refineId:kind==='texture'?'texture-inert':null}};
+  const original=Array.from(positions);f.ctx.slicerRaw=positions;f.ctx.slicerTr={rx:90,rz:0,scale:2};f.el('slicerName').value='Painted miniature';
+  f.ctx.meshyModelOpened(rec.name,positions,rec);f.el('meshyExport').click();
+  assert.deepEqual(g.downloads,['Painted miniature.tm-design','Painted miniature.stl']);
+  const blobs=f.calls.filter(c=>c[0]==='blob').map(c=>c[1]);
+  const backup=f.ctx.studioLibrary.backup.decode(await blobs[0].arrayBuffer()).record;
+  const printed=stlRead.readSTL(await blobs[1].arrayBuffer()).positions;
+  assert.deepEqual(Array.from(backup.positions),Array.from(printed));
+  assert.deepEqual(Array.from(printed),[0,0,0,0,0,24,0,40,0]);
+  assert.deepEqual(Array.from(positions),original);assert.equal(backup.prompt,rec.prompt);
+  assert.deepEqual(Array.from(backup.sourceColors),Array.from(rec.sourceColors));assert.equal(backup.sourceColorKind,kind);
+  assert.equal(backup.meshySource.previewId,'preview-inert');
+  if(kind==='texture'){
+    assert.ok(Color.validTextureReference(backup.sourceTexture,backup.positions));
+    assert.deepEqual(Array.from(backup.sourceTexture.textures[0].data),Array.from(texture.textures[0].data));
+    assert.deepEqual(Array.from(backup.sourceTexture.textures[0].uvs),Array.from(texture.textures[0].uvs));
+    assert.equal(backup.meshySource.refineId,'texture-inert');
+  }
+  assert.match(f.el('meshyInfo').textContent,/Design backup and STL.*keeps colors and texture/);
+  assert.doesNotMatch(f.el('meshyInfo').textContent,/entry contains geometry only/);
+  assert.equal(g.acks.length,0,'exporting a Library copy cannot acknowledge some other paid task');assert.ok(g.pending());
+});
+await test('export name belongs to the retained model when another tool owns the shared slicer',async()=>{
+  const f=fixture(),g=generationSetup(f);await f.importFile('My miniature.stl');
+  f.ctx.slicerRaw=new Float32Array(triangle());f.el('slicerName').value='Completely different keycap';
+  f.el('meshyExport').click();assert.deepEqual(g.downloads,['My miniature.stl']);
+  assert.deepEqual(Array.from(stlRead.readSTL(await f.calls.filter(c=>c[0]==='blob').at(-1)[1].arrayBuffer()).positions),Array.from(triangle()));
+});
+for(const operation of ['generation','recovery','texture'])await test('obsolete '+operation+' failure cannot replace a newer model\'s ready status or controls',async()=>{
+  const f=fixture(),g=generationSetup(f);let reject;
+  const delayed=()=>new Promise((resolve,no)=>{reject=no;});
+  if(operation==='generation')f.ctx.meshy.generate=delayed;
+  if(operation==='recovery'){g.seed();f.ctx.confirm=()=>true;f.ctx.meshy.resume=delayed;}
+  if(operation==='texture'){
+    const accepted=triangle();f.ctx.slicerRaw=accepted;f.ctx.meshyModelOpened('Accepted preview',accepted,{meshySource:{previewId:'preview-inert'}});
+    f.ctx.meshy.generateTexture=delayed;
+  }
+  const running=f.el(operation==='texture'?'meshyRefine':'meshyGo').click();await new Promise(resolve=>setImmediate(resolve));assert.equal(typeof reject,'function');
+  const chosen=new Float32Array([0,0,0,2,0,0,0,3,0]);f.ctx.slicerRaw=chosen;f.ctx.meshyModelOpened('Chosen model',chosen,{});
+  const info=f.el('meshyInfo').textContent,state=f.el('meshyState').textContent;
+  reject(Error('Obsolete operation failed'));await running;await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.ctx.slicerRaw,chosen);assert.equal(f.el('meshyInfo').textContent,info);assert.equal(f.el('meshyState').textContent,state);
+  assert.equal(f.el('meshyGo').disabled,false);assert.equal(f.el('meshyExport').disabled,false);assert.equal(g.acks.length,0);
+});
+await test('current generation failure remains visible and unlocks its controls',async()=>{
+  const f=fixture();generationSetup(f);f.ctx.meshy.generate=async()=>{throw Error('Current task could not finish');};
+  await f.el('meshyGo').click();assert.equal(f.el('meshyInfo').textContent,'Current task could not finish');assert.equal(f.el('meshyGo').disabled,false);
+});
+await test('a previous texture save warning does not overwrite a newer Library selection',async()=>{
+  const f=fixture(),g=generationSetup(f,{textured:true});let finish;
+  f.ctx.keycapLibrary.save=rec=>new Promise(resolve=>{finish=()=>resolve({...rec,id:'saved-geometry'});});
+  const running=f.el('meshyGo').click();await new Promise(resolve=>setImmediate(resolve));
+  const selected=triangle();f.ctx.slicerRaw=selected;f.ctx.meshyModelOpened('New selection',selected,{});
+  const info=f.el('meshyInfo').textContent;finish();await running;
+  assert.equal(f.el('meshyInfo').textContent,info);assert.equal(f.ctx.slicerRaw,selected);assert.equal(g.acks.length,0);assert.ok(g.pending());
 });
 
 console.log(passed+' model Library regression groups passed; no printer or network access.');

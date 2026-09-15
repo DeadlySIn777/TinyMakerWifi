@@ -229,6 +229,7 @@
         var v = c.value;
         out.push({ id: v.id, at: v.at, name: v.name, prompt: v.prompt,
                    kind: v.kind, thumb: v.thumb, triangles: v.triangles,
+                   sourceTool:v.topperRecipe?'topper':null,
                    design: v.design,
                    /* Measured at save. A record written before this existed has
                       none, and the card says so for those two fields rather
