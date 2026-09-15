@@ -19,7 +19,8 @@ function fixture(){
   window:{keycapShare:SH,keycapProduct:{capture:p=>({...p,state:p.positions?'ready':'needs-attention'})},
    keycapLibrary:{save:rec=>new Promise((resolve,reject)=>pending.push({rec,resolve,reject}))}}};
  vm.createContext(ctx);
- vm.runInContext(region('  var sculptSaves =','  function drawShelf()')+
+ vm.runInContext(region('  function meshProvenance(','  function setSourceReference(')+
+  region('  var sculptSaves =','  function drawShelf()')+
   region('  function designOf() {','  function applyDesign(d)'),ctx);
  return {ctx,pending,sessions,messages,run:s=>vm.runInContext(s,ctx),
   state:()=>vm.runInContext('({id:st.libId,key:lastSavedProduct&&lastSavedProduct.key,product:lastSavedProduct&&lastSavedProduct.product,current:!!lastSavedProduct&&lastSavedProduct.source===st.sculpt&&lastSavedProduct.key===currentProductKey(window.keycapShare.encode(designOf()))})',ctx)};

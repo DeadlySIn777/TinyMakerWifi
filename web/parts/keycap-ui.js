@@ -60,6 +60,7 @@
   }
 
   // ---- sculpture settings -----------------------------------------------
+  var textureBusy=false;
   // Reference colors never enter the geometry, socket or slicer paths.
   function restoreReference(d){
     st.colorMode=d.colorMode==='color'?'color':'solid';
@@ -68,12 +69,22 @@
     st.useSourceColors=d.useSourceColors!==false;
     paintReference();
   }
-  function setSourceReference(colors,kind){
+  function meshProvenance(source){
+    if(!source||typeof source.previewId!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(source.previewId))return null;
+    return {previewId:source.previewId,refineId:typeof source.refineId==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(source.refineId)?source.refineId:null};
+  }
+  function setSourceReference(colors,kind,texture,provenance){
     var valid=!!colors&&!!st.sculpt&&colors.length===st.sculpt.length;
     if(valid)for(var i=0;i<colors.length;i++)if(!Number.isFinite(colors[i])||colors[i]<0||colors[i]>1){valid=false;break;}
     st.sourceColors=valid?new Float32Array(colors):null;
     st.sourceColorKind=valid?String(kind||'material'):null;
     st.seatedColors=null;
+    st.sourceTexture=null;st.seatedTexture=null;st.meshySource=meshProvenance(provenance);
+    var color=window.keycapColor;
+    if(texture&&color&&color.validTextureReference&&color.validTextureReference(texture,st.sculpt)){
+      st.sourceTexture=color.cloneTextureReference(texture);
+      st.seatedTexture=color.reorderTextureForSeat(st.sourceTexture);
+    }
     if(valid){
       st.seatedColors=new Float32Array(colors.length);
       // seat() reverses each art triangle after its Z reflection.
@@ -87,19 +98,63 @@
     if($('kcColorMode')&&$('kcColorMode').querySelectorAll)Array.prototype.forEach.call($('kcColorMode').querySelectorAll('button'),function(b){var on=b.getAttribute('data-color-mode')===(st.colorMode||'solid');b.classList.toggle('on',on);b.setAttribute('aria-pressed',String(on));});
     if($('kcColorOptions'))$('kcColorOptions').hidden=st.colorMode!=='color';
     if($('kcBaseColor'))$('kcBaseColor').value=st.baseColor||'#f3bdd6';
-    if($('kcArtColor')){$('kcArtColor').value=st.artColor||'#a9dbcc';$('kcArtColor').disabled=!!st.sourceColors&&st.useSourceColors!==false;}
-    if($('kcSourceColorWrap'))$('kcSourceColorWrap').hidden=!st.sourceColors;
+    var hasSource=!!(st.sourceTexture||st.sourceColors);
+    if($('kcArtColor')){$('kcArtColor').value=st.artColor||'#a9dbcc';$('kcArtColor').disabled=hasSource&&st.useSourceColors!==false;}
+    if($('kcSourceColorWrap'))$('kcSourceColorWrap').hidden=!hasSource;
     if($('kcSourceColors'))$('kcSourceColors').checked=st.useSourceColors!==false;
-    say('kcColorSource',st.sourceColors&&st.useSourceColors!==false?(st.sourceColorKind==='partial'?'Some source colors unavailable · partial reference':'Original model colors · painting reference'):'Custom swatches · painting reference');
+    say('kcColorSource',hasSource&&st.useSourceColors!==false?(st.sourceTexture?'Original model texture':st.sourceColorKind==='partial'?'Partial source colors':'Original model colors'):'Custom swatches');
+    say('kcTextureStatus',!st.sculpt?'':st.sourceTexture?(st.sourceColorKind==='partial'?'Texture available · some materials unavailable':'Mesh texture available'):st.sourceColors?'Source colors available · no UV texture':'No source texture · using your swatches');
+    if($('kcAddTexture')){
+      var pendingTask=window.meshy&&window.meshy.pending&&window.meshy.pending();
+      var recoverable=pendingTask&&pendingTask.from==='keycap'&&pendingTask.stage==='refine';
+      $('kcAddTexture').hidden=!st.sculpt||(!st.meshySource&&!recoverable)||!!st.sourceTexture;
+      $('kcAddTexture').disabled=!!textureBusy||!!pendingTask&&!recoverable;
+      $('kcAddTexture').textContent=recoverable?'Recover Meshy texture':'Add Meshy texture';
+    }
   }
   function referenceChanged(){paintReference();rememberSession();drawHero();paintProductState();}
   function bindReference(){
     $('kcColorMode')&&Array.prototype.forEach.call($('kcColorMode').querySelectorAll('button'),function(b){b.addEventListener('click',function(){st.colorMode=b.getAttribute('data-color-mode');referenceChanged();});});
     ['kcBaseColor','kcArtColor'].forEach(function(id){$(id)&&$(id).addEventListener('input',function(){st[id==='kcBaseColor'?'baseColor':'artColor']=this.value;referenceChanged();});});
     $('kcSourceColors')&&$('kcSourceColors').addEventListener('change',function(){st.useSourceColors=this.checked;referenceChanged();});
+    $('kcAddTexture')&&$('kcAddTexture').addEventListener('click',addMeshyTexture);
   }
   function parsedReference(parsed){
     return window.keycapColor?window.keycapColor.fromGLB(parsed):Promise.resolve({colors:null,kind:'none'});
+  }
+  function textureNotice(message,bad){
+    say('kcTextureStatus',message,bad?'bad':'');
+    if(window.designerFeedback)window.designerFeedback.notice(message,{kind:bad?'error':'success'});
+  }
+  function addMeshyTexture(){
+    if(textureBusy||!st.sculpt||!window.meshy)return Promise.resolve(false);
+    var open=window.meshy.pending&&window.meshy.pending();
+    if(open){
+      if(open.from==='keycap'&&open.stage==='refine')return resumeGeneration();
+      textureNotice('Recover the pending Meshy task before adding texture.',true);return Promise.resolve(false);
+    }
+    if(!st.meshySource||!window.meshy.generateTexture){textureNotice('This model has no saved Meshy preview. Import its textured GLB to use its colors.',true);return Promise.resolve(false);}
+    if(!window.meshy.hasKey()){textureNotice('Add your Meshy API key in Settings first.',true);return Promise.resolve(false);}
+    var source=st.sculpt,provenance=meshProvenance(st.meshySource),design=designOf(),code=window.keycapShare.encode(design);
+    var ask=typeof uiConfirm==='function'?uiConfirm('Add a Meshy texture to this artwork? This uses Meshy credits. Your current design stays until the textured model arrives.',{ok:'Add texture',cancel:'Keep current'}):Promise.resolve(confirm('Add a Meshy texture using your Meshy credits?'));
+    return Promise.resolve(ask).then(function(yes){
+      if(!yes||st.sculpt!==source)return false;
+      var load=nextSculptLoad();textureBusy=true;genBusy(true);paintReference();
+      return window.meshy.generateTexture(provenance.previewId,{from:'keycap',prompt:st.skinFrom||'',designCode:code},function(message){if(load===sculptLoadSerial)say('kcTextureStatus',message);})
+        .then(function(state){var parsed=window.meshyParseGLB(state.glb);return parsedReference(parsed).then(function(reference){
+          if(load!==sculptLoadSerial)throw new Error('Another model was opened. The Meshy texture task is kept for recovery.');
+          applyDesign(design);st.sculpt=parsed.positions;
+          setSourceReference(reference.colors,reference.kind,reference.textureReference,state);
+          if(state.deliveryId)sculptDeliveries.set(st.sculpt,state.deliveryId);
+          st.libId=null;st.skinFrom=design.prompt||'';st.art='gen';paintArt('gen');refresh();
+          return keepCurrent(st.skinFrom||'Textured keycap').then(function(rec){
+            if(rec&&rec.id)textureNotice(st.sourceTexture?'Textured keycap saved to Library.':'Artwork saved; texture could not be decoded. The task is kept for recovery.',!st.sourceTexture);
+            return rec;
+          });
+        });})
+        .catch(function(e){offerManualDownload(e);textureNotice(e.message||'Meshy texture could not be added.',true);return false;})
+        .then(function(result){textureBusy=false;genBusy(false);paintReference();return result;});
+    });
   }
 
   var artisanStyleDraft=null,artisanPromptBefore='',artisanDraftStorageNote='';
@@ -405,6 +460,7 @@
       g.hidden = g.getAttribute('data-for') !== String(n);
     });
     $('kcCard').classList.toggle('kcStep1', n === 1);
+    $('kcCard').classList.toggle('kcReview', n === 4);
     /* ⚠️ "Done" USED TO DO NOTHING. go() renamed the button at step 4 and the
        handler guarded on st.step < 4, so the biggest, reddest control on the
        card fell through every branch: nothing saved, nothing confirmed, no
@@ -584,7 +640,7 @@
       function stillRestoring(){return st.libId===restoringId&&st.sculpt===restoringSource&&st.art==='gen';}
       window.keycapLibrary.get(restoringId).then(function (rec) {
         if(!stillRestoring())return; // A Clear, import or Library selection wins over a late read.
-        if (rec && rec.positions) { st.sculpt = rec.positions;setSourceReference(rec.sourceColors,rec.sourceColorKind);rememberLoadedProduct(rec);refresh(); }
+        if (rec && rec.positions) { st.sculpt = rec.positions;setSourceReference(rec.sourceColors,rec.sourceColorKind,rec.sourceTexture,rec.meshySource);rememberLoadedProduct(rec);refresh(); }
         else st.libId = null;
       }).catch(function () { if(stillRestoring())st.libId = null; });
     }
@@ -722,6 +778,8 @@
       prompt: prompt || st.skinFrom || '',
       kind: 'sculpt', positions: positions, thumb: thumb,
       sourceColors:st.sourceColors?new Float32Array(st.sourceColors):null,sourceColorKind:st.sourceColorKind||null,
+      sourceTexture:st.sourceTexture&&window.keycapColor?window.keycapColor.cloneTextureReference(st.sourceTexture):null,
+      meshySource:meshProvenance(st.meshySource),
       /* THE CAP'S MEASUREMENTS, taken here because this is the only place that
          has them. st.sculpt is in the generator's own units - the Library
          cannot recover millimetres from it - and what the owner wants to know
@@ -736,7 +794,7 @@
         if (!rec || !rec.id) throw new Error('the Library did not confirm the saved model');
         cacheEntry.rec=rec;
         var deliveryId=sculptDeliveries.get(source);
-        if(deliveryId&&window.meshy&&window.meshy.acknowledge){window.meshy.acknowledge(deliveryId);sculptDeliveries.delete(source);}
+        if(deliveryId&&window.meshy&&window.meshy.acknowledge&&(!record.meshySource||!record.meshySource.refineId||record.sourceTexture)){window.meshy.acknowledge(deliveryId);sculptDeliveries.delete(source);}
         adoptSavedProduct(source,productKey,positions,rec,product);
         drawShelf();
         if(product&&product.state!=='ready'){
@@ -826,7 +884,7 @@
         st.art = 'gen'; paintArt('gen');
       } else setArt('gen');
       st.sculpt = new Float32Array(rec.positions);
-      setSourceReference(rec.sourceColors,rec.sourceColorKind);
+      setSourceReference(rec.sourceColors,rec.sourceColorKind,rec.sourceTexture,rec.meshySource);
       st.skinFrom = rec.prompt || '';
       st.libId = id;
       rememberLoadedProduct(rec);
@@ -846,7 +904,7 @@
      goes through the identical seat/reseat/check path, so a dropped file is not
      a lesser citizen - it gets the floating-piece check, the print pose and the
      library entry exactly like a generated one. */
-  function takeMesh(positions, label, deliveryId, reference) {
+  function takeMesh(positions, label, deliveryId, reference, provenance) {
     if (!positions || positions.length < 9) throw new Error('No usable triangles in that file.');
     var tris = positions.length / 9;
     /* 30k is what a generation asks for; much past that and the software
@@ -857,7 +915,7 @@
         'browser. Decimate it to about 30,000 first.');
     nextSculptLoad();
     st.sculpt = positions;
-    setSourceReference(reference&&reference.colors,reference&&reference.kind);
+    setSourceReference(reference&&reference.colors,reference&&reference.kind,reference&&reference.textureReference,provenance);
     if(deliveryId)sculptDeliveries.set(positions,deliveryId);
     st.libId = null;
     st.icon = null;
@@ -926,10 +984,10 @@
 
   // ---- the Meshy route ---------------------------------------------------
   function genBusy(on) {
-    ['kcGen', 'kcGenClear', 'kcNext', 'kcBack', 'kcPrompt', 'kcSculptHeight', 'kcMeshyDetail','kcMeshyUltra', 'kcSculptStyle', 'kcBrowseStyles', 'kcStyleDraftCancel','kcSculptRotation','kcSculptSize','kcSculptFill','kcSaveProduct','kcProductName'].forEach(function (id) {
+    ['kcGen', 'kcGenClear', 'kcNext', 'kcBack', 'kcPrompt', 'kcSculptHeight', 'kcMeshyDetail','kcMeshyUltra', 'kcSculptStyle', 'kcBrowseStyles', 'kcStyleDraftCancel','kcSculptRotation','kcSculptSize','kcSculptFill','kcSaveProduct','kcProductName','kcAddTexture'].forEach(function (id) {
       var e = $(id); if (e) e.disabled = !!on;
     });
-    if (!on) {syncClear();paintProductState();if($('kcBack'))$('kcBack').disabled=st.step===1;}
+    if (!on) {syncClear();paintProductState();paintReference();if($('kcBack'))$('kcBack').disabled=st.step===1;}
   }
 
   /* ⚠️ #kcGenClear SHIPS DISABLED and used to be enabled only by genBusy(false),
@@ -996,21 +1054,26 @@
        written before this field existed have no `from`, and those still come
        here, because this card is where they used to go. */
     if (d.from && d.from !== 'keycap') return;
+    var load=nextSculptLoad();
     genBusy(true);
     say('kcGenNote', 'a generation was still running - picking it up\u2026');
-    window.meshy.resume(function (m) { say('kcGenNote', m); })
+    return window.meshy.resume(function (m) { if(load===sculptLoadSerial)say('kcGenNote', m); })
       .then(function (state) {
         if (!state || !state.glb) { genBusy(false); return; }
+        if(load!==sculptLoadSerial)return false;
         var parsed = window.meshyParseGLB(state.glb);
         var recoveredCode = d.designCode || d.opts && d.opts.designCode, recoveredDesign = null;
         if (recoveredCode && window.keycapShare) {
           recoveredDesign = window.keycapShare.decode(recoveredCode);
-          applyDesign(recoveredDesign);
         }
-        return parsedReference(parsed).then(function(ref){return takeMesh(parsed.positions, recoveredDesign && recoveredDesign.prompt || d.prompt || 'recovered generation',state.deliveryId,ref);});
+        return parsedReference(parsed).then(function(ref){
+          if(load!==sculptLoadSerial)return false;
+          if(recoveredDesign)applyDesign(recoveredDesign);
+          return takeMesh(parsed.positions, recoveredDesign && recoveredDesign.prompt || d.prompt || 'recovered generation',state.deliveryId,ref,state);
+        });
       })
       .catch(function (e) {
-        offerManualDownload(e, 'could not recover the interrupted generation: ');
+        if(load===sculptLoadSerial)offerManualDownload(e, 'could not recover the interrupted generation: ');
       })
       .then(function () { genBusy(false); });
   }
@@ -1096,14 +1159,17 @@
     generatedDesign.meshyPolycount = request.polycount === 100000 ? 100000 : 30000;
     generatedDesign.meshyUltra = request.ultra===true;
     var designCode = window.keycapShare ? window.keycapShare.encode(generatedDesign) : null;
+    var load=nextSculptLoad();
     genBusy(true);
     say('kcGenNote', 'asking Meshy\u2026');
     return window.meshy.generate(prompt, { polycount: request.polycount===100000?100000:30000, ultra:request.ultra===true, refine: false, from: 'keycap', designCode: designCode },
-      function (m) { say('kcGenNote', m); })
+      function (m) { if(load===sculptLoadSerial)say('kcGenNote', m); })
       .then(function (state) {
+        if(load!==sculptLoadSerial)return null;
         var parsed = window.meshyParseGLB(state.glb);
-        return parsedReference(parsed).then(function(reference){return {parsed:parsed,state:state,reference:reference};});
+        return parsedReference(parsed).then(function(reference){return load===sculptLoadSerial?{parsed:parsed,state:state,reference:reference}:null;});
       }).then(function(delivered){
+        if(!delivered)return false;
         var parsed=delivered.parsed,state=delivered.state;
         /* THE MODEL STAYS A MODEL.
 
@@ -1122,7 +1188,7 @@
         if(request.styleDraft)cancelArtisanStyleDraft(false);
         applyDesign(generatedDesign);
         st.sculpt = parsed.positions;
-        setSourceReference(delivered.reference.colors,delivered.reference.kind);
+        setSourceReference(delivered.reference.colors,delivered.reference.kind,delivered.reference.textureReference,state);
         if(state.deliveryId)sculptDeliveries.set(st.sculpt,state.deliveryId);
         st.libId = null;
         st.skinFrom = request.subject || prompt;
@@ -1160,7 +1226,7 @@
          told the owner to click something that was not there, about a model
          they had already paid for. The resume path above has always called
          this; the Generate path did not. */
-      .catch(function (e) { offerManualDownload(e); })
+      .catch(function (e) { if(load===sculptLoadSerial)offerManualDownload(e); })
       .then(function () { genBusy(false); });
   }
 
@@ -1236,7 +1302,7 @@
   function dropSculpt() {
     nextSculptLoad();
     st.sculpt = null;
-    st.sourceColors=null;st.seatedColors=null;st.sourceColorKind=null;paintReference();
+    st.sourceColors=null;st.seatedColors=null;st.sourceColorKind=null;st.sourceTexture=null;st.seatedTexture=null;st.meshySource=null;paintReference();
     st.libId = null;
   }
 
@@ -1513,7 +1579,8 @@
     if (!built) { hero.setMesh(null); return; }
     if(hero.setAppearance)hero.setAppearance({mode:st.colorMode||'solid',base:st.baseColor,art:st.artColor,useSourceColors:st.useSourceColors!==false},{draw:false});
     var printed=st.pose==='printed',colors=printed&&built.printPlan&&built.printPlan.mouthDown?st.sourceColors:st.seatedColors;
-    hero.setMesh(printed ? printedMesh() : built.positions,{artStart:built.seated?built.seated.capTriangles*9:built.positions.length,artColors:colors});
+    var texture=printed&&built.printPlan&&built.printPlan.mouthDown?st.sourceTexture:st.seatedTexture;
+    hero.setMesh(printed ? printedMesh() : built.positions,{artStart:built.seated?built.seated.capTriangles*9:built.positions.length,artColors:colors,artTexture:texture});
   }
 
   /* The lean the machine will use: whatever the footprint needs, or whatever a
@@ -1772,16 +1839,23 @@
        the list rather than buried as its eighth row - unless there is no such
        number, in which case a confident "1h 47m" over a cap that cannot be
        printed is the worst thing on the card. */
-    var html = plan.ok === false
-      ? '<div class="kcHero kcHeroBad"><b>does not fit</b><span>' +
-        esc(plan.why || 'no lean clears the build volume') + '</span></div>'
-      : '<div class="kcHero"><b>' + (est ? est.text : '—') +
-        '</b><span>for a full plate of ' + per.count + '</span></div>';
-    html += '<dl>' + rows.map(function (r) {
+    var detailsOpen = $('kcPrintDetails') && $('kcPrintDetails').open;
+    var html = '<div class="kcReviewSummary"><span class="kcReviewLabel">Print estimate</span>' +
+      (plan.ok === false
+        ? '<div class="kcHero kcHeroBad" role="alert"><b>Does not fit</b><span>' +
+          esc(plan.why || 'No orientation clears the build volume.') + '</span></div>'
+        : '<div class="kcReviewNumbers"><b>' + esc(est ? est.text : '—') +
+          '</b><span>~' + money.resinMl.toFixed(1) + ' ml resin</span></div>') +
+      '<p class="kcReviewSpec">' + esc(st.profile + ' ' + st.row + ' · ' + st.sizeU + 'u') +
+      ' <span>·</span> ' + (supports ? 'With supports' : 'No supports') + '</p></div>';
+    if (built.warnings && built.warnings.length) html += '<div class="kcReviewWarnings" role="status">' +
+      built.warnings.map(function(n){return '<p>' + esc(n) + '</p>';}).join('') + '</div>';
+    html += '<details id="kcPrintDetails" class="kcDisclosure"' + (detailsOpen ? ' open' : '') +
+      '><summary>Print details</summary><dl>' + rows.map(function (r) {
       return '<dt>' + r[0] + '</dt><dd>' + r[1] + '</dd>';
     }).join('') + '</dl>';
 
-    var notes = (built.warnings || []).slice();
+    var notes = [];
     if (plan.why) notes.push(plan.why);
     /* The trade, stated rather than left to be discovered: engraving the same
        legend removes the lean, the supports and most of the print. */
@@ -1793,8 +1867,8 @@
         flatLayers.toLocaleString() + ' layers instead of ' + layers.toLocaleString() + '.');
     }
     if (notes.length) html += '<div class="hint" style="margin-top:8px">' +
-      notes.map(function (n) { return '• ' + n; }).join('<br>') + '</div>';
-    el.innerHTML = html;
+      notes.map(function (n) { return esc(n); }).join('<br>') + '</div>';
+    el.innerHTML = html + '</details>';
     /* A control that cannot succeed does not stay lit. All three of these end
        in K.layout(), which will place nothing. */
     var dead = plan.ok === false && !st.plate.length;
@@ -1803,6 +1877,13 @@
       b.disabled = dead;
       b.title = dead ? (plan.why || 'this cap does not fit the plate at any lean') : '';
     });
+    if (st.step >= 4) {
+      $('kcNext').disabled = dead || !!($('kcGen') && $('kcGen').disabled);
+      $('kcNext').title = dead ? (plan.why || 'This cap does not fit the plate.') : '';
+    } else if (!$('kcGen') || !$('kcGen').disabled) {
+      $('kcNext').disabled = false;
+      $('kcNext').title = '';
+    }
     say('kcPlate', st.plate.length ? (st.plate.length + ' cap' + (st.plate.length > 1 ? 's' : '') +
       ' on the plate') : stemFitPlateNotice);
   }
@@ -1810,7 +1891,9 @@
   // ---- actions -----------------------------------------------------------
   function actionMessage(message,bad){
     say('kcState',message,bad?'bad':'');
-    say('kcActionNote',message,bad?'bad':'');
+    var feedback=window.designerFeedback;
+    say('kcActionNote',bad||!feedback?message:'',bad?'bad':'');
+    if(!bad&&feedback&&feedback.notice)feedback.notice(message);
     if(bad&&window.designerFeedback&&window.designerFeedback.help)window.designerFeedback.help('Action needs attention',message);
   }
   function binarySTL(pos) {
@@ -2030,18 +2113,18 @@
     var canvas=document.createElement('canvas');canvas.width=560;canvas.height=550;
     var view=window.keycapView3d.attach(canvas,{spin:false,interactive:false,dist:3,maxPx:560,tokens:viewTokens()});
     view.setAppearance({mode:'color',base:st.baseColor,art:st.artColor,useSourceColors:st.useSourceColors!==false},{draw:false});
-    view.setMesh(built.positions,{artStart:built.seated?built.seated.capTriangles*9:built.positions.length,artColors:st.seatedColors});
+    view.setMesh(built.positions,{artStart:built.seated?built.seated.capTriangles*9:built.positions.length,artColors:st.seatedColors,artTexture:st.seatedTexture});
     [[-.62,.52,'Three-quarter'],[0,0,'Front'],[Math.PI/2,0,'Side'],[Math.PI,0,'Back']].forEach(function(p,i){
       view.az=p[0];view.el=p[1];view.draw();var x=20+(i%2)*590,y=102+Math.floor(i/2)*585;
       g.drawImage(canvas,x,y,560,550);g.fillStyle='#e8dde2';g.font='20px system-ui';g.fillText(p[2],x+18,y+561);
     });
     view.stop();
     g.font='18px system-ui';g.fillStyle='#b5bbc6';
-    g.fillText(st.sourceColors&&st.useSourceColors!==false?'Original model colors (sampled) + selected cap color':'Custom color plan · model has no active source colors',38,1301);
+    g.fillText(st.useSourceColors!==false&&st.sourceTexture?'Original UV texture + selected cap color':st.sourceColors&&st.useSourceColors!==false?'Original model colors + selected cap color':'Custom color plan · no active source texture',38,1301);
     g.fillText('Reference only · STL and resin output do not contain these colors.',38,1333);
     sheet.toBlob(function(blob){if(!blob){actionMessage('Could not create the painting guide.',true);return;}
       save(blob,'paint-guide-'+(st.name||st.key||'artisan').replace(/[^a-z0-9_-]+/gi,'-').slice(0,65)+'.png');
-      actionMessage('Four-view painting guide downloaded.');if(window.designerFeedback)window.designerFeedback.notice('Painting guide download started.');
+      actionMessage('Four-view painting guide downloaded.');
     },'image/png');
   }
 

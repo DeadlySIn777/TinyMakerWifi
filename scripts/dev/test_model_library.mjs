@@ -328,6 +328,18 @@ await test('Models recovers only its own pending model without paying for anothe
   await f.el('meshyGo').click();assert.equal(g.submitted.length,0);assert.deepEqual(g.acks,['preview-inert']);assert.equal(g.pending(),null);
   assert.equal(f.calls.some(c=>c[0]==='cap'),false);
 });
+await test('Models saves decoded UV texture and provenance before acknowledgement, then reopens without a paid request',async()=>{
+  const f=fixture(),g=generationSetup(f,{textured:true}),Color=require('../../web/parts/keycap-color.js');
+  const texture={version:1,positionLength:9,baseColors:new Float32Array(9).fill(1),textures:[{start:0,count:3,
+    uvs:new Float32Array([0,0,1,0,0,1]),width:1,height:1,data:new Uint8ClampedArray([255,80,20,255]),wrapS:33071,wrapT:33071,filter:'linear'}]};
+  f.ctx.keycapColor={...Color,fromGLB:async()=>({colors:new Float32Array(9).fill(.5),kind:'texture',textureReference:texture})};
+  await f.el('meshyGo').click();const rec=[...f.records.values()][0];
+  assert.ok(Color.validTextureReference(rec.sourceTexture,rec.positions));assert.notEqual(rec.sourceTexture.textures[0].data,texture.textures[0].data);
+  assert.equal(rec.meshySource.previewId,g.state.previewId);assert.equal(rec.meshySource.refineId,g.state.deliveryId);
+  assert.deepEqual(g.acks,['texture-inert']);assert.equal(g.pending(),null);
+  f.ctx.meshyModelOpened(rec.name,rec.positions,rec);assert.equal(f.el('meshyRefine').disabled,true);
+  assert.equal(f.records.size,1);assert.equal(g.submitted.length,1);
+});
 await test('startup recovery does not replace a model already chosen in Library',async()=>{
   const f=fixture(),g=generationSetup(f);g.seed();let resumed=0;f.ctx.meshy.resume=async()=>{resumed++;return g.state;};
   const selected=triangle();f.ctx.slicerRaw=selected;f.ctx.meshyModelOpened('My selected model',selected,{});

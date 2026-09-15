@@ -1,6 +1,6 @@
 # TinyMakerWifi
 
-**DeadlySIn777 Studio fork — 0.18.10 development build.** This fork adds the
+**DeadlySIn777 Studio fork — 0.18.11 development build.** This fork adds the
 browser design studio, artisan keycaps, toppers, Meshy integration and verified
 upload flow. See [Studio changes and usage](docs/studio-fork.md) and the
 [PC slicer bridge](docs/slicers.md). The upstream project links below describe

@@ -87,6 +87,7 @@
           loaded.sourceColors = new Float32Array(reference.colors);
           loaded.sourceColorKind = reference.kind || 'material';
         }
+        if(reference&&reference.textureReference)loaded.sourceTexture=window.keycapColor.cloneTextureReference(reference.textureReference);
         return h;
       });
     });
@@ -105,8 +106,8 @@
       deliveryId: state.deliveryId, prompt: prompt
     }, version).then(function () { requireLoad(version);return keepInLibrary(prompt, prompt); })
       .then(function (record) {
-        if (record && record.id && state.refineId) {
-          say('meshyInfo', 'Geometry saved in the Library. Export the GLB to keep its texture too; task recovery remains available until then.');
+        if (record && record.id && state.refineId && !record.sourceTexture) {
+          say('meshyInfo', 'Geometry saved. Export the GLB to keep its texture; it could not be retained here. The task stays available for recovery.');
         } else if (record && record.id && window.meshy.acknowledge) window.meshy.acknowledge(state.deliveryId);
         return record;
       });
@@ -210,6 +211,8 @@
     var positions = modelPositions();
     var sourceColors = last.sourceColors ? new Float32Array(last.sourceColors) : null;
     var sourceColorKind = last.sourceColorKind || null;
+    var sourceTexture=last.sourceTexture&&window.keycapColor?window.keycapColor.cloneTextureReference(last.sourceTexture):null;
+    var meshySource=last.previewId?{previewId:last.previewId,refineId:last.refineId||last.textured&&last.deliveryId||null}:null;
     var thumb = null;
     try {
       var c = document.getElementById('printPreviewCanvas');
@@ -239,6 +242,7 @@
       positions: positions,
       sourceColors: sourceColors,
       sourceColorKind: sourceColorKind,
+      sourceTexture:sourceTexture,meshySource:meshySource,
       thumb: thumb
     }); }).then(function (rec) {
       if (!rec || !rec.id) throw new Error('the Library returned no saved record');
@@ -256,7 +260,11 @@
     if(version!=null)requireLoad(version);else loadVersion++;
     last = { name: name, positions: positions, textured: false,
       sourceColors: record && record.sourceColors ? new Float32Array(record.sourceColors) : null,
-      sourceColorKind: record && record.sourceColorKind || null };
+      sourceColorKind: record && record.sourceColorKind || null,
+      sourceTexture:record&&record.sourceTexture&&window.keycapColor?window.keycapColor.cloneTextureReference(record.sourceTexture):null,
+      previewId:record&&record.meshySource&&record.meshySource.previewId||null,
+      refineId:record&&record.meshySource&&record.meshySource.refineId||null };
+    last.textured=!!(last.sourceTexture||last.refineId);
     showHealth(window.meshHealth ? window.meshHealth(positions) : null);
     say('meshyState', 'ready to slice');
     say('meshyInfo', 'Loaded ' + name + ' from the Library. Saved size and pose kept.');

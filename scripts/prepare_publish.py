@@ -14,7 +14,7 @@ import shutil
 import subprocess
 
 BASE_COMMIT = "0a797c3ec4abdc744820c2124a2344b8f57ed6d2"
-BRANCH = "codex/0.18.10-studio-fixes"
+BRANCH = "codex/0.18.11-textured-guide"
 TOP = {".gitignore", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE.md",
        "README.md", "ROADMAP.md", "platformio.ini"}
 SOURCE_DIRS = {"src", "web", "include", "wasm", "PrusaSlicer", "test", ".github", "docs"}

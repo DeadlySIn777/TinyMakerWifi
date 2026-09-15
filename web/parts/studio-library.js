@@ -254,9 +254,10 @@
      the product. Older files stay readable; uncolored backups stay V1. */
   var BACKUP_MAGIC = 'TMDES001', COLOR_BACKUP_MAGIC = 'TMDES002', MAX_SOURCE_BYTES = 60 * 1024 * 1024;
   var TOPPER_BACKUP_MAGIC='TMDES003';
+  var TEXTURE_BACKUP_MAGIC='TMDES004',MAX_TEXTURE_BYTES=100*1024*1024;
   var MAX_PRODUCT_BYTES = 300000 * 36, MAX_META_BYTES = 4 * 1024 * 1024;
   var MAX_COLOR_BYTES = MAX_SOURCE_BYTES;
-  var MAX_BACKUP_BYTES = 28 + MAX_META_BYTES + MAX_SOURCE_BYTES + MAX_PRODUCT_BYTES + MAX_COLOR_BYTES + 10800000;
+  var MAX_BACKUP_BYTES = 32 + MAX_META_BYTES + MAX_SOURCE_BYTES + MAX_PRODUCT_BYTES + MAX_COLOR_BYTES + 10800000 + MAX_TEXTURE_BYTES;
   function backupFail(message) { throw new Error('Design backup: ' + message); }
   function sourceMesh(positions) {
     if (Object.prototype.toString.call(positions) !== '[object Float32Array]' ||
@@ -316,6 +317,9 @@
       prompt: backupText(rec.prompt || '', 10000, 'prompt', true) || '',
       kind: kind, design: design, thumb: thumb, facts: backupFacts(rec.facts)};
     if(rec.topperRecipe!=null)out.topperRecipe=backupTopperRecipe(rec.topperRecipe);
+    var m=rec.meshySource;
+    if(m&&typeof m.previewId==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(m.previewId))out.meshySource={previewId:m.previewId,
+      refineId:typeof m.refineId==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(m.refineId)?m.refineId:null};
     return out;
   }
   function backupTopperRecipe(recipe){
@@ -339,6 +343,37 @@
         backupFail('the source colors contain invalid RGB values.');
     return colors;
   }
+  function encodeTexture(ref,source,meta){
+    if(!root.keycapColor||!root.keycapColor.validTextureReference(ref,source))backupFail('the UV texture does not match the source geometry.');
+    var chunks=[new Uint8Array(ref.baseColors.buffer,ref.baseColors.byteOffset,ref.baseColors.byteLength)],length=ref.baseColors.byteLength;
+    var entries=ref.textures.map(function(t){
+      var uv=new Uint8Array(t.uvs.buffer,t.uvs.byteOffset,t.uvs.byteLength),pixels=new Uint8Array(t.data.buffer,t.data.byteOffset,t.data.byteLength);
+      chunks.push(uv,pixels);length+=uv.byteLength+pixels.byteLength;
+      return {start:t.start,count:t.count,width:t.width,height:t.height,wrapS:t.wrapS,wrapT:t.wrapT,filter:t.filter,uvBytes:uv.byteLength,pixelBytes:pixels.byteLength};
+    });
+    if(length>MAX_TEXTURE_BYTES)backupFail('the source texture is too large.');
+    var raw=new Uint8Array(length),offset=0;chunks.forEach(function(c){raw.set(c,offset);offset+=c.byteLength;});
+    meta.sourceTexture={version:1,positionLength:ref.positionLength,baseBytes:ref.baseColors.byteLength,entries:entries};
+    meta.sourceTextureHash=bytesHash(raw);
+    return raw;
+  }
+  function decodeTexture(buffer,meta,source){
+    var m=meta.sourceTexture;
+    if(!m||m.version!==1||m.positionLength!==source.length||m.baseBytes!==source.byteLength||
+      !Array.isArray(m.entries)||m.entries.length<1||m.entries.length>16||m.baseBytes>buffer.byteLength||
+      bytesHash(new Uint8Array(buffer))!==meta.sourceTextureHash)throw new Error('invalid texture metadata');
+    var ref={version:1,positionLength:source.length,baseColors:new Float32Array(buffer.slice(0,m.baseBytes)),textures:[]},offset=m.baseBytes;
+    m.entries.forEach(function(t){
+      if(!t||!Number.isSafeInteger(t.uvBytes)||!Number.isSafeInteger(t.pixelBytes)||t.uvBytes<0||t.pixelBytes<0||
+        t.uvBytes%4||t.uvBytes!==t.count*8||t.pixelBytes!==t.width*t.height*4||offset+t.uvBytes+t.pixelBytes>buffer.byteLength)
+        throw new Error('invalid texture section lengths');
+      var uv=new Float32Array(buffer.slice(offset,offset+t.uvBytes));offset+=t.uvBytes;
+      var data=new Uint8ClampedArray(buffer.slice(offset,offset+t.pixelBytes));offset+=t.pixelBytes;
+      ref.textures.push({start:t.start,count:t.count,width:t.width,height:t.height,wrapS:t.wrapS,wrapT:t.wrapT,filter:t.filter,uvs:uv,data:data});
+    });
+    if(offset!==buffer.byteLength||!root.keycapColor||!root.keycapColor.validTextureReference(ref,source))throw new Error('invalid texture reference');
+    return ref;
+  }
   function encodeBackup(rec) {
     var source = sourceMesh(rec && rec.positions), meta = backupMetadata(rec);
     var raw = new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
@@ -347,6 +382,7 @@
     if(topper&&(!meta.topperRecipe||topper.length>2700000))backupFail('the original topper artwork or its settings are invalid.');
     var topperRaw=topper?new Uint8Array(topper.buffer,topper.byteOffset,topper.byteLength):null;
     var colorRaw = colors ? new Uint8Array(colors.buffer, colors.byteOffset, colors.byteLength) : null;
+    var textureRaw=rec.sourceTexture==null?null:encodeTexture(rec.sourceTexture,source,meta);
     var product = rec.product && rec.product.positions;
     if (product != null && (Object.prototype.toString.call(product) !== '[object Float32Array]' ||
         product.byteLength % 36 || product.byteLength > MAX_PRODUCT_BYTES))
@@ -363,30 +399,32 @@
     }
     var json = new TextEncoder().encode(JSON.stringify(meta));
     if (json.byteLength > MAX_META_BYTES) backupFail('the saved metadata is too large.');
-    var header = new ArrayBuffer(topper?28:colors ? 24 : 20), view = new DataView(header);
-    var magic = topper?TOPPER_BACKUP_MAGIC:colors ? COLOR_BACKUP_MAGIC : BACKUP_MAGIC;
+    var header = new ArrayBuffer(textureRaw?32:topper?28:colors ? 24 : 20), view = new DataView(header);
+    var magic = textureRaw?TEXTURE_BACKUP_MAGIC:topper?TOPPER_BACKUP_MAGIC:colors ? COLOR_BACKUP_MAGIC : BACKUP_MAGIC;
     for (var i = 0; i < 8; i++) view.setUint8(i, magic.charCodeAt(i));
     view.setUint32(8, json.byteLength, true); view.setUint32(12, raw.byteLength, true);
     view.setUint32(16, product ? product.byteLength : 0, true);
-    if (colors||topper) view.setUint32(20, colors?colorRaw.byteLength:0, true);
-    if(topper)view.setUint32(24,topperRaw.byteLength,true);
-    return new Blob([header, json, raw, product || new Uint8Array(0), colorRaw || new Uint8Array(0),topperRaw||new Uint8Array(0)], {type:'application/octet-stream'});
+    if (colors||topper||textureRaw) view.setUint32(20, colors?colorRaw.byteLength:0, true);
+    if(topper||textureRaw)view.setUint32(24,topper?topperRaw.byteLength:0,true);
+    if(textureRaw)view.setUint32(28,textureRaw.byteLength,true);
+    return new Blob([header, json, raw, product || new Uint8Array(0), colorRaw || new Uint8Array(0),topperRaw||new Uint8Array(0),textureRaw||new Uint8Array(0)], {type:'application/octet-stream'});
   }
   function decodeBackup(buffer) {
     if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 20 || buffer.byteLength > MAX_BACKUP_BYTES)
       backupFail('the file is empty or larger than the supported backup limit.');
     var view = new DataView(buffer), magic = '';
     for (var i = 0; i < 8; i++) magic += String.fromCharCode(view.getUint8(i));
-    if (magic !== BACKUP_MAGIC && magic !== COLOR_BACKUP_MAGIC&&magic!==TOPPER_BACKUP_MAGIC) backupFail('choose a .tm-design file downloaded from TinyMaker.');
-    var headerLength = magic===TOPPER_BACKUP_MAGIC?28:magic === COLOR_BACKUP_MAGIC ? 24 : 20;
+    if (magic !== BACKUP_MAGIC && magic !== COLOR_BACKUP_MAGIC&&magic!==TOPPER_BACKUP_MAGIC&&magic!==TEXTURE_BACKUP_MAGIC) backupFail('choose a .tm-design file downloaded from TinyMaker.');
+    var headerLength = magic===TEXTURE_BACKUP_MAGIC?32:magic===TOPPER_BACKUP_MAGIC?28:magic === COLOR_BACKUP_MAGIC ? 24 : 20;
     if (buffer.byteLength < headerLength) backupFail('the file header is incomplete.');
     var metaLength = view.getUint32(8, true), sourceLength = view.getUint32(12, true), productLength = view.getUint32(16, true);
     var colorLength = headerLength >= 24 ? view.getUint32(20, true) : 0;
-    var topperLength=headerLength===28?view.getUint32(24,true):0;
+    var topperLength=headerLength>=28?view.getUint32(24,true):0;
+    var textureLength=headerLength===32?view.getUint32(28,true):0;
     if (!metaLength || metaLength > MAX_META_BYTES || !sourceLength || sourceLength > MAX_SOURCE_BYTES ||
         sourceLength % 36 || productLength > MAX_PRODUCT_BYTES || productLength % 36 ||
-        colorLength > MAX_COLOR_BYTES ||topperLength>10800000||topperLength%36||
-        headerLength + metaLength + sourceLength + productLength + colorLength+topperLength !== buffer.byteLength)
+        colorLength > MAX_COLOR_BYTES ||topperLength>10800000||topperLength%36||textureLength>MAX_TEXTURE_BYTES||
+        headerLength + metaLength + sourceLength + productLength + colorLength+topperLength+textureLength !== buffer.byteLength)
       backupFail('the file is incomplete or its stored lengths are invalid.');
     var meta;
     try { meta = JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(new Uint8Array(buffer, headerLength, metaLength))); }
@@ -428,13 +466,18 @@
         warning += (warning ? ' ' : '') + 'Source colors could not be verified and were omitted. Geometry was kept; choose a reference palette in Create.';
       }
     }
-    if(headerLength===28){
+    if(headerLength===28||topperLength){
       try{
         if(!rec.topperRecipe||!topperLength||meta.topperSourceCount!==topperLength/4)throw new Error('invalid topper source metadata');
         var at=offset+sourceLength+productLength+colorLength,rawTopper=new Uint8Array(buffer,at,topperLength);
         if(bytesHash(rawTopper)!==meta.topperSourceHash)throw new Error('damaged topper source');
         rec.topperSource=sourceMesh(new Float32Array(buffer.slice(at,at+topperLength)));
       }catch(e){rec.topperRecipe=null;rec.topperSource=null;warning+=(warning?' ':'')+'The original topper artwork could not be verified. The finished model was kept, but the editable cap settings were omitted.';}
+    }
+    if(headerLength===32){
+      try{var textureAt=offset+sourceLength+productLength+colorLength+topperLength;
+        rec.sourceTexture=decodeTexture(buffer.slice(textureAt,textureAt+textureLength),meta,rec.positions);
+      }catch(e){rec.sourceTexture=null;warning+=(warning?' ':'')+'The UV texture could not be verified and was omitted. Source and product geometry were kept.';}
     }
     return {record:rec, warning:warning};
   }

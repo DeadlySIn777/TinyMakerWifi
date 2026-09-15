@@ -273,7 +273,8 @@
           wraps.every(function (w) { return [33071,33648,10497].indexOf(w) >= 0; });
         if (valid) {
           result.texture = {mime: im.mimeType, bytes: bin.slice(bo, bo + bv.byteLength),
-            offset: off, scale: scale, rotation: rot, wrapS: wraps[0], wrapT: wraps[1]};
+            offset: off, scale: scale, rotation: rot, wrapS: wraps[0], wrapT: wraps[1],
+            filter:sm && sm.magFilter === 9728 ? 'nearest' : 'linear'};
           textureBytes += bv.byteLength;
           result.source = true;
         } else colorPartial = true;

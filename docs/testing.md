@@ -22,6 +22,10 @@ node scripts/dev/test_sculpt_dimensions.cjs
 node scripts/dev/test_slicer_fit_gate.cjs
 node scripts/dev/test_slicer_import_wait.cjs
 node scripts/dev/test_topper_meshy.cjs
+node scripts/dev/test_keycap_texture.cjs
+node scripts/dev/test_texture_lifecycle.cjs
+node scripts/dev/test_texture_backup.cjs
+node scripts/dev/test_color_backup.cjs
 node scripts/dev/test_includes.mjs
 python -m unittest discover -s scripts/tests -p 'test_tm_send*.py' -v
 ```
@@ -98,6 +102,18 @@ The last five harnesses create their own inert page/server; they do not need
 the server on 8794. `browser_start_flow.cjs` still uses the prepared local
 Three.js asset. `browser_library_recovery.cjs` uses port 8796, which must be free.
 Browser receipts go under `.cache`, with screenshots under `research/screenshots`.
+
+The texture and Finish-screen checks also run without the preview server:
+
+```sh
+node scripts/dev/test_keycap_texture_browser.cjs
+node scripts/dev/test_texture_guide_browser.cjs
+node scripts/dev/test_keycap_review_browser.cjs
+```
+
+They test actual rendered texture pixels and the assembled UI with synthetic
+models. The review harness checks desktop and phone layouts, editable fit,
+saved STL geometry, sharing, painting-guide download, and blocked slicing.
 
 ## Pinned slicer integration checks
 

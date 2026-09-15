@@ -144,7 +144,7 @@
   function save(entry) {
     var e = entry || {};
     if (!e.name && !e.prompt) return Promise.reject(new Error('A saved design needs a name or a prompt.'));
-    var product, positions=null, facts, topperRecipe=null, topperSource=null;
+    var product, positions=null, facts, topperRecipe=null, topperSource=null, sourceTexture=null;
     try {
       product = copyProduct(e.product, true);
       if(e.positions!=null){
@@ -153,6 +153,13 @@
         positions=new Float32Array(e.positions);
       }
       facts=withRaw(e.facts,measure(positions));
+      if(e.sourceTexture!=null){
+        if(!positions||!root.keycapColor||!root.keycapColor.validTextureReference||
+          !root.keycapColor.validTextureReference(e.sourceTexture,positions))
+          throw new Error('The source texture could not be verified. Keep the original GLB and try saving again.');
+        sourceTexture=root.keycapColor.cloneTextureReference(e.sourceTexture);
+        if(!sourceTexture)throw new Error('The source texture could not be copied.');
+      }
       if(e.topperRecipe!=null)topperRecipe=copyTopperRecipe(e.topperRecipe);
       if(e.topperSource!=null){
         if(!topperRecipe||Object.prototype.toString.call(e.topperSource)!=='[object Float32Array]'||
@@ -176,6 +183,7 @@
       positions: positions,
       sourceColors: copySourceColors(e.sourceColors,positions),
       sourceColorKind: /^(material|vertex|texture|partial)$/.test(e.sourceColorKind||'')?e.sourceColorKind:null,
+      sourceTexture:sourceTexture, meshySource:copyMeshySource(e.meshySource),
       topperRecipe:topperRecipe, topperSource:topperSource,
       triangles: positions ? positions.length / 9 : 0,
       /* The caller's own measurements win, because only the caller knows the
@@ -204,6 +212,10 @@
     if(!colors||!positions||colors.length!==positions.length||Object.prototype.toString.call(colors)!=='[object Float32Array]')return null;
     for(var i=0;i<colors.length;i++)if(!Number.isFinite(colors[i])||colors[i]<0||colors[i]>1)return null;
     return new Float32Array(colors);
+  }
+  function copyMeshySource(source){
+    if(!source||typeof source.previewId!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(source.previewId))return null;
+    return {previewId:source.previewId,refineId:typeof source.refineId==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(source.refineId)?source.refineId:null};
   }
 
   /* Newest first. Meshes are left behind on purpose - a shelf of twenty models
@@ -262,7 +274,7 @@
   }
 
   root.keycapLibrary = { save: save, list: list, get: get, remove: remove,
-                         measure: measure, copyTopperRecipe:copyTopperRecipe,
+                         measure: measure, copyTopperRecipe:copyTopperRecipe, copyMeshySource:copyMeshySource,
                          clear: clear, trim: trim, usage: usage,
                          newId: newId, MAX: MAX };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.keycapLibrary;

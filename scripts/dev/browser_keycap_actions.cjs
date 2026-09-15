@@ -43,7 +43,17 @@ const decodeSTL = bytes => stl.readSTL(bytes.buffer.slice(bytes.byteOffset, byte
       }
       return route.continue();
     });
+    const reveal = async selector => {
+      const ancestors = await page.locator(selector).evaluate(el => {
+        const all = [...document.querySelectorAll('#kcCard details')], list = [];
+        for (let p = el.parentElement; p; p = p.parentElement) if (p.tagName === 'DETAILS' && !p.open) list.unshift(all.indexOf(p));
+        return list;
+      });
+      for (const index of ancestors) await page.locator('#kcCard details').nth(index).locator(':scope > summary').click();
+      assert.equal(await page.locator(selector).isVisible(), true, selector + ' must be reachable through its disclosure');
+    };
     const download = async (selector, file) => {
+      await reveal(selector);
       const event = page.waitForEvent('download', { timeout: 15000 });
       await page.locator(selector).click();
       const result = await event.catch(async e => {
@@ -75,6 +85,7 @@ const decodeSTL = bytes => stl.readSTL(bytes.buffer.slice(bytes.byteOffset, byte
     checks.push('Imported actual fixture assembles, saves and names a Library product.');
 
     const imageByView = {};
+    await reveal('#kcInspect');
     for (const name of ['perspective', 'front', 'side', 'back', 'bottom']) {
       const button = page.locator('#kcInspect [data-view="' + name + '"]');
       await button.click();
@@ -90,6 +101,7 @@ const decodeSTL = bytes => stl.readSTL(bytes.buffer.slice(bytes.byteOffset, byte
     await page.locator('#kcInspect [data-view="perspective"]').click();
     checks.push('All five inspection buttons work; Made and Printed change the actual rendered mesh.');
 
+    await page.locator('#kcSteps [data-step="4"]').click();
     const productSTL = await download('#kcDownloadProduct', 'product.stl');
     assert.equal(productSTL.length, 84 + productSTL.readUInt32LE(80) * 50);
     assert.ok(productSTL.readUInt32LE(80) > 1000);
@@ -122,12 +134,12 @@ const decodeSTL = bytes => stl.readSTL(bytes.buffer.slice(bytes.byteOffset, byte
         window.__nativeShareCalls++; window.__nativeShareResolve = resolve; window.__nativeShareReject = reject;
       }) });
     });
-    const prior = await page.locator('#kcActionNote').innerText(), beforeNative = downloads.length;
+    const prior = await page.locator('#kcState').textContent(), beforeNative = downloads.length;
     await page.locator('#kcShare').click();
     await page.waitForFunction(() => window.__nativeShareCalls === 1);
-    assert.equal(await page.locator('#kcActionNote').innerText(), prior, 'pending native share cannot report completion');
+    assert.equal(await page.locator('#kcState').textContent(), prior, 'pending native share cannot report completion');
     await page.evaluate(() => window.__nativeShareReject(new DOMException('Canceled', 'AbortError')));
-    await page.waitForFunction(() => document.querySelector('#kcActionNote').textContent === 'Sharing canceled.');
+    await page.waitForFunction(() => document.querySelector('#kcState').textContent === 'Sharing canceled.');
     assert.equal(downloads.length, beforeNative);
     await page.locator('#kcShare').click();
     await page.waitForFunction(() => window.__nativeShareCalls === 2);
@@ -135,13 +147,13 @@ const decodeSTL = bytes => stl.readSTL(bytes.buffer.slice(bytes.byteOffset, byte
     await page.evaluate(() => window.__nativeShareReject(new Error('OS sharing unavailable')));
     const fallback = await fallbackEvent;
     await fallback.saveAs(path.join(output, 'share-native-fallback.png'));
-    await page.waitForFunction(() => document.querySelector('#kcActionNote').textContent.includes('Sharing unavailable'));
+    await page.waitForFunction(() => document.querySelector('#kcState').textContent.includes('Sharing unavailable'));
     const afterFallback = downloads.length;
     await page.locator('#kcShare').click();
     await page.waitForFunction(() => window.__nativeShareCalls === 3);
-    assert.doesNotMatch(await page.locator('#kcActionNote').innerText(), /^Shared picture/);
+    assert.doesNotMatch(await page.locator('#kcState').textContent(), /^Shared picture/);
     await page.evaluate(() => window.__nativeShareResolve());
-    await page.waitForFunction(() => document.querySelector('#kcActionNote').textContent.startsWith('Shared picture'));
+    await page.waitForFunction(() => document.querySelector('#kcState').textContent.startsWith('Shared picture'));
     assert.equal(downloads.length, afterFallback);
     checks.push('Native Share reports success only after completion; Cancel is quiet and real failures fall back to a PNG.');
 
@@ -162,11 +174,10 @@ const decodeSTL = bytes => stl.readSTL(bytes.buffer.slice(bytes.byteOffset, byte
         return result;
       };
     });
-    for (const [index, selector] of ['#kcSlice', '#kcNext'].entries()) {
-      if (index) {
-        await page.locator('.stStageBar .stSeg button[data-st="cap"]').click();
-        await page.locator('#kcSteps [data-step="4"]').click();
-      }
+    assert.equal(await page.locator('#kcSlice').isVisible(), false, 'legacy Send stays hidden');
+    const visibleSends = await page.locator('#kcCard button').evaluateAll(buttons => buttons.filter(b => b.getClientRects().length && b.textContent.trim() === 'Send to slicer').map(b => b.id));
+    assert.deepEqual(visibleSends, ['kcNext'], 'final review has one visible Send');
+    for (const [index, selector] of ['#kcNext'].entries()) {
       await page.locator(selector).click();
       await page.waitForFunction(n => window.__actionHandoffs.length > n, index, { timeout: 30000 });
       await page.waitForFunction(() => window.slicerIsOpen && window.slicerIsOpen());

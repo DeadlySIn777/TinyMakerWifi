@@ -95,9 +95,15 @@ const ui = fs.readFileSync(path.join(parts, 'keycap-ui.js'), 'utf8');
 const wanted = new Set();
 const re3 = /\$\('([A-Za-z0-9_-]+)'\)/g;
 while ((m = re3.exec(ui))) wanted.add(m[1]);
-const missing = [...wanted].filter(id => !new RegExp(`id=['"]${id}['"]`).test(everyCard));
+// report() builds its disclosure with the current estimate, then writes the
+// markup into the static report host. Count literal tag declarations in that
+// JS as markup too; an ordinary $('id') lookup cannot satisfy this contract.
+const generatedIds = new Set();
+const generatedTag = /<[A-Za-z][^<>\r\n]*?\bid\s*=\s*(["'])([A-Za-z0-9_-]+)\1/g;
+while ((m = generatedTag.exec(ui))) generatedIds.add(m[2]);
+const missing = [...wanted].filter(id => !generatedIds.has(id) && !new RegExp(`id=['"]${id}['"]`).test(everyCard));
 ok(`${wanted.size} ids referenced by keycap-ui.js exist on the page`, missing.length === 0,
-   missing.length ? 'MISSING FROM MARKUP: ' + missing.join(', ') : 'all present');
+   missing.length ? 'MISSING FROM MARKUP: ' + missing.join(', ') : 'all present in static or generated markup');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
