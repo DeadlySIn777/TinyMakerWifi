@@ -1,5 +1,11 @@
 # TinyMakerWifi
 
+**DeadlySIn777 Studio fork — 0.18.10 development build.** This fork adds the
+browser design studio, artisan keycaps, toppers, Meshy integration and verified
+upload flow. See [Studio changes and usage](docs/studio-fork.md) and the
+[PC slicer bridge](docs/slicers.md). The upstream project links below describe
+the original TinyMakerWifi project; its releases are separate from this fork.
+
 Modified and extended firmware for the open-source **TinyMaker** MSLA resin 3D printer. The main additions: **WiFi connectivity**, **OTA updates**, and **direct model upload from PrusaSlicer** - no more SD card shuffling.
 
 ![TinyMaker palm-sized resin 3D printer](Images/Palm_Sized.jpg)

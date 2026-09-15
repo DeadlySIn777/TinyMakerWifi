@@ -137,7 +137,7 @@ const refuses = (name, buf) => {
 };
 refuses('not a GLB', new Uint8Array([1,2,3,4,5,6,7,8,9,10,11,12]).buffer);
 refuses('Draco', oneTriangleGLB({ gltf: { extensionsRequired: ['KHR_draco_mesh_compression'] } }));
-refuses('KTX2', oneTriangleGLB({ gltf: { extensionsRequired: ['KHR_texture_basisu'] } }));
+ok('KTX2 appearance never discards printable geometry', parseGLB(oneTriangleGLB({ gltf: { extensionsRequired: ['KHR_texture_basisu'] } })).triangles, 1);
 
 /* ---- 6. feeds the slicer's own shape ----------------------------------- */
 console.log('\noutput is what the slicer eats');

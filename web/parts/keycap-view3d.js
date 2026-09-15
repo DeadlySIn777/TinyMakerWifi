@@ -26,6 +26,19 @@
 
   var CREASE = Math.cos(40 * Math.PI / 180);   // smooth below 40 deg, sharp above
 
+  function linearColor(hex) {
+    return [1, 3, 5].map(function (offset) {
+      var c = parseInt(hex.slice(offset, offset + 2), 16) / 255;
+      return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    });
+  }
+  function colorByte(linear) {
+    if (linear <= 0) return 0;
+    if (linear >= 1) return 255;
+    return 255 * (linear <= 0.0031308 ? linear * 12.92
+                  : 1.055 * Math.pow(linear, 1 / 2.4) - 0.055);
+  }
+
   function weldNormals(pos) {
     var n = pos.length / 9, i, k;
     var faceN = new Float32Array(n * 3);
@@ -74,13 +87,54 @@
     this.vel = 0;
     this.pos = null;
     this.nrm = null;
+    this.artStart = null;
+    this.artColors = null;
+    this.appearance = { mode: 'solid', base: '#ed9db3', art: '#a8d6f0', useSourceColors: true };
+    this._appearanceBase = linearColor(this.appearance.base);
+    this._appearanceArt = linearColor(this.appearance.art);
     this.raf = 0;
     this.dragging = false;
-    this._bind();
+    if (this.o.interactive !== false) this._bind();
   }
 
-  View.prototype.setMesh = function (positions) {
-    if (!positions || !positions.length) { this.pos = null; this.draw(); return; }
+  /* Appearance is a view setting only. Source colors are LINEAR RGB, three
+     floats per corner, aligned with the seated art. They are not inferred from
+     height, normals or anatomy, and never become part of an exported STL. */
+  View.prototype.setAppearance = function (appearance, opts) {
+    var a = appearance || {};
+    if (a.mode === 'color' || a.mode === 'solid') this.appearance.mode = a.mode;
+    if (typeof a.base === 'string' && /^#[0-9a-f]{6}$/i.test(a.base)) {
+      this.appearance.base = a.base.toLowerCase();
+      this._appearanceBase = linearColor(this.appearance.base);
+    }
+    if (typeof a.art === 'string' && /^#[0-9a-f]{6}$/i.test(a.art)) {
+      this.appearance.art = a.art.toLowerCase();
+      this._appearanceArt = linearColor(this.appearance.art);
+    }
+    if (typeof a.useSourceColors === 'boolean') this.appearance.useSourceColors = a.useSourceColors;
+    if (!opts || opts.draw !== false) this.draw();
+    return this;
+  };
+
+  /* artStart is an exact FLOAT offset into positions, not a triangle number.
+     Missing/invalid metadata means a single base material. Reset it for every
+     mesh so a plain cap cannot inherit the previous model's material regions. */
+  View.prototype.setMesh = function (positions, materials) {
+    this.artStart = null;
+    this.artColors = null;
+    if (!positions || !positions.length) { this.pos = null; this.nrm = null; this.draw(); return this; }
+    var start = materials && materials.artStart;
+    if (typeof start === 'number' && Number.isFinite(start) && start >= 0 &&
+        start <= positions.length && start % 9 === 0) {
+      this.artStart = start;
+      var colors = materials.artColors, valid = colors && colors.length === positions.length - start;
+      if (valid) for (var ci = 0; ci < colors.length; ci++) {
+        if (typeof colors[ci] !== 'number' || !Number.isFinite(colors[ci]) || colors[ci] < 0 || colors[ci] > 1) {
+          valid = false; break;
+        }
+      }
+      if (valid) this.artColors = colors;
+    }
     var p = positions, i, k;
     var mn = [Infinity,Infinity,Infinity], mx = [-Infinity,-Infinity,-Infinity];
     for (i = 0; i < p.length; i += 3) for (k = 0; k < 3; k++) {
@@ -309,6 +363,8 @@
     zb.fill(Infinity);
 
     var base = css.base || [196, 188, 176];
+    var colored = this.appearance.mode === 'color';
+    var sourceColors = colored && this.appearance.useSourceColors ? this.artColors : null;
     /* Camera space here has +Z running AWAY from the viewer - project() builds
        zv as depth into the screen - so a face turned towards you carries a
        NEGATIVE z normal and the key light has to point the same way. With lz
@@ -355,6 +411,9 @@
 
     for (i = 0; i < tris; i++) {
       var t = i * 9;
+      var isArt = this.artStart !== null && t >= this.artStart;
+      var paint = isArt ? this._appearanceArt : this._appearanceBase;
+      var colorOffset = isArt && sourceColors ? t - this.artStart : -1;
       project(p[t],   p[t+1], p[t+2], va);
       project(p[t+3], p[t+4], p[t+5], vb);
       project(p[t+6], p[t+7], p[t+8], vc);
@@ -399,12 +458,25 @@
           var spec = Math.pow(lam, 18) * 0.26;
           var key = KEY*lam + rim;
           var k4 = o*4;
+          if (colored) {
+            var cr = paint[0], cg = paint[1], cb = paint[2];
+            if (colorOffset >= 0) {
+              var cwa = w2/va[2], cwb = w1/vb[2], cwc = w0/vc[2], cw = 1/(cwa+cwb+cwc);
+              cr = (cwa*sourceColors[colorOffset] + cwb*sourceColors[colorOffset+3] + cwc*sourceColors[colorOffset+6])*cw;
+              cg = (cwa*sourceColors[colorOffset+1] + cwb*sourceColors[colorOffset+4] + cwc*sourceColors[colorOffset+7])*cw;
+              cb = (cwa*sourceColors[colorOffset+2] + cwb*sourceColors[colorOffset+5] + cwc*sourceColors[colorOffset+8])*cw;
+            }
+            data[k4] = colorByte(cr*(AMB*(SKY[0]*hemi + GND[0]*(1-hemi)) + key + FILL*fil*FILLT[0]) + spec*252/255);
+            data[k4+1] = colorByte(cg*(AMB*(SKY[1]*hemi + GND[1]*(1-hemi)) + key + FILL*fil*FILLT[1]) + spec*250/255);
+            data[k4+2] = colorByte(cb*(AMB*(SKY[2]*hemi + GND[2]*(1-hemi)) + key + FILL*fil*FILLT[2]) + spec*246/255);
+          } else {
           data[k4]   = Math.min(255, base[0]*(AMB*(SKY[0]*hemi + GND[0]*(1-hemi))
                                               + key + FILL*fil*FILLT[0]) + spec*252);
           data[k4+1] = Math.min(255, base[1]*(AMB*(SKY[1]*hemi + GND[1]*(1-hemi))
                                               + key + FILL*fil*FILLT[1]) + spec*250);
           data[k4+2] = Math.min(255, base[2]*(AMB*(SKY[2]*hemi + GND[2]*(1-hemi))
                                               + key + FILL*fil*FILLT[2]) + spec*246);
+          }
           data[k4+3] = 255;
         }
       }

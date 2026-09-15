@@ -62,11 +62,12 @@ r = meshHealth(withDegen);           // trailing zeros = a degenerate tri
 check('degenerate counted', r.degenerate, 1);
 
 // ---- 5. the real Meshy export --------------------------------------------
-const STL = 'C:\\Users\\Gluis\\Downloads\\Meshy_AI_Blocky Lakeside Dreamer_1789242971_texture.stl';
+const STL = process.env.TINYMAKER_MESH_STL;
 console.log('\nreal Meshy export');
-if (!existsSync(STL)) {
-  console.log('  (not on disk - skipped)');
+if (!STL) {
+  console.log('  SKIP optional real-model check: set TINYMAKER_MESH_STL to a binary STL. Synthetic checks still run.');
 } else {
+  if (!existsSync(STL)) throw new Error('TINYMAKER_MESH_STL does not exist');
   const d = readFileSync(STL);
   const n = d.readUInt32LE(80);
   const pos = new Float32Array(n * 9);

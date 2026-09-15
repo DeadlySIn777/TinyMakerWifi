@@ -55,7 +55,7 @@ Key `/api/status` fields (additive; ignore unknowns):
 | `refillPending` | `true` while a low-resin pause (`stateCode` 10) is waiting for the VAT to be refilled. Resume is refused with `409 {"error":"only Stop available, please refill"}` until `POST /api/vat/refilled`, which marks a **full** refill (it sets the level to the VAT size; it does not measure what was poured). `/api/vat/weight` cannot be used here - it refuses a busy printer, a pause included. `canResume` stays `true` so clients can still show the paused controls (0.17) |
 | `phaseTotalMs`, `phaseElapsedMs` | live phase countdown (0 = unknown) |
 | `waitStage` | which *wait* the countdown belongs to, `""` for an ordinary layer phase (0.17). A stop or a pause is two waits, not one: `stopTail` (finishing the move that was in flight) then `stopLift` (the final platform lift), or `pauseWork` (finishing the layer) then `pauseLift`; plus `homingBack` (stop during homing) and `resume`. Clients that show a countdown should restart it when this value changes, and keep one message whose text follows the stage |
-| `receiving`, `receivingName` | someone is uploading a model right now (0.17). While bytes arrive the printer mostly cannot answer at all, so a second device could not tell a transfer from a dead printer and flickered its "not answering" line on and off. `receiving` goes false ~5 s after the last chunk, which also covers a connection that died mid-transfer. It locks nothing - `busy` keeps its meaning, and the unpack that follows sets that itself |
+| `receiving`, `receivingName` | someone is uploading a model right now (0.17). While bytes arrive the printer mostly cannot answer at all, so a second device could not tell a transfer from a dead printer and flickered its "not answering" line on and off. `receiving` goes false about 9 s after the last chunk, which also covers a connection that died mid-transfer. It locks nothing - `busy` keeps its meaning, and the unpack that follows sets that itself |
 | `layerHeight`, `dryRun` | active settings snapshot |
 | `resinSet` | `false` when no resin profile is selected - `/api/print/start` refuses with 409 until one is picked, so a client should disable its Start controls. Lives here rather than in `/api/config` on purpose: this is polled, so a second open dashboard learns about a deleted profile within one poll (0-16) |
 | `wifiRssi`, `wifiText`, `ip` | connectivity |
@@ -69,6 +69,7 @@ Key `/api/status` fields (additive; ignore unknowns):
 | `vatGrams` | the same estimate in grams, using the configured resin density (R-cal, 0.17). `vatText` deliberately stays ml-only so older clients render unchanged |
 | `webControl`, `askRefill` | runtime toggles |
 | `sdJob`, `sdJobName`, `sdJobDone`, `sdJobTotal` | what the SD job is doing right now - `import` (unpacking an upload) or `delete` - the model it concerns, and how far it is (`0/0` = this job has no count). Lets every open dashboard show "Unpacking X 60/826" instead of the presser knowing and the observers guessing (1-32, SD-prog, 0.17) |
+| `sdJobImportId`, `importResult` | Since 0.18.9, the active web import's opaque ID and the last terminal result `{id, ok, name, error}`. `importResult` is `null` before the first completion after boot. Compare its ID with `/upload`'s `importId`; an idle state or a different receipt does not prove that upload succeeded. |
 | `slicerOn` | the browser slicer module is switched on (SL-mod, 0.17). Also in `/api/config`; polled here so a second dashboard notices the switch within one poll |
 | `liveN`, `liveCaptured` | the live 3D stack (P-live, 0.17): how many silhouette slots the running print has, and how many are captured so far - both `0` when idle. A client with no local slices fetches `/api/live/slices?since=<captured>` whenever `liveCaptured` grows |
 | `resumePending` | `null`, or an object naming the interrupted `model` while the boot resume prompt is on the printer's screen (0-33) - the only window in which `/api/resume/*` is accepted |
@@ -95,9 +96,18 @@ Shop Network peer (`/api/shop/test`): see [shop-network.md](shop-network.md).
 Sending from Chitubox, Lychee or UVtools: see [slicers.md](slicers.md)
 and [`scripts/tm_send.py`](../scripts/tm_send.py).
 
-Upload answers only after the on-printer unpack finishes (minutes for big
-models); a name conflict returns `409` with a `conflict` body and the client
-retries with `action`.
+An accepted upload answers **201 before unpacking finishes**:
+`{"ok":true,"queued":true,"name":"Model","importId":"<32 hex characters>"}`.
+Poll `/api/status` until `importResult.id` matches that ID. Only a matching
+`ok:true` proves success; `name` then contains the actual stored name, including
+any rename suffix. A matching `ok:false` supplies an error and the client should
+keep its slice available to retry. Idle alone, a different import result, a
+timeout or a lost connection must not be treated as completion. Receipts are
+retained in RAM until the next import completes and are cleared by reboot.
+The ID is generated afresh for each accepted upload, including after a reboot.
+
+A name conflict returns `409` with a `conflict` body; after the user chooses,
+the client retries with `action=replace` or `action=rename`.
 
 ## Print control
 
@@ -194,12 +204,13 @@ falls back to the plain canvas renderer (3D) or to no slicer at all.
 | `/api/lib/slicer/check` | POST | `ver=X.Y.Z` - the printer fetches `lib/slicer-X.Y.Z.sha256` from gh-pages over **certificate-verified** HTTPS (`src/slicer_ca.h`), keeps the sums in RAM and answers with the file list and which of them are already on the card. Idle-only, and 503 until the clock is SNTP-synced (certificate dates need it) |
 | `/api/lib/slicer` | POST | multipart upload of ONE file the check above authorised. The filename must be in the RAM list and the bytes must match its sum, or the file is deleted again |
 
-**The manifest fetch is the one place in this firmware that validates a TLS
-certificate.** Everywhere else (`version.txt`, self-update, pings) runs
-`setInsecure()`. Here it matters more: what the manifest authorises is code the
-dashboard later executes on its own origin, and the copy happens automatically
-rather than on a button press. See `src/slicer_ca.h` for the anchors and for what
-breaks if GitHub Pages ever changes issuer.
+**Slicer manifest, firmware update checks/downloads and Meshy proxy fetches
+validate TLS certificates.** The manifest and updates use `src/slicer_ca.h`;
+Meshy uses `src/meshy_ca.h`, checks the clock and restricts fetched URLs to
+approved HTTPS hosts. Existing statistics/crash pings and HTTPS boot-animation
+downloads still use `setInsecure()`. Manifest validation protects code the
+dashboard later executes on its own origin; see `src/slicer_ca.h` for its
+anchors and issuer-change considerations.
 
 **Why the slicer verifies differently from three.js.** The three.js sum is a
 constant in the firmware, which is fine for a library that moves once a year.

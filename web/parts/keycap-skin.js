@@ -190,10 +190,15 @@
      base, feet touching it" up front is cheaper than failing the check. */
 
   var SCULPT_TAIL =
-    ', full 3D figurine, standing on a small flat base with everything touching ' +
-    'the base, chunky stylised proportions, thick sturdy limbs, no thin or ' +
-    'fragile parts, no wires or antennae, bold readable shapes at small size, ' +
-    'solid closed form, single connected object';
+    '; full 3D sculpture, one connected closed solid with broad stable underside; ' +
+    'no thin or fragile parts, pedestal, keycap shell or switch socket; ' +
+    'details are sculpted geometry, not texture';
+  var SCULPT_STYLES = {
+    // Character proportions belong to the selected style, never to a rewritten
+    // subject. The qualification avoids asking flowers and vehicles for faces.
+    cuteartisan: '; cute artisan style, broad compact silhouette; for characters only: head over half their height, plump body, stubby sturdy limbs, expressive face, no extra ears or limbs',
+    faithfulsubject: '; preserve distinctive subject proportions, silhouette and features'
+  };
 
   /* Kept for the legend path, which really does want a flattened relief. */
   var RELIEF_TAIL =
@@ -208,7 +213,7 @@
     hemostat: 'a foil hemostatic powder sachet with a torn top',
     splint:   'a perforated aluminium finger splint',
     pills:    'a blister pack of round pills',
-    creeper:  'a Minecraft creeper head, blocky cube, square pixel face'
+    creeper:  'Full-body Minecraft Creeper with a cube head, body and four distinct feet. Deep sculpted Creeper eyes and mouth, gently beveled voxel edges, and substantial raised pixel patches across its head and body'
   };
 
   /* WHAT THE GENERATOR CANNOT SEE is the cap. It is given a sentence and asked
@@ -227,23 +232,27 @@
      size, so the sentence describes the room the sculpt will genuinely get. */
   function capSentence(c) {
     if (!c || !c.wMm) return '';
-    var s = ', sized to print at about ' + c.wMm.toFixed(0) + ' by ' +
+    var s = '; print size about ' + c.wMm.toFixed(0) + ' by ' +
             c.dMm.toFixed(0) + ' by ' + c.hMm.toFixed(0) + ' mm';
     if (c.wMm > c.dMm * 1.6)
-      s += ', which is far wider than it is deep, so compose it ACROSS the width - ' +
-           'a scene or several figures side by side rather than one upright figure';
+      s += '; compose ACROSS the width, with figures side by side';
     if (c.minFeatureMm)
-      s += ', with no detail finer than ' + c.minFeatureMm.toFixed(2) +
-           ' mm because anything smaller will not print at that size';
+      s += '; no detail finer than ' + c.minFeatureMm.toFixed(2) + ' mm';
     return s;
   }
 
   /* mode: 'sculpt' (default - a real object on the cap) or 'relief'.
      cap: the optional envelope from capSentence() above. */
-  function promptFor(name, extra, mode, cap) {
-    var base = PROMPTS[name] || String(name || '');
+  function promptFor(name, extra, mode, cap, style) {
+    var base = Object.prototype.hasOwnProperty.call(PROMPTS,name) ? PROMPTS[name] : String(name || '');
     var tail = (mode === 'relief') ? RELIEF_TAIL : SCULPT_TAIL;
-    return base + (extra ? ', ' + extra : '') + tail + capSentence(cap);
+    var direction = mode === 'relief' ? '' : SCULPT_STYLES[style || 'cuteartisan'];
+    if (typeof direction !== 'string') throw new Error('Choose Cute artisan or Faithful subject.');
+    var suffix = tail + direction + capSentence(cap), subject = base + (extra ? ', ' + extra : '');
+    // The Meshy request accepts 800 characters. Never silently lose physical
+    // requirements at its transport boundary or silently rewrite the subject.
+    if ((subject + suffix).length > 800) throw new Error('Shorten the art description to '+Math.max(0,800-suffix.length)+' characters so the full 3D and print-size instructions also reach Meshy.');
+    return subject + suffix;
   }
 
   /* What the generator cannot know and the printer decides. Handed to the card
@@ -256,8 +265,8 @@
       sculptMm: +sculpt.toFixed(1),
       smallestFeatureMm: +floor.toFixed(2),
       note: 'the sculpt is about ' + sculpt.toFixed(0) + ' mm across, so anything ' +
-            'finer than ' + floor.toFixed(2) + ' mm on the finished cap is below ' +
-            'the mask and will not appear'
+           'finer than the recommended ' + floor.toFixed(2) + ' mm feature size ' +
+           'may not print reliably'
     };
   }
 

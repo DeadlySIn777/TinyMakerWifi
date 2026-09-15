@@ -65,6 +65,7 @@ const slicerStep=()=>{
    const ft=tools&&tools.querySelector("[data-tool='fit']");
    if(ft)ft.classList.toggle('step',loaded&&!sliced&&!slicerFits);
    const go=$('slicerGo'), fitNow=$('slicerFitNow'), send=$('slicerSend'), save=$('slicerSave');
+   const blocked=sliced?slicerTransferBlock():'';
    const netelpa=loaded&&!sliced&&!slicerFits;
    /* Spausdinant sliceris nieko nedaro: pjaustymas piestu i vaizda, kuris priklauso
       spaudiniui, o „Send to printer" vis tiek grizdavo su 409 - printeris tuo metu SD
@@ -87,15 +88,13 @@ const slicerStep=()=>{
    if(fitNow)fitNow.style.display=netelpa?'':'none';
    if(send){
      send.style.display=(sliced&&!sliceRunning)?'':'none';
+     send.textContent=sliced&&slicerOut._delivery?'Check transfer':'Send to printer';
      /* slicerScaleBlocked is checked HERE and not once at slice time, because
         this function reruns on every status poll and would have undone a
         single assignment within the second. */
-     send.disabled=!!(save&&save.disabled)||spausdina||slicerScaleBlocked;
+     send.disabled=!sliced||spausdina||!!blocked||slicerUploading;
      send.title=spausdina?'Not while the printer is working'
-       :(slicerScaleBlocked
-         ?'This was scaled down to fit, and a keycap that has been scaled no '
-          +'longer fits a switch. Take a cap off the plate and slice again.'
-         :'');
+       :(blocked||'');
    }
    /* Varda galima irasyti, vos tik yra ka pavadinti - jis nustatymas, ne veiksmas. */
    {const nm=$('slicerName'); if(nm)nm.disabled=!loaded||spausdina;}
@@ -105,7 +104,7 @@ const slicerStep=()=>{
       uzrakinam klase. */
    {const ch=$('slicerChoose'); if(ch)ch.classList.toggle('locked',spausdina);}
    {const ft=$('slicerFitNow'); if(ft)ft.disabled=spausdina;}
-   {const sv=$('slicerSave'); if(sv&&spausdina)sv.disabled=true;}
+   {const sv=$('slicerSave'); if(sv)sv.disabled=!sliced||spausdina||!!blocked||slicerUploading;}
    {const d=$('slicerDiscardLink');
     if(d)d.style.pointerEvents=spausdina?'none':'';}
    /* VISI likusieji kortelės valdikliai - vienu ejimu per konteineri, o ne vardijant
@@ -571,6 +570,18 @@ const slicerRender=()=>{
 window.slicerLoadMesh=function(positions,suggestedName,sizeBytes,opts){
   if(!slicerMod)return false;
   if(!positions||!positions.length||positions.length%9)return false;
+  // Refuse malformed input before clearing the previous model or slice.
+  for(let i=0;i<positions.length;i++)if(!Number.isFinite(positions[i]))return false;
+  if(window.meshHealth){const h=window.meshHealth(positions);if(h.fatal||h.severity==='bad')return false;}
+  else {
+    let usable=false;
+    for(let i=0;i<positions.length;i+=9){
+      const ux=positions[i+3]-positions[i],uy=positions[i+4]-positions[i+1],uz=positions[i+5]-positions[i+2];
+      const vx=positions[i+6]-positions[i],vy=positions[i+7]-positions[i+1],vz=positions[i+8]-positions[i+2];
+      if(Math.hypot(uy*vz-uz*vy,uz*vx-ux*vz,ux*vy-uy*vx)>1e-10){usable=true;break;}
+    }
+    if(!usable)return false;
+  }
   /* Senas rezultatas nuvalomas PRIES nauja modeli: kitaip jo duomenys
      gali persideti ant naujo ir vaizdas atrodo istemptas (V 08-12). */
   slicerOut=null;
@@ -596,7 +607,9 @@ window.slicerLoadMesh=function(positions,suggestedName,sizeBytes,opts){
      re-oriented mesh and looks perfectly reasonable. */
   /* Whose size may not move. Cleared here as well as set, so loading an
      ordinary model after a refused keycap does not inherit the refusal. */
-  slicerNoScale=!!(opts&&opts.noScale);
+  // A bare STL has no reliable way to identify its socket or other fit-critical
+  // features. Preserve imported dimensions unless its caller explicitly opts in.
+  slicerNoScale=!(opts&&opts.noScale===false);
   slicerScaleBlocked=false;
   if(opts&&opts.keepPose){
     slicerTr={rx:0,rz:0,scale:1};
@@ -634,7 +647,8 @@ $('slicerFile').addEventListener('change',async e=>{
     if(/\.(glb|gltf)$/i.test(f.name)&&window.meshyParseGLB){
       positions=window.meshyParseGLB(buf).positions;
     }else{
-      positions=slicerMod.parseSTL(buf).positions;
+      if(!window.stlRead)throw new Error('The model reader is missing from this build.');
+      positions=window.stlRead.readModelFile(buf,f.name).positions;
     }
     if(!window.slicerLoadMesh(positions,f.name,f.size||0))
       throw new Error('That file had no usable triangles.');
@@ -647,7 +661,11 @@ $('slicerFile').addEventListener('change',async e=>{
       else if(h&&h.severity==='warn')slicerSay('slicerInfo','⚠ '+h.summary+' - it will usually still slice.');
       else                           slicerSay('slicerInfo','');
     }
-  }catch(err){slicerSay('slicerInfo',err.message);slicerButtons(false);}
+  }catch(err){
+    // A refused import did not replace the current model or slice. Keep its
+    // existing controls; an empty workspace likewise stays disabled.
+    slicerSay('slicerInfo',err.message);
+  }
 });
 
 /* Autofit = pasuka + sumazina TIK jei netelpa, ir apie tai pasako. Mazinimas
@@ -870,6 +888,81 @@ $('slicerRotZ').addEventListener('click',()=>{if(slicerRaw){slicerPlaceNote(null
    changes the plate. */
 let slicerNoScale=false, slicerScaleBlocked=false;
 let slicerOut=null;   // supjaustytas rezultatas, laukiantis sprendimo
+let slicerUploading=false;
+
+// A queued upload is not a completed import. Only the receipt for this exact
+// upload can release its local slice; idle status alone also follows failures.
+async function slicerConfirmImport(id){
+  const until=Date.now()+180000;
+  let failedReads=0,missingIdle=0;
+  while(Date.now()<until){
+    await new Promise(resolve=>setTimeout(resolve,1000));
+    const remaining=until-Date.now();
+    if(remaining<=0)break;
+    let st;
+    try{st=await api('/api/status',null,Math.min(8000,remaining));failedReads=0;}
+    catch(e){
+      if(++failedReads>=3)throw new Error('Connection lost while confirming the import. Your slice is kept. Reconnect, then choose Check transfer; it will not upload a second copy.');
+      continue;
+    }
+    const receipt=st&&st.importResult;
+    if(receipt&&receipt.id===id){
+      if(receipt.ok===false){
+        const error=new Error('The printer could not import this slice'+(receipt.error?': '+String(receipt.error).slice(0,240):'. Check the SD card and try again.')+' Your slice is kept.');
+        error.importFailed=true;throw error;
+      }
+      if(receipt.ok===true&&typeof receipt.name==='string'&&/^[A-Za-z0-9_-]{1,120}$/.test(receipt.name))return receipt;
+      throw new Error('The printer returned an incomplete import receipt. Your slice is kept; check the SD list before sending again.');
+    }
+    if(st&&!st.busy&&!st.receiving&&!st.sdJob){
+      if(++missingIdle>=3){
+        const error=new Error('Transfer could not be verified; check the SD list before sending again. Your slice is kept.');
+        error.receiptUnavailable=true;throw error;
+      }
+    }else missingIdle=0;
+  }
+  throw new Error('The printer has not finished confirming the import. Your slice is kept. Choose Check transfer later; it will not upload a second copy.');
+}
+
+// Final support/raft bounds, not just the model bounds, control delivery.
+// The pinned 3.5.0 engine uses one millimetre of mechanical plate margin.
+function slicerOutputBlock(result,noScale){
+  if(!result)return 'Slice the model before sending it to the printer.';
+  const scale=result.sumazinta;
+  if(noScale&&scale&&scale.mastelis>0&&scale.mastelis<1)
+    return 'This slice changed the model size. It cannot be sent because exact dimensions are locked. Discard it and slice again.';
+  if(scale&&scale.telpa===false)
+    return 'Supports or raft extend beyond the usable plate. This slice cannot be sent. Adjust the supports or orientation, then slice again.';
+  const p=result.pedsakas,plate=slicerMod&&slicerMod.PLATE;
+  if(!p||!plate||!Number.isFinite(plate.x)||!Number.isFinite(plate.y)||
+      !['x0','x1','y0','y1'].every(k=>Number.isFinite(p[k]))||p.x0>p.x1||p.y0>p.y1)
+    return 'The slicer did not return valid support bounds. Reload the slicer and slice again before sending.';
+  if(Math.max(Math.abs(p.x0),Math.abs(p.x1))>plate.x/2-1+0.001||
+      Math.max(Math.abs(p.y0),Math.abs(p.y1))>plate.y/2-1+0.001)
+    return 'Supports or raft extend beyond the usable plate. This slice cannot be sent. Adjust the supports or orientation, then slice again.';
+  return '';
+}
+function slicerOutputMessage(message,bad){
+  slicerSay('slicerProg',message);
+  if(bad&&window.designerFeedback&&window.designerFeedback.help)
+    window.designerFeedback.help('Cannot send this slice',message);
+  else msg(message,!!bad);
+}
+function slicerTransferBlock(){
+  const blocked=slicerOutputBlock(slicerOut,slicerNoScale);
+  if(blocked)return blocked;
+  if(typeof statusData==='undefined'||!statusData)return 'Waiting for the printer status. Your slice is kept; try again once it reconnects.';
+  if(statusData.webControl===false)return 'Web control is disabled on the printer. Enable it, then send this saved slice again.';
+  if(statusData.sdReady===false)return 'Insert a working SD card in the printer before sending this slice.';
+  return '';
+}
+function slicerFinalFit(result){
+  const blocked=slicerOutputBlock(result,slicerNoScale);
+  slicerScaleBlocked=!!blocked;
+  const text=blocked||'Model, supports and raft fit the usable plate.';
+  ['slicerFit','slicerInfo'].forEach(id=>{const el=$(id);if(el){el.textContent=text;el.style.color=blocked?'var(--warncol)':'var(--muted)';}});
+  return blocked;
+}
 
 /* Tikra sluoksnio kauke. 3D vaizdas glotnina pavirsiu, tad plona 0.4 mm supporto
    gija jame tiesiog dingsta - o butent ja ir reikia patikrinti. Cia rodoma ta
@@ -1368,10 +1461,13 @@ $('slicerGo').addEventListener('click',async()=>{
        pradetu is naujo - atrodytu, kad kazkas uzstrigo. */
     const supType=(document.querySelector('input[name=slicerSupType]:checked')||{}).value||'regular';
     const pad=slicerParamai();
-    const r=await slicerMod.slice(placed,{antialias:$('slicerAA').checked,
+    const sliceOptions={antialias:$('slicerAA').checked,
       supportType:supType,name:(slicerFileName||'print').replace(/\.stl$/i,''),
-      pakelta:pad.pakelta,autoPakelti:pad.autoPakelti,parametrai:pad.parametrai},
-      (done,total,phase)=>{
+      pakelta:pad.pakelta,autoPakelti:pad.autoPakelti,parametrai:pad.parametrai,
+      // In the pinned 3.5.0 adapter this skips its recursive shrink pass.
+      // Its actual support footprint still returns and is checked below.
+      _fitAntras:slicerNoScale};
+    const onSliceProgress=(done,total,phase)=>{
         /* `btnBusy` turi 60 s isleidimo voztuva (kad negyva uzklausa nepaliktu
            mygtuko amzinai suktis). Didelis modelis pjaustomas ilgiau, tad zyme
            gali nukristi vidury darbo - uzdedam atgal. */
@@ -1398,7 +1494,21 @@ $('slicerGo').addEventListener('click',async()=>{
         paskutinis={ka:what+' '+pct+'%', dalis:f,
                     eilute:tikri?(done+' / '+total+' layers'):''};
         piesk();
-      });
+      };
+    let r=await slicerMod.slice(placed,sliceOptions,onSliceProgress);
+    let supportChoice='';
+    // Try one alternate support plan at the same model coordinates. Never
+    // shrink a socket to make its supports fit, and never loop indefinitely.
+    if(sliceRun===myRun&&supType!=='tree'&&slicerOutputBlock(r,slicerNoScale)){
+      paskutinis={ka:'Trying tree supports at the same model size',dalis:0};piesk();
+      const tree=await slicerMod.slice(placed,Object.assign({},sliceOptions,{supportType:'tree',_fitAntras:true}),onSliceProgress);
+      r=tree; // The worker's support preview now belongs to this last attempt.
+      if(!slicerOutputBlock(tree,true)){
+        supportChoice='Tree supports selected automatically · model size unchanged';
+        const option=document.querySelector('input[name=slicerSupType][value="tree"]');
+        if(option)option.checked=true;
+      }
+    }
     /* Ir dar viena patikra: sustabdytas darbas gali sugrizti su gatavu rezultatu,
        o jo niekas nebelaukia - net „stop" zenklas jau nuvalytas (V 08-20). */
     if(sliceRun!==myRun)return;
@@ -1419,12 +1529,11 @@ $('slicerGo').addEventListener('click',async()=>{
        anksciau pykdavo („sumazino, o nepasake kodel"). Antra - PASITRAUKTI mastelis,
        nes kitaip slankiklis rodytu 100 %, o faile gultu 96 %: valdiklis meluotu, ir
        kitas jo bakstelejimas modeli issprogdintu atgal uz plokstes. */
-    let mazNote='';
+    let mazNote=supportChoice?' · '+supportChoice:'';
     /* A part whose caller said its size must not move, that the slicer then
        had to shrink, does not go to the printer. See slicerNoScale. */
-    if(slicerNoScale&&r.sumazinta&&r.sumazinta.mastelis>0&&r.sumazinta.mastelis<1)
-      slicerScaleBlocked=true;
-    if(r.sumazinta&&r.sumazinta.mastelis>0&&r.sumazinta.mastelis<1){
+    slicerScaleBlocked=!!slicerOutputBlock(r,slicerNoScale);
+    if(!slicerNoScale&&r.sumazinta&&r.sumazinta.mastelis>0&&r.sumazinta.mastelis<1){
       slicerTr.scale*=r.sumazinta.mastelis;
       /* Ne `\n`: eilute gyvena `<span class='hint'>` be `white-space: pre-line`,
          tad naujos eilutes nesimatytu ir frazes sulipty (auditas, 09-12). */
@@ -1460,6 +1569,11 @@ $('slicerGo').addEventListener('click',async()=>{
         slicerDimsLine(slicerLastBounds);
       }
     }
+    const outputBlocked=slicerFinalFit(r);
+    if(outputBlocked){
+      const isl=$('slicerIslands');
+      if(isl){isl.textContent=((isl.textContent||'').trim()?isl.textContent+' · ':'')+'⚠ '+outputBlocked;isl.style.color='var(--warncol)';}
+    }
     prog.textContent='Sliced in '+((performance.now()-t0)/1000).toFixed(1)+' s \u00b7 '
       +r.layers+' layers \u00b7 ~'+ml.toFixed(1)+' ml'+mazNote;
     slicerLayerN=r.layers;                          // pradzioj - visas daiktas
@@ -1482,7 +1596,7 @@ $('slicerGo').addEventListener('click',async()=>{
     $('slicerGo').disabled=true;
     /* Vienintelis dalykas, kuri dar reikia irasyti, - tad kursorius ten. */
     $('slicerName').focus();
-    $('slicerSave').disabled=false;
+    $('slicerSave').disabled=!!outputBlocked;
     $('slicerDiscardLink').style.visibility='visible';
     slicerStep();
     slicerShowLayer(slicerLayerN);
@@ -1580,6 +1694,7 @@ const slicerCage=enter=>{
   if(typeof syncCageBtn==='function')syncCageBtn();
 };
 const slicerOwns=v=>{slicerOwnsPreview=v; window.slicerOwnsPreview=v;
+                     if(window.studioPreviewSync)window.studioPreviewSync();
                      /* Isdidinimo mygtukas klausia TURINIO, o turinys ka tik pasikeite. */
                      if(window.setStageGrowUI)
                        setStageGrowUI(!(typeof statusData!=='undefined'&&statusData&&
@@ -1753,8 +1868,12 @@ $('gl3dLayerRange').addEventListener('pointerdown',e=>e.stopPropagation());
    slicerio darba (nuima jo vaizda, pastato tuscia perziura), tad ka tik padaryto
    modelio atidarymas turi vykti PO jo - kitaip valymas ji cia pat ir nutrintu. */
 $('slicerSave').addEventListener('click',async()=>{
-  if(!slicerOut)return;
+  if(slicerUploading)return;
+  if(!slicerOut){slicerOutputMessage('Slice the model before sending it to the printer.',true);return;}
+  const outputBlocked=slicerTransferBlock();
+  if(outputBlocked){slicerStep();slicerOutputMessage(outputBlocked,true);return;}
   if(slicerBusyStop())return;
+  const transferSlice=slicerOut;
   let savedName='', renamed=false, namesWere=[], cancelled=false;
   /* Ar issaugotas failas buvo nupjautas ties krastu, ir kuo tai paaiskinti.
      Zyme imama PRIES valyma: `slicerOut` nunulinamas vos issaugojus, o
@@ -1763,9 +1882,10 @@ $('slicerSave').addEventListener('click',async()=>{
      bet TYLIAI atsakydavo `false`, ir zmogus butu gaves sugadinta faila be jokio
      ispejimo (printerio sesijos auditas, penktas ratas, 09-12). */
   let nupjZyme=false, nupjTekstas='';
-  const nm=($('slicerName').value||'').trim().replace(/[^A-Za-z0-9_-]/g,'');
-  if(!nm){msg('Give the model a name first.',true);$('slicerName').focus();return;}
-  slicerOut.name=nm;
+  const nm=transferSlice._delivery?transferSlice._delivery.name:($('slicerName').value||'').trim().replace(/[^A-Za-z0-9_-]/g,'');
+  if(!nm){slicerOutputMessage('Give the model a name first.',true);$('slicerName').focus();return;}
+  slicerUploading=true;
+  transferSlice.name=nm;
   const btn=$('slicerSave'), prog=$('slicerProg');
   /* Ka kortele rase pries siuntima: „Sliced in 13.4 s · 172 layers · ~1.5 ml".
      Atsaukus ta eilute grazinam - zr. `finally`. Vaizdo puses (`slicerView`) isiminti
@@ -1802,8 +1922,8 @@ $('slicerSave').addEventListener('click',async()=>{
          tad atsiuntus jau kalibruota ji suveiktu du kartus. Be sio lauko
          printeris veliau pats perskaito visus sluoksnius nuo korteles ir
          suskaiciuoja ta pati, ka narsykle jau zino (auditas 08-17). */
-      if(slicerOut.rawMl>0)fd.append('resin_ml',String(slicerOut.rawMl));
-      fd.append('file',slicerOut.blob,slicerOut.name+'.zip');
+      if(transferSlice.rawMl>0)fd.append('resin_ml',String(transferSlice.rawMl));
+      fd.append('file',transferSlice.blob,transferSlice.name+'.zip');
       const x=new XMLHttpRequest();
       /* `/upload`, o ne `/api/files/local`: pastarasis su tusciu veiksmu
          SAMONINGAI reiskia \u201eperrasyk" - tuo keliu eina PrusaSlicer, kuris i
@@ -1835,13 +1955,16 @@ $('slicerSave').addEventListener('click',async()=>{
         prog.textContent='Uploading '+p+'%  ('+MB(e.loaded)+' / '+MB(e.total)+' MB)';
       };
       x.onload=()=>{
-        if(x.status<400){res(null);return;}
         let d=null; try{d=JSON.parse(x.responseText);}catch(err){}
         if(x.status===409&&d&&d.conflict){res(d);return;}
-        rej(new Error('upload failed ('+x.status+')'));
+        if(x.status>=200&&x.status<300){
+          if(d&&d.ok===true&&d.queued===true&&typeof d.importId==='string'&&/^[A-Za-z0-9_-]{1,80}$/.test(d.importId)){res(d);return;}
+          rej(new Error('The upload response did not include a confirmation receipt. Your slice is kept. Check the SD list and update the printer firmware before sending again.'));return;
+        }
+        rej(new Error('Upload failed ('+x.status+')'+(d&&(d.error||d.message)?': '+String(d.error||d.message).slice(0,240):'. Check printer storage and web control, then try again.')));
       };
-      x.onerror=()=>rej(new Error('upload failed - connection lost'));
-      x.ontimeout=()=>rej(new Error('upload timed out'));
+      x.onerror=()=>rej(new Error('Upload response lost. The printer may still be unpacking it. Your slice is kept; check the SD list before trying again.'));
+      x.ontimeout=()=>rej(new Error('Upload response timed out. The printer may still be unpacking it. Your slice is kept; check the SD list before trying again.'));
       x.timeout=300000;
       x.send(fd);
     });
@@ -1849,14 +1972,17 @@ $('slicerSave').addEventListener('click',async()=>{
        atsirado. Butina del „rename" - zr. `renamed` zemiau. */
     const namesBefore=(typeof filesItems!=='undefined'&&filesItems)
       ? filesItems.filter(i=>i.type==='model').map(i=>i.name) : [];
-    {const conflict=await send('');
-     if(conflict){
+    if(!transferSlice._delivery){let reply=await send('');
+     if(reply.conflict){
        /* Tas pats langelis, kaip pulto ikelimui - su abieju modeliu palyginimu. */
-       const choice=await uploadConflictChoice(conflict);
+       const choice=await uploadConflictChoice(reply);
        if(choice!=='replace'&&choice!=='rename'){cancelled=true;throw new Error('Save cancelled');}
        renamed=choice==='rename';
-       await send(choice);
-     }}
+       reply=await send(choice);
+       if(reply.conflict)throw new Error('The name still conflicts. Your slice is kept; choose another name and try again.');
+     }
+     transferSlice._delivery={id:reply.importId,name:nm};
+    }
     /* Ikelta dar nereiskia paruosta: printeris dabar ISPAKUOJA archyva ir tuo
        metu SD priklauso jam. Laukiam, kol atsileis - kitaip pasakytume
        „issaugota", o modelio sarase dar nebutu (V 08-12). */
@@ -1868,7 +1994,7 @@ $('slicerSave').addEventListener('click',async()=>{
     /* Korteleje apie ispakavima NERASOM (V 08-20): ta pati zinia jau stovi snacke, ir
        ten ji tikslesne - vardas ir sluoksniai. SD puseje sitas dublis isimtas seniau;
        sliceris elgiasi taip pat. */
-    prog.textContent='';
+    prog.textContent='Confirming the import on the printer…';
     /* Ant DROBES nieko nerasom (V 08-20): ispakavima jau rodo snackas, ir jis sako
        daugiau - varda ir sluoksnius („Unpacking Ziedas 94/167 · 56 %"). Du pranesimai
        apie ta pati darba yra vienas per daug.
@@ -1877,14 +2003,16 @@ $('slicerSave').addEventListener('click',async()=>{
        kol printeris jau seniai ispakuoja (V 08-20). Nuemus lieka matomas pats slicerio
        modelis, o eiga - snacke. */
     if(typeof slicerOverlayOff==='function')slicerOverlayOff();
-    for(let i=0;i<180;i++){
-      await new Promise(r=>setTimeout(r,1000));
-      try{
-        const st=await api('/api/status',null,8000);
-        if(!st.busy||st.sdJob!=='import')break;
-      }catch(e){}
-    }
-    const done=slicerOut;
+    let receipt;
+    try{receipt=await slicerConfirmImport(transferSlice._delivery.id);}
+    catch(e){if(e.importFailed||e.receiptUnavailable)delete transferSlice._delivery;throw e;}
+    // The importer knows the final name, including a Rename conflict choice.
+    // It is stronger evidence than inferring a new folder from a cached list.
+    transferSlice.name=receipt.name;
+    delete transferSlice._delivery;
+    renamed=false;
+    if(slicerOut!==transferSlice){msg('“'+receipt.name+'” is on the printer.');return;}
+    const done=transferSlice;
     /* Pervadinimo atveju TYLIM: prasytas vardas cia dar neteisingas, o blyksnis su
        netikru vardu blogiau nei sekundes tyla - tikra zinute ateina zemiau, kai
        pamatom, kuris modelis atsirado (antras auditas 08-17). */
@@ -1927,9 +2055,10 @@ $('slicerSave').addEventListener('click',async()=>{
     namesWere=namesBefore;
   /* Atsaukimas nera klaida, tad ir snackas ne raudonas: raudona spalva cia sakytu,
      kad kazkas nepavyko, o nepavykti neturejo ko - zmogus pats taip pasirinko. */
-  }catch(e){ prog.textContent=e.message; msg(e.message,!cancelled); }
+  }catch(e){ slicerOutputMessage(e.message,!cancelled); }
   finally{
-    btn.disabled=false;
+    slicerUploading=false;
+    btn.disabled=!!slicerOutputBlock(slicerOut,slicerNoScale);
     if(typeof uploadBusy!=='undefined')uploadBusy=false;
     if(typeof bgJob!=='undefined')bgJob='';
     if(typeof syncActionLocks==='function')syncActionLocks();
@@ -1942,7 +2071,7 @@ $('slicerSave').addEventListener('click',async()=>{
        nedingo - o antras „Send" tada siusdavo daikta, kurio ekrane nebesimato
        (V 09-10). `slicerOwnsPreview` cia NEnuimam, tad `slicerButtons(true)` grazina
        ir juostele ant vaizdo. */
-    if(cancelled){
+    if(cancelled||(!savedName&&slicerOut)){
       /* NIEKO NEPIESIAM (V 09-10). Siunciant ant drobes neuzdedama jokia perdanga -
          eiga rodoma korteles eiluteje ir snacke, - tad piesinys visa laika stovejo
          nepaliestas. Belieka grazinti tai, kas buvo PASLEPTA: formos irankius, vaizdo
@@ -1952,7 +2081,8 @@ $('slicerSave').addEventListener('click',async()=>{
          ⚠️ `slicerOverlayOff()` cia kviesti NEGALIMA: jis valo `printPreviewCanvas`,
          o „Printed layers" vaizdas gyvena kaip tik toje drobeje - Cancel ji istrindavo. */
       slicerButtons(true); slicerWorkUI(false,false,true);
-      prog.textContent=progWas;
+      if(cancelled)prog.textContent=progWas;
+      slicerStep();
     }else{
     /* Kad ir kaip baigesi - „Unpacking..." nebeturi likti kaboti drobeje
        (V 08-12: pranesimas liko, nors failas seniai suejo). */
@@ -2070,7 +2200,13 @@ $('slicerSave').addEventListener('click',async()=>{
 {const b=$('slicerFitNow');
  if(b)b.addEventListener('click',()=>{const a=$('slicerAutoFit'); if(a&&!a.disabled)a.click();});}
 {const b=$('slicerSend');
- if(b)b.addEventListener('click',()=>{const sv=$('slicerSave'); if(sv&&!sv.disabled)sv.click();});}
+ if(b)b.addEventListener('click',()=>{
+   const blocked=slicerTransferBlock();
+   if(blocked){slicerOutputMessage(blocked,true);return;}
+   if(slicerUploading)return;
+   const sv=$('slicerSave');
+   if(sv){slicerStep();if(!sv.disabled)sv.click();else slicerOutputMessage('The printer is busy. Your slice is kept; try again when it is idle.',true);}
+ });}
 $('slicerDiscardLink').addEventListener('click',e=>{
   e.preventDefault(); slicerOut=null;
   /* Atramas nuimam CIA, ne per `slicerInvalidate`: rezultatas jau isvalytas eilute

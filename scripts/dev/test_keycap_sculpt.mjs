@@ -416,7 +416,7 @@ console.log('\nA NUDGE IS MEASURED AGAINST THE PIECE, NOT THE FIGURE');
    bought the bolt a 24 mm allowance and the bolt was dragged down onto the
    base. It must now be left alone, and the scene must go on failing. */
 const tower = merge(box(-9, 9, -9, 9, 0, 2),          // base, meets the cap
-                    box(4, 8, -8, 8, 2, 40),          // the tower
+                    box(4, 8, -8, 8, 1.9, 40),        // tower overlaps the base by 0.1 mm
                     box(-8, -6, -8, -6, 10, 12));     // the bolt, floating
 const towerSeat = SC.seat(cap, tower, { heightMm: 40 });
 ok('the bolt is floating to start with',

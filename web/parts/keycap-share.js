@@ -44,7 +44,9 @@
      old default. */
   var K2S = { profile:'p', row:'r', sizeU:'u', icon:'i', digit:'d', braille:'b',
               depth:'h', raised:'a', prompt:'m', key:'k', name:'n', wall:'w', roof:'f',
-              legendOn:'l' };
+              legendOn:'l', sculptHeightMm:'sh', meshyPolycount:'mp', meshyUltra:'mu', sculptStyle:'ss',
+              sculptRotationDeg:'sr', sculptScalePercent:'sp',
+              colorMode:'cm', baseColor:'bc', artColor:'ac', useSourceColors:'sc' };
   var S2K = {};
   Object.keys(K2S).forEach(function (k) { S2K[K2S[k]] = k; });
 
@@ -64,10 +66,12 @@
 
   function encode(design) {
     var d = design || {}, out = {};
+    validateArtSettings(d);
     Object.keys(K2S).forEach(function (k) {
       var v = d[k];
       if (v === undefined || v === null || v === '' ) return;
       if (k === 'raised') { out[K2S[k]] = v ? 1 : 0; return; }
+      if (k === 'sculptRotationDeg' && v === 360) v = 0;
       out[K2S[k]] = v;
     });
     return TAG + '-' + b64urlEncode(JSON.stringify(out));
@@ -95,7 +99,21 @@
       out[full] = full === 'raised' ? !!json[k] : json[k];
     });
     if (!out.profile) throw new Error('That code has no profile in it.');
+    validateArtSettings(out);
+    if (out.sculptRotationDeg === 360) out.sculptRotationDeg = 0;
     return out;
+  }
+
+  function validateArtSettings(d) {
+    if(d.colorMode!=null&&d.colorMode!=='solid'&&d.colorMode!=='color')throw new Error('Choose Solid or Color reference.');
+    ['baseColor','artColor'].forEach(function(k){if(d[k]!=null&&(typeof d[k]!=='string'||!/^#[0-9a-f]{6}$/i.test(d[k])))throw new Error('Reference colors must be six-digit hex colors.');});
+    if(d.useSourceColors!=null&&typeof d.useSourceColors!=='boolean')throw new Error('Original model colors must be on or off.');
+    if (d.meshyUltra != null && typeof d.meshyUltra !== 'boolean') throw new Error('Enhanced sculpt detail must be on or off.');
+    if (d.sculptHeightMm != null && (typeof d.sculptHeightMm !== 'number' || !Number.isFinite(d.sculptHeightMm) || d.sculptHeightMm < 6 || d.sculptHeightMm > 30)) throw new Error('Sculpture height must be 6–30 mm.');
+    if (d.meshyPolycount != null && d.meshyPolycount !== 30000 && d.meshyPolycount !== 100000) throw new Error('Meshy detail must be 30k or 100k.');
+    if (d.sculptStyle != null && d.sculptStyle !== 'cuteartisan' && d.sculptStyle !== 'faithfulsubject') throw new Error('Choose Cute artisan or Faithful subject.');
+    if (d.sculptRotationDeg != null && (typeof d.sculptRotationDeg !== 'number' || !Number.isFinite(d.sculptRotationDeg) || d.sculptRotationDeg < 0 || d.sculptRotationDeg > 360)) throw new Error('Artwork rotation must be 0–360 degrees.');
+    if (d.sculptScalePercent != null && (typeof d.sculptScalePercent !== 'number' || !Number.isFinite(d.sculptScalePercent) || d.sculptScalePercent < 50 || d.sculptScalePercent > 100)) throw new Error('Artwork size must be 50–100 percent.');
   }
 
   function describe(design) {

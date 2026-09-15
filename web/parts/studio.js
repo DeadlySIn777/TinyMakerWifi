@@ -95,6 +95,7 @@
      model, slice a model - so Create shows one tool at a time and gives it
      everything. */
   moveTo(panel, 'kcCard');
+  moveTo(panel, 'topperCard');
   var modelBox = document.createElement('div');
   modelBox.id = 'stModelTool';
   modelBox.className = 'stOff';
@@ -122,26 +123,33 @@
     "<div class='stSeg' role='group' aria-label='Tool'>" +
       "<button type='button' data-st='cap'>Keycaps</button>" +
       "<button type='button' data-st='model'>Models</button>" +
+      "<button type='button' data-st='topper'>Toppers</button>" +
     "</div><span class='stSpacer'></span><span id='stStageMeta' class='stMeta'></span>";
   stage.appendChild(bar);
 
   var segs = bar.querySelectorAll('.stSeg button');
+  var stageKind = 'cap';
   /* stOff rather than the hidden attribute. .stSub and #stModelTool both set
      display, and a display rule beats the hidden attribute - which is how
      the settings pills ended up sitting under Monitor. One class, one rule,
      one !important, and the question never comes up again. */
   function setStage(which) {
+    if(['cap','model','topper'].indexOf(which)<0)which='cap';
+    stageKind = which;
     var capBox = $('kcCard'), modelBox = $('stModelTool');
     if (capBox) capBox.classList.toggle('stOff', which !== 'cap');
     if (modelBox) modelBox.classList.toggle('stOff', which !== 'model');
+    if ($('topperCard')) $('topperCard').classList.toggle('stOff', which !== 'topper');
     Array.prototype.forEach.call(segs, function (b) {
       b.classList.toggle('on', b.dataset.st === which);
     });
     try { localStorage.setItem('tmStudioStage', which); } catch (e) {}
+    refreshStageMeta();
     /* Canvases size themselves to their box, and a box that was not
        displayed measured zero. Nudge whoever owns the one now on screen. */
     if (which === 'cap' && window.keycapRefresh) { try { window.keycapRefresh(); } catch (e) {} }
     if (which === 'model' && window.gl3dResetView) { try { window.gl3dResetView(); } catch (e) {} }
+    if (which === 'topper' && window.topperRefresh) window.topperRefresh();
     window.dispatchEvent(new Event('resize'));
   }
   Array.prototype.forEach.call(segs, function (b) {
@@ -156,16 +164,17 @@
   window.studioStage = setStage;
 
   function stageMeta(text) { var e = $('stStageMeta'); if (e) e.textContent = text || ''; }
-  /* The size line the keycap card already computes is the right caption for
-     the stage, so it is mirrored rather than recomputed. */
-  var dimsEl = $('kcDims');
-  if (dimsEl && window.MutationObserver) {
-    new MutationObserver(function () {
-      var kc = $('kcCard');
-      if (!kc || kc.classList.contains('stOff')) return;
-      stageMeta(dimsEl.textContent);
-    }).observe(dimsEl, { childList: true, characterData: true, subtree: true });
+  /* Each tool owns its dimensions. Switching tools must replace (or clear)
+     the caption immediately, before the previous tool's async render ends. */
+  function refreshStageMeta() {
+    var source = $({model:'slicerDims',cap:'kcDims',topper:'tpDims'}[stageKind]);
+    stageMeta(source ? source.textContent : '');
   }
+  if (window.MutationObserver) ['kcDims', 'slicerDims', 'tpDims'].forEach(function (id) {
+    var source = $(id);
+    if (source) new MutationObserver(refreshStageMeta).observe(source,
+      { childList: true, characterData: true, subtree: true });
+  });
 
   // ---- the tabs -----------------------------------------------------------
   function clickOld(id) { var b = $(id); if (b) b.click(); }
@@ -174,6 +183,7 @@
   function go(next, fromHash) {
     if (ROOMS.indexOf(next) < 0) next = 'monitor';
     room = next;
+    window.studioCurrentRoom = next;
     Array.prototype.forEach.call(nav.querySelectorAll('.stTab'), function (t) {
       var on = t.dataset.room === next;
       t.classList.toggle('on', on);
@@ -217,6 +227,7 @@
     if (!fromHash && location.hash.slice(1) !== next) {
       try { history.replaceState(null, '', '#' + next); } catch (e) {}
     }
+    if (window.studioPreviewSync) window.studioPreviewSync();
   }
   window.studioGo = go;
 
@@ -408,13 +419,28 @@
       "<button type='button' id='stPrintLater' class='later'>Later</button>";
     bar.querySelector('b').textContent = name;
     $('stPrintLater').addEventListener('click', function () { bar.classList.add('stOff'); });
-    $('stPrintGo').addEventListener('click', function () {
-      if (!window.startPrint) { bar.classList.add('stOff'); return; }
-      $('stPrintGo').disabled = true;
-      $('stPrintGo').textContent = 'Starting\u2026';
-      try { window.startPrint(encodeURIComponent(name)); } catch (e) {}
-      setTimeout(function () { bar.classList.add('stOff'); }, 1500);
+    $('stPrintGo').addEventListener('click', async function () {
+      var button=$('stPrintGo');
+      if(button.disabled)return;
+      if(typeof window.startPrint!=='function'){
+        if(window.designerFeedback)window.designerFeedback.notice('Print controls are not ready yet. Try again.');
+        return;
+      }
+      button.disabled = true;
+      button.textContent = 'Starting\u2026';
+      try {
+        var started=await window.startPrint(encodeURIComponent(name));
+        // A canceled dialog or a failed preflight leaves this product available.
+        // A new product may have replaced the bar while this attempt was pending.
+        if(started===true&&$('stPrintGo')===button)bar.classList.add('stOff');
+      } catch (e) {
+        if(window.designerFeedback)window.designerFeedback.notice(e.message||'Start failed. Check the printer and try again.');
+      } finally {
+        button.disabled=false;button.textContent='Print it now';
+        if(typeof syncActionLocks==='function')syncActionLocks();
+      }
     });
+    if(typeof syncActionLocks==='function')syncActionLocks();
     /* Put it where the eye already is rather than making it a notification
        somewhere else - the whole complaint was about having to go looking. */
     try { bar.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) {}

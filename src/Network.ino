@@ -40,6 +40,8 @@
 #include <HTTPClient.h>       // fetch version.txt
 #include <uri/UriBraces.h>   // /lib/{} - slicerio failai is korteles (0.17 SL-mod)
 #include "tm_pure.h"     // grynos funkcijos, testuojamos per `pio test -e native`
+#include "tm_fetch_stream.h" // bounded, checked forwarding of decoded model bytes
+#include "meshy_ca.h" // verified public model downloads; ATS root trust store
 #include "slicer_ca.h"   // gh-pages saknis: manifesto TLS tikrinamas (08-22)
 #include <HTTPUpdate.h>       // pull-and-flash firmware.bin (self-update)
 #include <esp_wifi.h>      // esp_wifi_restore() for reliable credential erase
@@ -82,7 +84,7 @@ bool rejectIfBusy() {
 #define STATS_PING_URL  "https://tinymaker-stats.slibbinas.workers.dev/ping"
 #define CRASH_PING_URL  "https://tinymakerwifi.com/crash"   // anonymous crash telemetry (feedback worker, opt-out)
 
-WebServer server(80);
+TmResponseServer<WebServer> server(80);
 
 // #95 CSRF: irodymas, kad rasymo uzklausa ateina IS MUSU pulto, o ne is
 // svetimo puslapio, kuri vartotojas tuo metu atsidare. multipart/form-data yra
@@ -111,17 +113,14 @@ WebServer server(80);
 // us. Kept deliberately short - a name we do not answer on is a name nobody
 // reaches us by.
 static bool hostIsOurs(String a) {
-  a.trim();
-  a.toLowerCase();
-  if (a.length() == 0) return false;
-  if (a.endsWith(":80")) a = a.substring(0, a.length() - 3);
-  while (a.endsWith(".")) a = a.substring(0, a.length() - 1);
-  if (a == "tinymaker.local" || a == "tinymaker") return true;
-  if (a == "localhost" || a == "127.0.0.1") return true;
-  IPAddress sta = WiFi.localIP(), ap = WiFi.softAPIP();
-  if (sta && a == sta.toString()) return true;
-  if (ap && a == ap.toString()) return true;
-  return false;
+  /* The decision itself is in tm_pure.h, where `pio test -e native` runs it
+     on every push. This is the Arduino half: hand it the printer's own two
+     addresses as plain strings so the pure side stays free of WiFi types.
+     Both may be empty when that interface is down, which tmHostIsOurs reads
+     as "contributes no name". */
+  String sta = WiFi.localIP().toString();
+  String ap  = WiFi.softAPIP().toString();
+  return tmHostIsOurs(a.c_str(), sta.c_str(), ap.c_str());
 }
 
 bool requestFromOwnUi() {
@@ -194,6 +193,38 @@ String uploadPath;      // e.g. "/Benchy.sl1"
 String modelName;       // e.g. "Benchy"
 bool uploadOk = false;
 bool uploadRejected = false;
+// HTTP acceptance is not import success. Keep the last completed web import
+// correlated to its own request, even when unpacking fails without changing SD.
+String sdJobImportReceiptId;
+char lastImportReceiptId[33] = {0};
+char lastImportReceiptName[81] = {0};
+char lastImportReceiptError[161] = {0};
+bool lastImportReceiptOk = false;
+
+String newImportReceiptId() {
+  char id[33];
+  snprintf(id, sizeof(id), "%08lx%08lx%08lx%08lx",
+           (unsigned long)esp_random(), (unsigned long)esp_random(),
+           (unsigned long)esp_random(), (unsigned long)esp_random());
+  return String(id);
+}
+
+void recordWebImportResult(bool ok, const String &name, const String &error) {
+  if (sdJobImportReceiptId.length() != 32) return;
+  // Fixed storage cannot fail to retain the final name under heap pressure.
+  // Publish the ID last, once every field belongs to this completion.
+  name.toCharArray(lastImportReceiptName, sizeof(lastImportReceiptName));
+  lastImportReceiptOk = ok;
+  lastImportReceiptError[0] = 0;
+  if (!ok) {
+    error.toCharArray(lastImportReceiptError, sizeof(lastImportReceiptError));
+    if (!lastImportReceiptError[0]) strcpy(lastImportReceiptError, "import failed");
+  } else if (!name.length() || name.length() >= sizeof(lastImportReceiptName)) {
+    lastImportReceiptOk = false;
+    strcpy(lastImportReceiptError, "import completed but its final name could not be verified; inspect the model list");
+  }
+  sdJobImportReceiptId.toCharArray(lastImportReceiptId, sizeof(lastImportReceiptId));
+}
 File previewUploadFile;
 String previewUploadName;
 String previewUploadPath;
@@ -441,9 +472,15 @@ void finishUpload() {
     // inside the handler - freezing every other browser and leaving the
     // uploader guessing from timeouts. Queue it for the idle loop (sdJobRun):
     // answer the client now, dashboards follow via /api/status sdJob and the
-    // finished model announces itself through sdRev (0-28). The slicer's
-    // "sent" therefore appears while the printer is still unpacking - the
-    // model shows up in the list when the import lands.
+    // finished model announces itself through sdRev (0-28). Clients must match
+    // the terminal importResult.id before reporting the queued model as ready.
+    sdJobImportReceiptId = newImportReceiptId();
+    if (sdJobImportReceiptId.length() != 32) {
+      SD.remove(uploadPath.c_str());
+      uploadOk = false;
+      server.send(503, "application/json", "{\"ok\":false,\"error\":\"not enough memory to track import\"}");
+      return;
+    }
     sdJobImportOptions = options;
     sdJobZipPath = uploadPath;
     sdJobName = modelName;
@@ -451,6 +488,8 @@ void finishUpload() {
     uploadOk = false;
     String out = "{\"ok\":true,\"queued\":true,\"name\":\"";
     out += jsonEscape(modelName);
+    out += "\",\"importId\":\"";
+    out += sdJobImportReceiptId;
     out += "\"}";
     server.send(201, "application/json", out);
     return;   // no screen1() - the job draws its progress and restores the UI
@@ -744,7 +783,7 @@ static bool otaMenuOpen() { return screen == 421 || screen == 422; }
 // on - the strict Update-screen rule remains only for the developer espota
 // path (see network_loop). Flashing while printing stays impossible.
 static bool otaWebAllowed() {
-  return otaMenuOpen() || (!printerBusy() && webDashboardRuntimeEnabled());
+  return tmOtaAllowed(printerBusy(), otaMenuOpen(), webDashboardRuntimeEnabled());
 }
 
 // Shared page chrome (head + styled card) for all firmware-update responses.
@@ -2582,7 +2621,12 @@ void handleApiPreflight() {
   }
 
   // --- the model ---
-  if (name.length() && validPrintableModel(name)) {
+  if (printerBusy()) {
+    // Printing owns the SD card. Report the busy gate without opening model
+    // files; a preflight is a read-only check, not permission to interrupt it.
+    preflightCheck(checks, okAll, "model", false, false,
+                   "printer is busy - model checks wait until it is idle");
+  } else if (name.length() && validPrintableModel(name)) {
     ModelSummary sum;
     if (modelSummaryForModel(name, sum)) {
       // Layer-height agreement. The firmware prints every OTHER slice at
@@ -3022,70 +3066,23 @@ void handleApiLiveSlices() {
 // bytes, and copying that verbatim produced a file that was 20 bytes too long
 // and wrong from the first byte. Measured, not guessed - a real file fetched
 // both ways differed at offset 0.
-class SendContentStream : public Stream {
- public:
-  size_t written = 0;
-  size_t write(uint8_t b) override { return write(&b, 1); }
-  size_t write(const uint8_t *buf, size_t n) override {
-    server.sendContent((const char *)buf, n);
-    written += n;
-    return n;
-  }
-  int available() override { return 0; }
-  int read() override { return -1; }
-  int peek() override { return -1; }
-  void flush() override {}
-};
+typedef TmFetchStream<Stream, WiFiClient> SendContentStream;
 
 // Is this a URL handleApiFetch is allowed to touch? Applied to the URL the
 // dashboard supplies AND to every redirect it is offered, because an allowlist
 // checked once and then handed to an automatic redirect follower is not an
 // allowlist - the first hop passes and the second goes wherever it likes.
 //
-// The host is what sits between :// and the next / ? or #, minus any user:pass@
-// and any :port. Taking it any other way is how these checks end up trusting
+// Match HTTPClient's authority boundary at '/'; ambiguous query/fragment,
+// credentials and non-443 ports there are refused. Otherwise a guard can trust
 // "https://evil.com/?x=meshy.ai" (substring anywhere) or "https://meshy.ai.evil
 // .com" (endsWith without the dot).
 bool meshyUrlAllowed(const String &u) {
-  if (!u.startsWith("https://")) return false;
-
-  // ⚠️ THE AUTHORITY ENDS AT '/' AND NOWHERE ELSE, because that is where
-  // HTTPClient::beginInternal ends it. The first version of this stopped at the
-  // first of '/', '?' or '#' instead, and that one difference was a live SSRF:
-  //
-  //     https://meshy.ai?@example.com/
-  //
-  // This checker read the host as "meshy.ai" - no '@' in that slice, so the
-  // credentials guard never fired - and allowed it. HTTPClient read the
-  // authority as "meshy.ai?@example.com", discarded "meshy.ai?" as userinfo,
-  // and connected to example.com. Demonstrated on this device: that URL
-  // returned Example Domain's HTML, and the same trick aimed at 192.168.1.1
-  // reached the gateway over TLS, from inside the network, behind the firewall.
-  //
-  // Two parsers reading one string and disagreeing is the bug class that
-  // defeats allowlists. So there is one parse now, it matches the fetcher's,
-  // and anything ambiguous is REFUSED rather than interpreted.
-  int hs = 8, he = u.length();
-  for (int i = hs; i < (int)u.length(); i++) {
-    if (u[i] == '/') { he = i; break; }
-  }
-  String auth = u.substring(hs, he);
-  if (auth.length() == 0) return false;               // https:///path
-  // An '@' is credentials - HTTPClient would drop everything before it, so the
-  // host is not the one this string appears to name. A '?' or '#' inside the
-  // authority can only mean the two readings differ. Refuse all three.
-  if (auth.indexOf('@') >= 0) return false;
-  if (auth.indexOf('?') >= 0) return false;
-  if (auth.indexOf('#') >= 0) return false;
-  if (auth.indexOf(' ') >= 0 || auth.indexOf('\\') >= 0) return false;
-  if (auth.indexOf('\t') >= 0 || auth.indexOf('\r') >= 0 || auth.indexOf('\n') >= 0) return false;
-
-  String host = auth;
-  int colon = host.indexOf(':');
-  if (colon >= 0) host = host.substring(0, colon);
-  host.toLowerCase();
-  while (host.endsWith(".")) host = host.substring(0, host.length() - 1);  // trailing dot
-  return host == "meshy.ai" || host.endsWith(".meshy.ai");
+  /* One line, because the decision lives in tm_pure.h now - see the comment
+     above, and test/test_pure/test_main.cpp, where the fourteen URLs a real
+     printer refused on 2026-09-14 run on every push. It used to be forty
+     lines here, reachable only by flashing a board. */
+  return tmMeshyUrlAllowed(u.c_str());
 }
 
 // The same URL, in the form the resolver will accept: a trailing dot on the
@@ -3095,16 +3092,15 @@ bool meshyUrlAllowed(const String &u) {
 // only after the URL has already been accepted - it is a spelling fix, never a
 // re-interpretation, and it can never turn a refused URL into an allowed one.
 String meshyUrlNormalised(const String &u) {
-  int hs = 8, he = u.length();
-  for (int i = hs; i < (int)u.length(); i++) if (u[i] == '/') { he = i; break; }
-  String auth = u.substring(hs, he);
-  String hostPart = auth, portPart = "";
-  int colon = auth.indexOf(':');
-  if (colon >= 0) { hostPart = auth.substring(0, colon); portPart = auth.substring(colon); }
-  bool had = false;
-  while (hostPart.endsWith(".")) { hostPart = hostPart.substring(0, hostPart.length() - 1); had = true; }
-  if (!had) return u;
-  return u.substring(0, hs) + hostPart + portPart + u.substring(he);
+  /* Also in tm_pure.h. A fixed buffer rather than String arithmetic: this
+     runs on a request path, and the URL is already bounded by the argument
+     limit. If it will not fit, nothing is changed and the caller uses the
+     original - which is the safe direction, because normalising can only
+     ever remove dots from a host the guard has ALREADY approved. */
+  char out[512];
+  if (u.length() + 1 > sizeof(out)) return u;
+  if (!tmNormaliseHostDots(u.c_str(), out, sizeof(out))) return u;
+  return String(out);
 }
 
 // ---- fetching a generated model on the browser's behalf ---------------------
@@ -3127,10 +3123,10 @@ String meshyUrlNormalised(const String &u) {
 // network, with the firewall already behind it. So this is not a proxy. It is a
 // Meshy download endpoint that happens to take a URL:
 //   - https only, so it cannot be aimed at a plaintext service;
-//   - the host must be meshy.ai or a subdomain, checked on the real host field
-//     after stripping any user:pass@ and :port, because "evil.com/?x=meshy.ai"
+//   - the host must be meshy.ai or a subdomain, with no credentials and only
+//     the default HTTPS port, because "evil.com/?x=meshy.ai"
 //     and "meshy.ai.evil.com" are the two ways this check is usually got wrong;
-//   - redirects may not leave the host they started on;
+//   - every redirect must pass the same Meshy host allowlist;
 //   - the request must come from the printer's own dashboard (#95), and
 //   - it refuses outright while a print is running, because this loop is the
 //     same one that drives the machine and a multi-megabyte TLS download would
@@ -3152,15 +3148,22 @@ void handleApiFetch() {
     return;
   }
   u = meshyUrlNormalised(u);          // after the check, never before it
+  if (!tmTlsClockReady(time(nullptr))) {
+    sendApiError(503, "printer clock is not synced yet; retry the model download in a minute");
+    return;
+  }
 
   WiFiClientSecure client;
-  client.setInsecure();               // same footing as the self-update path
+  client.setCACert(MESHY_CA_PEM);
+  client.setHandshakeTimeout(20);
   HTTPClient http;
   // NOT setFollowRedirects: this core's only same-host option does not exist,
   // and the ones that do would carry the request off the allowlist without
   // telling anybody. Followed by hand below, three hops at most, each one put
   // back through meshyUrlAllowed().
   http.setTimeout(20000);
+  http.setConnectTimeout(10000);
+  http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
   const char *hdrs[] = { "Location" };
   int code = 0;
   String target = u;
@@ -3189,13 +3192,15 @@ void handleApiFetch() {
   }
   if (!opened || code != HTTP_CODE_OK) {
     http.end();
-    String m = "meshy.ai answered " + String(code);
+    String m = code < 0 ? "could not verify or reach Meshy over HTTPS; check Wi-Fi and the printer clock"
+                        : "meshy.ai answered " + String(code);
     sendApiError(502, m.c_str());
     return;
   }
 
   int total = http.getSize();
-  if (total > 0 && total > 48 * 1024 * 1024) {
+  const size_t maxModelBytes = 48UL * 1024 * 1024;
+  if (total > 0 && (size_t)total > maxModelBytes) {
     http.end();
     sendApiError(413, "that model is larger than this can pass through");
     return;
@@ -3212,13 +3217,18 @@ void handleApiFetch() {
   // getSize() returning -1 was the tell: that means chunked, and the loop's
   // "read until the stream ends" then faithfully copied the framing to the end.
   // HTTPClient already undoes all of this; it only wanted somewhere to write.
-  server.setContentLength(total > 0 ? (size_t)total : CONTENT_LENGTH_UNKNOWN);
+  server.setContentLength(total >= 0 ? (size_t)total : CONTENT_LENGTH_UNKNOWN);
   server.sendHeader("Cache-Control", "no-store");
   server.send(200, "application/octet-stream", "");
 
-  SendContentStream out;
+  // Use the framing the server actually advertised; HTTP/1.0 has no chunks.
+  SendContentStream out(server, maxModelBytes);
   int wrote = http.writeToStream(&out);
-  server.sendContent("");                         // terminate the chunked body
+  // Headers already went out: an error cannot become a new JSON response.
+  // Leaving a chunked body unfinished makes the browser report a failed
+  // download instead of handing its GLB parser a plausible, truncated model.
+  if (out.complete(wrote, total)) server.sendContent("");
+  else server.client().stop();
   http.end();
   DBGLN("api/fetch streamed " + String((int)out.written) +
         " bytes (writeToStream said " + String(wrote) + ")");
@@ -3236,7 +3246,7 @@ void handleApiStatus() {
   // lacks it as a truncated/garbled body. Status and the boot-anim list were
   // the two JSON answers built without it.
   String out = "{\"ok\":true,";
-  out.reserve(2368);   // 153 appends, polled mid-print; a failed one is silent
+  out.reserve(2944);   // includes bounded terminal import receipt; polled mid-print
                        // Ismatuota 08-18: blogiausias realus atsakymas (100 simboliu
                        // modelio vardas) ~1,8 KB, tad su atsarga - vienas augimas
                        // reikstu realloc'a kas apklausa, o heap fragmentuojasi.
@@ -3311,6 +3321,22 @@ void handleApiStatus() {
   out += sdJobDone;          // String() temporaries add nothing here, and this
   out += ",\"sdJobTotal\":"; // answer is built for every client every 2 s
   out += sdJobTotal;
+  out += ",\"sdJobImportId\":\"";
+  out += sdJobKind == "import" ? sdJobImportReceiptId : String("");
+  out += "\",\"importResult\":";
+  if (lastImportReceiptId[0]) {
+    out += "{\"id\":\"";
+    out += lastImportReceiptId;
+    out += "\",\"ok\":";
+    out += lastImportReceiptOk ? "true" : "false";
+    out += ",\"name\":\"";
+    out += jsonEscape(lastImportReceiptName);
+    out += "\",\"error\":\"";
+    out += jsonEscape(lastImportReceiptError);
+    out += "\"}";
+  } else {
+    out += "null";
+  }
   /* Ar derva pasirinkta. Turi buti BUTENT cia, o ne /api/config: pultas
      apklausia /api/status kas 2 s, o config'a skaito tik atsidaromas - antras
      atidarytas pultas apie profilio istrynima kitaip nesuzinotu ir rodytu
@@ -3573,7 +3599,7 @@ unsigned long otaCheckedAt = 0;   // millis() of the last successful check
 // SNTP in the background. Before that, verification fails with a message that
 // blames the wrong thing, so check the clock first and say what is actually
 // going on.
-static bool otaClockReady() { return time(nullptr) >= 1700000000L; }
+static bool otaClockReady() { return tmTlsClockReady(time(nullptr)); }
 
 // The release directory on gh-pages - everything we are willing to flash lives
 // under it. Derived from OTA_VERSION_URL so there is one place to change.
@@ -3641,6 +3667,16 @@ void otaCheckLatest(uint16_t timeoutMs) {
     // or tampered file should not be able to take updates away either - the
     // canonical name next to version.txt is what we would have fetched anyway.
     if (otaBinUrl.length() == 0) otaBinUrl = otaTrustedBase() + "firmware.bin";
+    const char *release = otaLatestVer.c_str();
+    if (*release == 'v' || *release == 'V') release++;
+    if (!tmVersionLooksValid(release)) {
+      otaLatestVer = "";
+      otaBinUrl = "";
+      otaState = 4;
+      otaCheckedAt = millis();
+      https.end();
+      return;
+    }
 #ifdef FIRMWARE_VERSION
     int c = cmpSemver(otaLatestVer.c_str(), FIRMWARE_VERSION);
 #else
@@ -3777,6 +3813,9 @@ void crashPingMaybe() {
 // Download a firmware image over HTTPS and flash it. Shows progress on the
 // LCD; reboots on success. Shared by "Install latest" and the version picker.
 void otaFlashUrl(const String &url, const char *subtitle) {
+  // Busy blocks the operation itself. Web routes check their own permission;
+  // physical confirmations (4211 / boot prompt 424) also work with Web off.
+  if (printerBusy()) return;
   // Last gate before the app partition is overwritten. Both checks answer the
   // same question - "do we actually know who is sending these bytes?" - and
   // both refuse rather than guess.
@@ -5759,6 +5798,7 @@ void sdJobRun() {
     String error;
     bool ok = importZipModel(sdJobZipPath.c_str(), sdJobName, sdJobImportOptions,
                              result, error);
+    recordWebImportResult(ok, ok ? result.finalName : sdJobName, error);
     SD.remove(sdJobZipPath.c_str());  // free SD space, keep browser list clean
     if (ok) {
       sdRev++;  // 0-28: every dashboard refreshes its list and names the model
@@ -5775,6 +5815,7 @@ void sdJobRun() {
   }
   sdJobRunning = false;
   sdJobKind = ""; sdJobName = ""; sdJobZipPath = "";
+  sdJobImportReceiptId = "";
   sdJobDone = sdJobTotal = 0;   // SD-prog: stale numbers would outlive the job
   restoreIdleScreen();   // the progress screen overwrote whatever was shown
 }
@@ -5787,7 +5828,7 @@ void network_loop() {
                            // (actions are 403'd - see rejectIfWebControlOff)
   // Dev espota OTA is answered only while the printer is on the Update screen
   // (same safety gate as the web /update flasher).
-  if (otaMenuOpen()) ArduinoOTA.handle();
+  if (!printerBusy() && otaMenuOpen()) ArduinoOTA.handle();
   mqtt_loop();
   tinymakerConnectLoop();
   shopLoop();   // shop roster idle tick - never reached during a print

@@ -9,6 +9,8 @@ Untracked files (e.g. stray images) are ignored on purpose.
 
 Import("env")
 import subprocess
+import hashlib
+from pathlib import Path
 
 
 def _git(args):
@@ -21,7 +23,20 @@ def _git(args):
 
 
 rev = _git(["rev-parse", "--short", "HEAD"]) or "nogit"
-dirty = _git(["status", "--porcelain", "--untracked-files=no"])
+# A resumed source copy may live inside an unrelated parent repository.
+# Its identity must come from its own source, never that parent's git HEAD.
+resume_root = Path(env['PROJECT_DIR'])
+if (resume_root / 'resume-source-manifest.json').is_file():
+    digest = hashlib.sha256()
+    inputs = [resume_root / 'platformio.ini']
+    inputs += sorted((resume_root / 'src').glob('*'))
+    inputs += sorted((resume_root / 'web').rglob('*'))
+    for item in inputs:
+        if item.is_file() and item.name != 'dashboard_html_gz.h' and not item.name.endswith('.ino.cpp'):
+            digest.update(item.relative_to(resume_root).as_posix().encode())
+            digest.update(item.read_bytes())
+    rev = 'local-' + digest.hexdigest()[:10]
+dirty = "" if rev.startswith("local-") else _git(["status", "--porcelain", "--untracked-files=no"])
 tag = rev + ("+dirty" if dirty else "")
 
 print("[inject_git_rev] GIT_REV = %s" % tag)

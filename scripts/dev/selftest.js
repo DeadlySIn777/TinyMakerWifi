@@ -65,6 +65,26 @@
   check('Keycaps tool shows the keycap card', getComputedStyle($('kcCard')).display !== 'none');
   check('Keycaps tool hides the model tool', getComputedStyle($('stModelTool')).display === 'none');
 
+  // The header must describe the selected tool, including after an inactive
+  // keycap render finishes while the user is looking at an imported model.
+  {
+    const keyDims=$('kcDims'),modelDims=$('slicerDims'),meta=$('stStageMeta');
+    const oldKey=keyDims.textContent,oldModel=modelDims.textContent;
+    keyDims.textContent='Keycap fixture: 18 x 18 x 9 mm';
+    modelDims.textContent='Miniature fixture: 12 x 13 x 27 mm';
+    seg('model').click(); await wait(100);
+    check('Models header uses the imported model dimensions',meta.textContent===modelDims.textContent);
+    keyDims.textContent='Late keycap render: 18 x 18 x 12 mm'; await wait(100);
+    check('inactive keycap updates cannot overwrite the Models header',meta.textContent===modelDims.textContent);
+    modelDims.textContent='Rescaled miniature: 12 x 13 x 28 mm'; await wait(100);
+    check('Models header follows model rescaling',meta.textContent===modelDims.textContent);
+    modelDims.textContent=''; await wait(100);
+    check('Models header clears when the model dimensions clear',meta.textContent==='');
+    seg('cap').click();
+    check('returning to Keycaps immediately restores its own dimensions',meta.textContent===keyDims.textContent);
+    keyDims.textContent=oldKey;modelDims.textContent=oldModel;await wait(160);
+  }
+
   // ---- the keyboard picker ------------------------------------------------
   const keys = [...document.querySelectorAll('#kcBoard .kcKey')];
   check('the board rendered', keys.length > 50, keys.length + ' keys');
@@ -154,6 +174,8 @@
   // ---- the legend switch --------------------------------------------------
   const tog = $('kcLegendOn');
   check('the legend switch exists', !!tog);
+  document.querySelector('#kcSteps li[data-step="3"]').click(); await wait(280);
+  check('the legend switch is visible on the Art step', !!tog && tog.checkVisibility());
   if (tog) {
     tog.checked = false; tog.dispatchEvent(new Event('change', { bubbles: true }));
     await wait(450);
@@ -181,6 +203,18 @@
   for (const id of ['kcStl', 'kcAdd', 'kcShare', 'kcComb', 'kcPaint', 'kcSlice']) {
     check('action ' + id + ' is present', !!$(id));
     check('action ' + id + ' is enabled', $(id) && !$(id).disabled);
+  }
+
+  // Clear the actual queue, then prove a fresh addition starts at one again.
+  check('Clear plate is present', !!$('kcClearPlate'));
+  if ($('kcClearPlate')) {
+    $('kcClearPlate').click(); $('kcAdd').click(); await wait(300);
+    check('Add to plate queues one cap', /^1 on the plate/.test($('kcPlate').textContent));
+    $('kcClearPlate').click();
+    check('Clear plate confirms the empty queue', /Plate cleared/.test($('kcPlate').textContent));
+    $('kcAdd').click(); await wait(300);
+    check('adding after Clear starts at one, not two', /^1 on the plate/.test($('kcPlate').textContent));
+    $('kcClearPlate').click();
   }
 
   /* THE LAST STEP'S BUTTON DOES SOMETHING. It used to be renamed to "Done" and

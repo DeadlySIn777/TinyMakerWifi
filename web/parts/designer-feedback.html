@@ -1,0 +1,21 @@
+<dialog id='designerHelpDialog' class='designerHelpDialog' aria-labelledby='designerHelpTitle' aria-describedby='designerHelpBody'>
+  <div class='designerHelpHead'><h2 id='designerHelpTitle'>Help</h2><button id='designerHelpClose' type='button' aria-label='Close help'>×</button></div>
+  <p id='designerHelpBody'></p>
+</dialog>
+<div id='designerNotice' class='designerNotice' hidden>
+  <span id='designerNoticeText' role='status' aria-live='polite' aria-atomic='true'></span>
+  <button id='designerNoticeClose' type='button' aria-label='Dismiss message'>×</button>
+</div>
+<style>
+button.designerHelp,#kcCard button.designerHelp,#topperCard button.designerHelp{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;min-width:24px;padding:0;margin:0 0 0 6px;border:1px solid var(--line2);border-radius:50%;background:transparent;color:var(--muted);font:600 12px/1 system-ui;vertical-align:middle;cursor:pointer}
+button.designerHelp:hover,button.designerHelp:focus-visible{border-color:var(--accent);color:var(--text)}
+#kcCard .kcFit button.designerHelp{flex:0 0 24px;width:24px;max-width:24px}
+.designerLabel{display:flex;align-items:center;gap:4px}.designerLabel>label{margin-right:auto}
+.designerHelpDialog{box-sizing:border-box;width:min(440px,calc(100vw - 32px));max-height:80vh;overflow:auto;padding:22px;border:1px solid var(--line2);border-top:3px solid var(--accent);border-radius:16px;background:var(--card,#17191e);color:var(--text,#eee);box-shadow:0 18px 70px #0009;font:14px/1.6 system-ui}
+.designerHelpDialog::backdrop{background:#0009}.designerHelpHead{display:flex;gap:16px;align-items:center;justify-content:space-between}
+.designerHelpHead h2{font:650 18px/1.3 system-ui;margin:0}.designerHelpHead button,.designerNotice button{width:32px;min-width:32px;height:32px;padding:0;border:0;background:transparent;color:inherit;font:24px/1 system-ui;cursor:pointer;border-radius:8px}
+.designerHelpDialog p{white-space:pre-line;margin:14px 0 0;color:var(--muted,#bbb)}
+.designerNotice{position:fixed;right:24px;bottom:24px;z-index:1500;display:flex;align-items:center;gap:16px;max-width:min(430px,calc(100vw - 32px));box-sizing:border-box;padding:12px 12px 12px 18px;background:var(--card,#17191e);color:var(--text,#eee);border:1px solid var(--line2);border-left:3px solid var(--accent);border-radius:12px;box-shadow:0 8px 30px #0007;font:14px/1.5 system-ui}
+.designerNotice[hidden]{display:none}.designerNotice span{overflow-wrap:anywhere}.designerNotice button:hover,.designerHelpHead button:hover{background:var(--accent-soft,#421b21)}
+@media(max-width:560px){.designerNotice{right:16px;bottom:16px;left:16px;max-width:none}}
+</style>

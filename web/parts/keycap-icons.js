@@ -297,15 +297,15 @@
     var o = opts || {};
     var doc = root.document;
     if (!doc || !doc.createElement) return null;
-    var N = o.samples || 256;
+    var N = Math.max(64, Math.min(1024, Math.round(o.samples || 512)));
     var c = doc.createElement('canvas');
     c.width = N; c.height = N;
     var g = c.getContext('2d', { willReadFrequently: true });
     if (!g) return null;
     g.clearRect(0, 0, N, N);
     g.fillStyle = '#fff';
-    g.textAlign = 'center';
-    g.textBaseline = 'middle';
+    g.textAlign = 'left';
+    g.textBaseline = 'alphabetic';
     var weight = o.weight || 700;
     var family = o.family || 'ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif';
     // shrink until the glyph fits the box with a margin
@@ -313,16 +313,18 @@
     for (var tries = 0; tries < 8; tries++) {
       g.font = weight + ' ' + px + 'px ' + family;
       var m = g.measureText(text);
-      var w = m.width;
-      var h = (m.actualBoundingBoxAscent || px * 0.7) + (m.actualBoundingBoxDescent || px * 0.2);
+      var w = m.actualBoundingBoxLeft + m.actualBoundingBoxRight || m.width;
+      var h = (m.actualBoundingBoxAscent || 0) + (m.actualBoundingBoxDescent || 0) || px;
       if (w <= N * 0.86 && h <= N * 0.86) break;
       px *= Math.min(N * 0.86 / Math.max(w, 1), N * 0.86 / Math.max(h, 1)) * 0.98;
     }
     g.font = weight + ' ' + px + 'px ' + family;
     var mm = g.measureText(text);
-    var asc = mm.actualBoundingBoxAscent || px * 0.7;
-    var desc = mm.actualBoundingBoxDescent || px * 0.2;
-    g.fillText(text, N / 2, N / 2 + (asc - desc) / 2);
+    var asc = mm.actualBoundingBoxAscent || 0;
+    var desc = mm.actualBoundingBoxDescent || 0;
+    var left = mm.actualBoundingBoxLeft || 0;
+    var right = mm.actualBoundingBoxRight == null ? mm.width : mm.actualBoundingBoxRight;
+    g.fillText(text, (N + left - right) / 2, (N + asc - desc) / 2);
     var data;
     try { data = g.getImageData(0, 0, N, N).data; } catch (e) { return null; }
     var cov = new Float32Array(N * N);
@@ -342,6 +344,32 @@
       return raised ? -depth * t : depth * t;
     };
     f.depth = depth; f.raised = raised; f.parts = []; f.glyph = text;
+    f.samples = N;
+    return f;
+  }
+
+  /* A real letter in the upper-left corner. Millimetres use the short face
+     dimension so Shift/Enter do not stretch their lettering. Expose the same
+     footprint to the mesh builder, which samples it finely even in preview. */
+  function placedGlyphRelief(text, opts) {
+    var o = opts || {}, glyph = glyphRelief(text, o);
+    if (!glyph) return null;
+    var scale = o.scale == null ? 0.30 : o.scale;
+    var ox = o.x == null ? -0.62 : o.x, oy = o.y == null ? 0.64 : o.y;
+    function box(w, h) {
+      w = w || 13.7; h = h || w;
+      var short = Math.min(w,h), half = short*scale/2;
+      var x = -w/2 + (ox+1)*short/2, y = h/2-(1-oy)*short/2;
+      return { x: [x-half,x+half], y: [y-half,y+half] };
+    }
+    var f = function (u, v, w, h) {
+      w = w || 13.7; h = h || w;
+      var b = box(w,h), span = b.x[1]-b.x[0];
+      return glyph((u*w-b.x[0]-b.x[1])/span, (v*h-b.y[0]-b.y[1])/span);
+    };
+    f.depth = glyph.depth; f.raised = glyph.raised; f.parts = [];
+    f.glyph = text; f.samples = glyph.samples;
+    f.detailRegions = function (w,h) { return [box(w,h)]; };
     return f;
   }
 
@@ -458,7 +486,7 @@
     var thresh = Math.abs(relief.depth) * 0.5;
     for (y = 0; y < ny; y++) for (x = 0; x < nx; x++) {
       var u = (x + 0.5) / nx * 2 - 1, v = 1 - (y + 0.5) / ny * 2;
-      on[y*nx + x] = Math.abs(relief(u, v)) >= thresh ? 1 : 0;
+      on[y*nx + x] = Math.abs(relief(u, v, topWmm, topDmm)) >= thresh ? 1 : 0;
     }
 
     function dt(mask) {                      // chamfer distance to nearest 0
@@ -514,6 +542,7 @@
     var gaps = blobWidths(off).filter(function (g) { return g.samples < nx * ny * 0.45; });
 
     var issues = [];
+    if (!marks.length) issues.push('the lettering contains no printable marks at this size');
     var thinMark = marks.length ? Math.min.apply(null, marks.map(function (m) { return m.widthMm; })) : null;
     var thinGap  = gaps.length  ? Math.min.apply(null, gaps.map(function (m) { return m.widthMm; }))  : null;
     if (thinMark !== null && thinMark < floor)
@@ -578,7 +607,7 @@
     evalHeight: evalHeight,
     raisedTilt: raisedTilt,
     evalShape: evalShape, scaleShape: scaleShape, digitShape: digitShape,
-    glyphRelief: glyphRelief,
+    glyphRelief: glyphRelief, placedGlyphRelief: placedGlyphRelief,
     smooth: smooth, pixelIcon: pixelIcon
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.keycapIcons;

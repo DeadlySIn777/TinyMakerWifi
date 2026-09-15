@@ -38,7 +38,33 @@
           </div>
         </div>
         <div id='kcDims' class='kcDims'></div>
-        <div class='kcInsets'>
+        <div id='kcInspect' class='kcInspect' role='group' aria-label='Inspect keycap from every side'>
+          <button type='button' data-view='perspective'>3D</button>
+          <button type='button' data-view='front'>Front</button>
+          <button type='button' data-view='side'>Side</button>
+          <button type='button' data-view='back'>Back</button>
+          <button type='button' data-view='bottom'>Socket</button>
+        </div>
+        <div class='designerLabel'><label class='kcViewZoom' for='kcViewZoom'><span>View zoom</span><input id='kcViewZoom' type='range' min='80' max='160' step='5' value='100' aria-describedby='kcViewHelp'><output id='kcViewZoomValue'>100%</output></label><button type='button' class='designerHelp' data-designer-help='kcViewHelp' data-help-title='Preview zoom' aria-label='About preview zoom'>?</button></div>
+        <p id='kcViewHelp' hidden>Preview only · exported dimensions stay the same.</p>
+        <div class='kcColorBar'>
+          <div class='kcSeg' id='kcColorMode' role='group' aria-label='Preview color'>
+            <button type='button' data-color-mode='solid' class='on' aria-pressed='true'>Solid</button>
+            <button type='button' data-color-mode='color' aria-pressed='false'>Color reference</button>
+          </div>
+          <button type='button' class='designerHelp' data-designer-help='kcColorHelp' data-help-title='Color reference' aria-label='About color reference'>?</button>
+        </div>
+        <p id='kcColorHelp' hidden>A painting reference for the 3D preview. Original colors are used when the model includes supported materials or textures; otherwise choose your own colors. Textures are sampled onto the mesh, so very fine painted details can look softer. STL files and this printer's output have no color instructions. Color does not change fit, geometry, or the print.</p>
+        <details id='kcColorOptions' class='kcColorOptions' hidden>
+          <summary>Edit reference colors</summary>
+          <div class='kcColorSwatches'>
+            <label for='kcBaseColor'>Cap<input id='kcBaseColor' type='color' value='#f3bdd6'></label>
+            <label for='kcArtColor'>Artwork<input id='kcArtColor' type='color' value='#a9dbcc'></label>
+          </div>
+          <label id='kcSourceColorWrap' class='kcSourceColor' hidden><input id='kcSourceColors' type='checkbox' checked>Original model colors</label>
+          <p id='kcColorSource' class='hint'></p>
+        </details>
+        <div id='kcInsets' class='kcInsets'>
           <figure><canvas id='kcFlat' width='200' height='200'
             aria-label='the legend, seen straight down'></canvas><figcaption>legend</figcaption></figure>
           <figure><canvas id='kcSide' width='200' height='120'
@@ -102,18 +128,48 @@
           <label class='kcLegendRow'>
             <input id='kcLegendOn' type='checkbox' checked>
             <span><b>Put the key's character on the cap</b>
-              <small id='kcLegendWhich'>the board fills this in from the key you picked</small></span>
+              <small id='kcLegendWhich' hidden>the board fills this in from the key you picked</small></span>
           </label>
 
           <div data-art='gen'>
+            <button id='kcBrowseStyles' class='button secondary' type='button'>Browse artisan styles</button>
+            <div id='kcStyleDraft' hidden style='margin:10px 0;padding:10px;border:1px solid #69343a;border-radius:10px;background:#231316'>
+              <p id='kcStyleDraftNote' class='hint' style='margin:0' aria-live='polite'></p>
+              <button id='kcStyleDraftCancel' class='button secondary' type='button' style='margin-top:8px'>Cancel style draft</button>
+            </div>
+            <label class='kcLbl' for='kcPrompt'>Describe your artwork</label>
             <textarea id='kcPrompt' rows='3' maxlength='500'
-              placeholder='a military IFAK pouch with a medical cross patch'></textarea>
+              placeholder='Describe a full 3D character or object for your keycap'></textarea>
+            <div class='designerLabel'><label class='kcNum grow' for='kcSculptHeight'><span>Sculpture height</span>
+              <input id='kcSculptHeight' type='range' min='6' max='30' step='0.5' value='19'>
+              <output id='kcSculptHeightVal' for='kcSculptHeight'>19 mm</output></label><button type='button' class='designerHelp' data-designer-help='kcHeightHelp' data-help-title='Artwork size' aria-label='About artwork size'>?</button></div>
+            <p id='kcHeightHelp' hidden>Artwork keeps its proportions and fits between neighboring keys; relief depth only changes lettering and flat artwork. The height is a maximum, so a wide model can be shorter. Check Actual artwork below after importing or generating.</p>
+            <details class='kcGenerationOptions'><summary>Generation settings</summary>
             <div class='calRow'>
-              <button id='kcGen' type='button' style='flex:2 1 160px'>Generate</button>
+              <label class='grow' for='kcMeshyDetail'>Meshy detail<select id='kcMeshyDetail'><option value='30000'>Standard · 30k target</option><option value='100000'>Fine · 100k target</option></select></label>
+              <label class='grow' for='kcSculptStyle'>Art direction<select id='kcSculptStyle'><option value='cuteartisan'>Cute artisan</option><option value='faithfulsubject'>Faithful subject</option></select></label>
+            </div>
+            <p class='hint'>Cute artisan favors big expressive heads and a broad silhouette. These options apply to the next generation.</p>
+            <label class='kcLegendRow'><input id='kcMeshyUltra' type='checkbox'><span><b>Enhanced sculpt detail</b><small>Meshy 7 Ultra · adds 5 Meshy credits per generation. Improves geometry detail; results still need review.</small></span></label>
+            </details>
+            <div class='calRow'>
+              <button id='kcGen' type='button' style='flex:2 1 160px'>Generate + finish keycap</button>
               <button id='kcGenClear' class='button secondary' type='button'
                 style='flex:1 1 90px' disabled>Clear</button>
             </div>
             <p id='kcGenNote' class='hint'></p>
+            <section id='kcPlacement' hidden>
+              <div class='designerLabel'><p class='kcLbl'>Artwork placement</p><button type='button' class='designerHelp' data-designer-help='kcPlacementHelp' data-help-title='Artwork placement' aria-label='About artwork placement'>?</button></div>
+              <label class='kcNum grow' for='kcSculptRotation'><span>Turn artwork</span>
+                <input id='kcSculptRotation' type='range' min='0' max='360' step='15' value='0'>
+                <output id='kcSculptRotationValue' for='kcSculptRotation'>0°</output></label>
+              <label class='kcNum grow' for='kcSculptSize'><span>Fine size adjustment</span>
+                <input id='kcSculptSize' type='range' min='50' max='100' step='1' value='100'>
+                <output id='kcSculptSizeValue' for='kcSculptSize'>100%</output></label>
+              <button id='kcSculptFill' class='button secondary' type='button'>Fill available key space</button>
+              <p id='kcSculptMeasured' class='hint' aria-live='polite'></p>
+              <p id='kcPlacementHelp' hidden>Turn and resize the artwork without changing the keycap or socket. Fill uses up to 30 mm of artwork height, within the available key spacing. Check the measured size and all views before saving. Taller designs may need a different print angle.</p>
+            </section>
             <!-- THE WAY ROUND A BLOCKED NETWORK. Generating was the only way to
                  get a model onto a cap, so one remote call was a single point
                  of failure for the whole product: a blocker extension, a phone
@@ -122,11 +178,8 @@
                  already have - generated on meshy.ai in a normal tab, bought,
                  downloaded, sculpted yourself - goes straight on the cap from
                  here, and the stage takes a drop as well. -->
-            <label class='kcOpen' id='kcOpenWrap'>
-              <span>Open a .glb or .stl</span>
-              <input type='file' id='kcFile' accept='.glb,.stl,model/gltf-binary'
-                style='display:none'>
-            </label>
+            <button class='kcOpen button secondary' id='kcOpenWrap' type='button'>Open a .glb or .stl</button>
+            <input type='file' id='kcFile' accept='.glb,.stl,model/gltf-binary' style='display:none'>
           </div>
 
           <div data-art='lib' hidden>
@@ -171,13 +224,39 @@
 
         <div class='kcGroup' data-for='4' hidden>
           <div id='kcReport' class='kcReport'></div>
+          <section class='kcFit' aria-labelledby='kcFitLabel'>
+            <div class='kcFitHead'><label id='kcFitLabel' for='kcStemFit'>Stem fit</label><button type='button' class='designerHelp' data-designer-help='kcFitHelp' data-help-title='Socket fit' aria-label='About socket fit'>?</button><output id='kcStemFitValue' for='kcStemFit'>1.23 mm</output></div>
+            <input id='kcStemFit' type='range' min='1.15' max='1.45' step='0.01' value='1.23' aria-describedby='kcFitHelp'>
+            <div class='kcFitEnds'><span>Tighter · smaller socket</span><span>Looser · larger socket</span></div>
+            <div class='calRow'>
+              <button id='kcFitTight' class='button secondary' type='button'>Too tight · widen</button>
+              <button id='kcFitLoose' class='button secondary' type='button'>Too loose · narrow</button>
+            </div>
+            <p id='kcFitHelp' hidden>Tell it how your cured test print fits. Each button changes the socket by 0.02 mm; the outside of the cap stays the same size. This remembers your feedback in this browser—it does not measure the fit automatically.</p>
+            <details>
+              <summary>Use a stem fit test coupon</summary>
+              <p class='hint'>Print “Stem fit test” below. Test the fully cured coupons on your switch, then choose the snug socket that seats without force. Read across the front row from left to right, then the next row.</p>
+              <div class='calRow'>
+                <label for='kcFitCoupon'>Best coupon</label>
+                <select id='kcFitCoupon'>
+                  <option value=''>Choose its socket width</option>
+                  <option value='1.15'>1 · 1.15 mm</option><option value='1.20'>2 · 1.20 mm</option>
+                  <option value='1.25'>3 · 1.25 mm</option><option value='1.30'>4 · 1.30 mm</option>
+                  <option value='1.35'>5 · 1.35 mm</option>
+                </select>
+                <button id='kcApplyCoupon' class='button secondary' type='button' disabled>Apply coupon</button>
+              </div>
+            </details>
+            <p id='kcFitNote' class='hint' aria-live='polite'></p>
+          </section>
           <div class='calRow'>
             <button id='kcAdd' class='button secondary' type='button' style='flex:1 1 130px'>Add to plate</button>
+      <button type="button" class="button secondary" id="kcClearPlate">Clear plate</button>
             <button id='kcSlice' type='button' style='flex:2 1 150px'>Send to slicer</button>
           </div>
           <div class='calRow'>
             <button id='kcShare' class='button secondary' type='button' style='flex:1 1 130px'
-              title='A picture of the cap plus a code that rebuilds it exactly - send it to whoever has to approve it'>Share for approval</button>
+              title='Share a picture and recipe. Imported 3D artwork needs its Library backup too.'>Share for approval</button>
             <button id='kcStl' class='button secondary' type='button' style='flex:1 1 110px'>Export STL</button>
           </div>
           <div class='calRow'>
@@ -187,6 +266,7 @@
               title='A row of stems, each slot wider than the last. Print it once and keep the one that clicks.'>Stem fit test</button>
           </div>
           <p id='kcPlate' class='hint'></p>
+          <p id='kcActionNote' class='hint' role='status' aria-live='polite'></p>
           <details class='kcOpen'>
             <summary>Open a shared design</summary>
             <div class='calRow'>
@@ -197,6 +277,16 @@
           </details>
         </div>
 
+        <section id='kcProductPanel' hidden style='margin-top:16px;padding:14px;border:1px solid #69343a;border-radius:12px;background:#211317'>
+          <div class='designerLabel'><label for='kcProductName'>Product name</label><button type='button' class='designerHelp' data-designer-help='kcProductHelp' data-help-title='Saved product' aria-label='About saved product'>?</button></div>
+          <input id='kcProductName' type='text' maxlength='120' placeholder='My artisan Escape key'>
+          <p id='kcProductStatus' class='hint' role='status'></p>
+          <div class='calRow'>
+            <button id='kcSaveProduct' type='button'>Save product</button>
+            <button id='kcDownloadProduct' class='button secondary' type='button' disabled>Download product STL</button>
+          </div>
+          <p id='kcProductHelp' hidden>The source artwork, assembled keycap and exact socket fit. Ready to slice checks geometry, not appearance. Inspect every side; cured fit and small details still need a print test. Use Backup design in the Library to transfer the editable source between browsers.</p>
+        </section>
         <div class='kcNav'>
           <button id='kcBack' class='button secondary' type='button'>Back</button>
           <button id='kcNext' type='button'>Next</button>
@@ -224,6 +314,26 @@
    and a stage that sits beside its controls, and at 543 px it got neither -
    the keys came out 27 px wide and the desktop layout never engaged. */
 #kcCard{grid-column:1/-1}
+#kcCard .hint:empty{display:none}
+#kcCard .designerLabel>.kcNum,#kcCard .designerLabel>.kcViewZoom{flex:1;min-width:0}
+#kcCard .kcFitHead>.designerHelp{margin-right:auto}
+#kcCard #kcProductStatus{margin:8px 0;font-size:13px}
+
+#kcCard [hidden]{display:none!important}
+#kcCard .kcFunctionRow{margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--line2)}
+#kcCard .kcViewZoom{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--muted)}
+#kcCard .kcViewZoom input{flex:1;min-width:0;accent-color:var(--accent)}
+#kcCard .kcViewZoom output{min-width:36px;text-align:right}
+#kcCard .kcGenerationOptions,#kcCard .kcProductHelp{margin:12px 0}
+#kcCard .kcGenerationOptions summary,#kcCard .kcProductHelp summary{cursor:pointer;font-size:13px;color:var(--muted);padding:6px 0}
+#kcCard .kcInspect button[aria-pressed=true]{border-color:var(--accent);color:var(--text);background:var(--accent-soft)}
+#kcCard .kcSteps li:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:6px}
+@container kc (min-width:700px){#kcCard .kcStageWrap{position:sticky;top:16px}}
+@container kc (max-width:450px){#kcCard .kcModes{display:grid;grid-template-columns:1fr 1fr}#kcCard .kcModes button{width:100%;min-width:0}}
+
+#kcCard .kcInspect{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 12px}
+#kcCard .kcInspect button{flex:1 1 45px;min-width:0;width:auto;padding:7px 8px;font-size:12px;background:var(--kFace);color:var(--muted);border:1px solid var(--line2);border-radius:8px}
+#kcCard .kcInspect button:hover,#kcCard .kcInspect button:focus-visible{border-color:var(--accent);color:var(--text)}
 #kcCard{container-type:inline-size;container-name:kc}
 #kcCard{--kSkirt:#0f1116;--kFace:#1b1f27;--kLip:#333a47;--kWell:#07080a;
   --kPlate:#0a0b0e;--kDrop:rgba(0,0,0,.55);--kSweep:#191d25;--kFloor:#0a0c10}
@@ -463,6 +573,17 @@
 #kcCard .kcSeg button.on{background:var(--accent-soft);color:var(--text);box-shadow:inset 0 -2px 0 var(--accent)}
 
 /* ---- the report -------------------------------------------------------- */
+#kcCard .kcFit{margin:14px 0;padding:12px;border:1px solid var(--line2);border-radius:10px;background:var(--tile)}
+#kcCard .kcFitHead,#kcCard .kcFitEnds{display:flex;justify-content:space-between;gap:12px;align-items:center}
+#kcCard .kcFitHead{font-weight:650;color:var(--text)}
+#kcCard .kcFitHead output{font-variant-numeric:tabular-nums;color:var(--accent)}
+#kcCard #kcStemFit{display:block;width:100%;margin:12px 0 5px;accent-color:var(--accent)}
+#kcCard .kcFitEnds{font-size:11px;color:var(--muted)}
+#kcCard .kcFitEnds span:last-child{text-align:right}
+#kcCard .kcFit .calRow{gap:8px;margin-top:10px}
+#kcCard .kcFit button{flex:1 1 120px;width:auto}
+#kcCard .kcFit select{flex:2 1 150px;min-width:0;background:var(--tile);color:var(--text);border:1px solid var(--line2);border-radius:6px;padding:8px}
+#kcCard .kcFit details summary{cursor:pointer;color:var(--text);font-size:12px}
 #kcCard .kcReport dl{display:grid;grid-template-columns:auto 1fr;gap:0 16px;margin:0}
 #kcCard .kcReport dt{padding:clamp(5px,.7cqw,10px) 0;color:var(--muted2);
   font-size:clamp(11.5px,1.2cqw,16px);border-bottom:1px solid var(--line3)}
@@ -494,4 +615,13 @@
   font-family:ui-monospace,Menlo,Consolas,monospace}
 #kcCard .kcNav{display:flex;gap:9px;margin-top:18px;padding-top:13px;border-top:1px solid var(--line)}
 #kcCard .kcNav button{flex:1}
+#kcCard .kcColorBar{display:flex;align-items:center;gap:8px;margin:8px 0}
+#kcCard .kcColorBar .kcSeg{flex:1;margin:0}
+#kcCard .kcColorOptions{margin:8px 0;font-size:13px;color:var(--muted)}
+#kcCard .kcColorOptions summary{cursor:pointer;padding:6px 0}
+#kcCard .kcColorSwatches{display:flex;gap:16px;margin:8px 0}
+#kcCard .kcColorSwatches label{display:flex;align-items:center;gap:8px}
+#kcCard .kcColorSwatches input[type=color]{width:42px;height:32px;padding:2px;min-width:0;border:1px solid var(--line2);border-radius:7px;cursor:pointer}
+#kcCard .kcSourceColor{display:flex;align-items:center;gap:8px}
+#kcCard .kcSourceColor input{width:auto;margin:0}
 </style>

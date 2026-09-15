@@ -409,6 +409,7 @@ progress::-moz-progress-bar{background:var(--live)}
 
 <!--#include parts/studio.html-->
 <!--#include parts/studio-polish.html-->
+<!--#include parts/designer-feedback.html-->
 
 <div id='statusMsg' class='hint'></div>
 
@@ -667,6 +668,7 @@ progress::-moz-progress-bar{background:var(--live)}
      on a desktop it never got its desktop layout: the stage never appeared
      beside the controls and the 15-unit keyboard was squeezed to 27 px keys. -->
 <!--#include parts/keycap-card.html-->
+<!--#include parts/topper-card.html-->
 </div>
 
 <section id='modelPanel' class='card hidden'>
@@ -1251,6 +1253,7 @@ const esc=v=>String(v||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
    helper that carries the timeout and the X-TinyMaker header. */
 const api=async(path,opt,timeoutMs)=>{
   const o=Object.assign({cache:'no-store'},opt||{});let timer=null,ctrl=null;
+  const retryNetwork=o.retryNetwork!==false;delete o.retryNetwork;
   // #95: irodymas, kad uzklausa is musu pulto - be jos printeris rasymo
   // uzklausu nebepriima (svetimas puslapis sios antrastes prideti negali).
   o.headers=Object.assign({'X-TinyMaker':'1'},o.headers||{});
@@ -1265,7 +1268,7 @@ const api=async(path,opt,timeoutMs)=>{
       // The browser reuses keep-alive sockets the printer has already closed;
       // such an attempt dies before reaching the printer (POSTs are not
       // auto-retried like GETs), so one fresh-connection retry is safe.
-      if(e.name==='AbortError')throw e;
+      if(e.name==='AbortError'||!retryNetwork)throw e;
       await new Promise(res=>setTimeout(res,300));
       r=await fetch(path,o);
     }
@@ -2716,6 +2719,7 @@ const applyStatus=s=>{
        so the one field they need is published. Read-only by convention: the
        card uses it, nothing writes it back. */
     window.tmStatus=s;
+    if(window.studioPreviewSync)setTimeout(()=>window.studioPreviewSync(),0);
     // 1-32/1-33: busy may mean an SD job (delete/import), not a print - the
     // print UI must not appear then (its Stop/Pause would target nothing).
     const sdJob=s.sdJob||'', busyPrint=!!s.busy&&!sdJob;
@@ -3530,7 +3534,8 @@ const renderFiles=()=>{
     /* Pazymeta eilute = tas modelis, kuris siuo metu perziuroje. Paspaudimas ant
        eilutes ir yra „Preview" (mygtuko nebeliko), tad sarasas lieka vien vardai,
        o veiksmai iskyla ten, kur ju reikia - pasirinktoje eiluteje. */
-    const sel=isModel&&it.name===dashPreviewName;
+    const selectedPreview=(window.studioSavedPreviewName&&window.studioSavedPreviewName())||dashPreviewName;
+    const sel=isModel&&it.name===selectedPreview;
     const loading=sel&&previewLoadingName===it.name;
     const isNew=isModel&&newNames.has(it.name);
     const ico=isModel?rowIcon(it.name):'';   // viena uzklausa i saugykla, ne dvi
@@ -5117,6 +5122,7 @@ let previewRun=0;
    spaudziamos, tai tik antra sarga. */
 window.pickModel=n=>{
   if(uiBusy()||(statusData&&statusData.webControl===false))return;
+  if(window.studioPickSavedPreview&&window.studioPickSavedPreview(n))return;
   dashPreview(n);   // tas pats vardas = perkrauti perziura (jokiu aklaviecziu)
 };
 // Single door for the previewed-model name: the SD list marks that row, so the
@@ -5939,20 +5945,44 @@ const retryPendingPrintCommand=async()=>{
     if(e.message.indexOf('not printing')>=0||e.message.indexOf('not paused')>=0||e.message.indexOf('please refill')>=0){pendingPrintCmd='';printWaitSent='';msg(e.message,true);}
   }finally{pendingPrintInFlight=false;applyPendingPrintUi();renderPrintWait();}
 };
-const startPrint=async(nameEnc,force)=>{const name=decodeURIComponent(nameEnc||enc(selectedModel));if(!name)return;
+// ---- Confirmed print start: one model, one owner, no automatic motion retry.
+const printPreflight=async name=>{
+  const p=await api('/api/preflight?name='+enc(name),null,8000);
+  if(!p||typeof p.ready!=='boolean'||!Array.isArray(p.checks)||!p.checks.length||
+     !p.checks.every(c=>c&&typeof c.check==='string'&&typeof c.pass==='boolean'&&
+       ['ok','warn','fail'].includes(c.level)&&typeof c.detail==='string'))
+    throw new Error('The printer did not return complete preflight checks. Start was not sent.');
+  const failed=p.checks.filter(c=>!c.pass&&c.level==='fail');
+  if(failed.length)throw new Error('Cannot start “'+name+'”: '+failed.map(c=>c.detail).join('; '));
+  if(!p.ready||!['idle','sd','resin_profile','layer_count'].every(key=>p.checks.some(c=>c.check===key&&c.pass)))
+    throw new Error('The printer could not confirm this model is ready. Start was not sent.');
+  return p.checks.filter(c=>!c.pass&&c.level==='warn').map(c=>c.detail);
+};
+const sameActivePrint=(s,name)=>!!(s&&s.ok===true&&s.busy===true&&!s.sdJob&&s.model===name&&
+  /^(?:Testing - )?(?:Homing|Curing|Lifting|Dropping|Canceling|Pausing|Paused|Resuming|Raising plate|Refill resin|Printing|Testing)$/.test(s.state||''));
+const startPrint=async(nameEnc)=>{
+  let name;try{name=decodeURIComponent(nameEnc||enc(selectedModel));}catch(e){msg('Choose a valid model before printing.',true);return false;}
+  if(!name||/[\\/\x00-\x1f]/.test(name)){msg('Choose a valid model before printing.',true);return false;}
   /* Sargas pries pati klausima: mygtukas jau uzrakintas, bet iskvietimas ateina ir is
      kortelės, ir is klaviaturos - o klausti „Start this print?", kai printeris tuo metu
      ispakuoja, yra tiesiog netiesa (V 08-14). */
-  if(uiBusy()){msg('The printer is busy - wait until it finishes.',true);return;}
+  if(uiBusy()){msg('The printer is busy - wait until it finishes.',true);return false;}
+  if(!statusData){msg('Wait for the printer to reconnect before starting.',true);return false;}
+  if(statusData.webControl===false){msg('Enable web control on the printer before starting.',true);return false;}
+  if(statusData.sdReady===false){msg('Insert a working SD card before starting.',true);return false;}
+  if(statusData.resumePending){msg('Resolve the unfinished print on the printer before starting a new one.',true);return false;}
   /* Derva nepasirinkta: mygtukai jau uzrakinti, bet sitas iskvietimas ateina ir
      is klaviaturos, ir is kortelės - tas pats raštas kaip uiBusy() virs. Be sito
      vartotojas gautu „Start this print?" ir tik po patvirtinimo - 409 (08-17). */
   if(statusData&&statusData.resinSet===false){
-    msg('No resin selected - pick a resin before printing.',true);return;}
-  clearNew(name);if(!force&&!await uiConfirm('Start this print?'))return;
-  if(!force&&statusData&&statusData.askRefill){
+    msg('No resin selected - pick a resin before printing.',true);return false;}
+  startBusy=true;bgJob='Confirming print…';syncActionLocks();
+  let startSnackDone=()=>{};
+  try{
+  if(!await uiConfirm('Start “'+name+'”?',{ok:'Start print'}))return false;
+  if(statusData&&statusData.askRefill){
     if(await uiConfirm('VAT filled full?',{cancel:'No',ok:'Yes'})){
-      try{await api('/api/vat/refilled',{method:'POST'});}catch(e){}
+      await api('/api/vat/refilled',{method:'POST'},8000);
     }
   }
   /* NUO SIOS VIETOS pultas jau dirba: uzrakinam mygtukus ir pasakom, kas vyksta.
@@ -5964,26 +5994,24 @@ const startPrint=async(nameEnc,force)=>{const name=decodeURIComponent(nameEnc||e
   /* Perziuros krovimo zyme nuimama: nuo cia darba perima spaudinio paruosimas, ir
      eiluteje besisukantis suktukas rodytu jau nebevykstanti darba (V 08-18). */
   if(typeof setPreviewLoading==='function')setPreviewLoading('');
-  startBusy=true; bgJob='Processing files. Please wait...'; syncActionLocks();
+  bgJob='Processing files. Please wait...'; syncActionLocks();
   /* Paskelbta CIA, ne try viduje: ja kviecia `finally`, o tai atskira matomumo sritis -
      try bloke paskelbtas `const` jame nematomas, ir kvietimas nutrauktu visa `finally`
      (kartu ir mygtuku atrakinima). Taip ir buvo: pranesimas kabodavo, o pultas likdavo
      uzrakintas iki puslapio perkrovimo (V 08-18). */
-  let startSnackDone=()=>{};
   /* Busenos eilute perpiesama CIA PAT: ji atsinaujina tik per apklausa, o ta
      paruosimo metu daznai nespeja - zmogui atrode, kad uzsirakino mygtukai ir
      daugiau nieko (V 08-18). */
   renderStateValue();
-  try{
   // prefetch slices for the 3D progress view (best effort - the print starts
   // either way; while printing the layer endpoint is unavailable)
   /* Detalus kesas (320x240) spausdinimo vaizdui netinka: senasis piesimas deda taska
      kiekvienam langeliui, ir 16 kartu tankesniame tinklelyje jie susilieja i vientisa
      mase (V 08-14). Jei atmintyje guli detalus rinkinys - imam grubu, toki, koki sis
      vaizdas gaudavo visada. */
-  if(!force||!(slicesCache.name===name&&slicesCache.slices.length&&!cacheIsDetail())){
+  {
     try{
-      if(slicesCache.name!==name||!slicesCache.slices.length){
+      if(slicesCache.name!==name||!slicesCache.slices.length||cacheIsDetail()){
         const d=await api('/api/files/model?name='+enc(name));
         const layers=Number(d.sourceLayers)||Number(d.layers)||0;
         /* Eiga rodoma TIK pacioje dezeje: ji cia pat, didele ir su juostele, o snackas
@@ -6029,27 +6057,40 @@ const startPrint=async(nameEnc,force)=>{const name=decodeURIComponent(nameEnc||e
      files". Priezastis ta pati, kaip Update skiltyje: `statusMsg` priklauso
      busenos apklausai, ir jos perrasyta zyme neleidzia snackui nusiimti.
      `startSnackDone` lieka tuscia funkcija - ja kviecia `finally`. */
+  if(statusData&&statusData.busy)throw new Error('The printer became busy while preparing this preview. Start was not sent.');
+  const warnings=await printPreflight(name);
+  if(warnings.length&&!await uiConfirm('Before starting “'+name+'”:\n\n'+warnings.join('\n')+'\n\nStart with these warnings?',{ok:'Start print'}))return false;
   try{
-  const r=await api('/api/print/start?name='+enc(name)+(force?'&force=1':''),{method:'POST'},8000);
-  if(r&&r.warning==='low_resin'){if(await uiConfirm('Low resin: ~'+r.vatRemainingMl+' ml left in the VAT (estimate).\nStart anyway?'))startPrint(nameEnc,true);return;}
+  let force=false;
+  for(;;){
+    const r=await api('/api/print/start?name='+enc(name)+(force?'&force=1':''),{method:'POST',retryNetwork:false},8000);
+    if(r&&r.warning==='low_resin'){
+      if(force)throw new Error('The printer still refused the low-resin override. Start was not confirmed.');
+      if(!await uiConfirm('Low resin: ~'+r.vatRemainingMl+' ml left in the VAT (estimate).\nStart “'+name+'” anyway?',{ok:'Start anyway'}))return false;
+      force=true;continue;
+    }
+    if(!r||r.queued!==true)throw new Error('Start acknowledgement was incomplete');
+    break;
+  }
   /* Toliau - be snacko: homing'as yra spausdinimo dalis, ir busenos eilute ji
      ivardija („Homing"). Skaiciaus ten nera ir negali buti - kelias iki galinio
      jungiklio nezinomas (V 08-18). */
-  localPrintStartedAt=Date.now();lpsSynced=false;applyStatus(localBusyStatus('Homing',0));openView('home');scrollPreviewIntoView();refreshStatus();}catch(e){
-    if(e.message==='timeout'){
+  clearNew(name);localPrintStartedAt=Date.now();lpsSynced=false;applyStatus(Object.assign(localBusyStatus('Homing',0),{model:name,sdJob:''}));openView('home');scrollPreviewIntoView();refreshStatus();return true;}catch(e){
+    if(e.message==='timeout'||/Printer unreachable|garbled answer|Start acknowledgement was incomplete/.test(e.message)){
       // The POST reached the printer but the answer missed the 8 s window
       // (the main loop can sit in an MQTT/Connect timeout for that long) -
       // the print then starts anyway, and a raw "timeout" here cried failure
       // over a start that worked (user finding). Confirm via status instead.
       for(let i=0;i<5;i++){
         await new Promise(r=>setTimeout(r,2000));
-        try{const s=await api('/api/status');applyStatus(s);
-          if(s.busy){localPrintStartedAt=Date.now();lpsSynced=false;openView('home');return;}
+        try{const s=await api('/api/status',null,4000);applyStatus(s);
+          if(sameActivePrint(s,name)){clearNew(name);localPrintStartedAt=Date.now();lpsSynced=false;openView('home');return true;}
         }catch(_){}
       }
-      msg('Start not confirmed - check the printer.',true);return;
+      msg('Start not confirmed for “'+name+'” - check the printer before trying again. No second Start was sent.',true);return false;
     }
-    msg(e.message,true);}
+    msg(e.message,true);return false;}
+  }catch(e){msg(e.message||'Could not prepare this print.',true);return false;
   }finally{ startSnackDone(); startBusy=false; bgJob=''; syncActionLocks(); }};
 // Deleting a big model removes hundreds of layer files and blocks the printer
 // for a while - keep a persistent "deleting" toast and silence the status-poll
@@ -6654,7 +6695,9 @@ const syncActionLocks=()=>{
   const wc=s.webControl!==false, busy=uiBusy();
   const set=(id,off)=>{const e=$(id);if(e)e.disabled=off;};
   const noResin=s.resinSet===false;   // 08-17: be dervos printeris atmeta su 409
-  set('modelStartButton',!wc||busy||noResin);
+  const startOff=!wc||busy||noResin||s.sdReady===false||!!s.resumePending;
+  set('modelStartButton',startOff);
+  set('stPrintGo',startOff);
   set('dryRunToggle',!wc||busy);
   /* No print-state lock (V 09-10). Marking a refill moves nothing on the machine - it only
      resets the level - and topping up mid-print is normal with a 15 ml VAT. The lock came
@@ -7071,6 +7114,7 @@ $('cfgWebDashboardEnabled').addEventListener('change',confirmNetworkToggle);
 $('cfgMqttEnabled').addEventListener('change',updateMqttFields);
 window.api=api;
 /*#include parts/meshy-glb.js*/
+/*#include parts/keycap-color.js*/
 /*#include parts/stl-read.js*/
 /*#include parts/mesh-health.js*/
 /*#include parts/model-tools.js*/
@@ -7081,6 +7125,7 @@ window.api=api;
 /*#include parts/keycap-sculpt.js*/
 /*#include parts/keycap-braille.js*/
 /*#include parts/keycap-share.js*/
+/*#include parts/keycap-product.js*/
 /*#include parts/keycap-library.js*/
 /*#include parts/sd-batch.js*/
 /*#include parts/sd-batch-ui.js*/
@@ -7088,7 +7133,12 @@ window.api=api;
 /*#include parts/meshy.js*/
 /*#include parts/slicer.js*/
 /*#include parts/meshy-ui.js*/
+/*#include parts/artisan-catalog.js*/
+/*#include parts/artisan-gallery.js*/
+/*#include parts/designer-feedback.js*/
 /*#include parts/keycap-ui.js*/
+/*#include parts/topper.js*/
+/*#include parts/topper-ui.js*/
 
 $('cfgConnectEnabled').addEventListener('change',updateConnectFields);
 $('ntfNone').addEventListener('change',updateTgFields);
@@ -7124,10 +7174,10 @@ const GS=[
     a guess into a measurement. A step nobody is told about is a step nobody
     takes. `gsLib` and `gsKey` read real state; the comb cannot be detected at
     all (the printer has no way to know a switch clicked on), so it stays a
-    manual tick and says plainly why it is worth the 2.8 ml. */
+    manual tick until the owner has tested the cured coupons. */
  {k:'kckey',t:'Add a Meshy key to generate art',d:"Create &gt; Keycaps &gt; Art &gt; <i>Meshy API key</i>. Without it the studio still builds caps, braille and legends - the key is only for generated sculpts. It is stored in THIS browser, never on the printer.",auto:()=>{try{return !!(window.meshy&&window.meshy.hasKey&&window.meshy.hasKey());}catch(e){return false;}}},
  {k:'kcfirst',t:'Design your first keycap',d:'Create &gt; Keycaps: pick a key, a profile, then art. Every generated model is kept in Library and comes back without spending another generation.',auto:()=>!!window.__tmHasDesigns},
- {k:'kccomb',t:'Print the stem fit comb (do this first)',d:"Create &gt; Keycaps &gt; Print &gt; <b>Stem test</b> exports six coupons, 36 &times; 24 mm, about 2.8 ml. Put an MX switch in each, keep the first that clicks on without force, and that slot is your number. Until you have printed it the stem clearance is an estimate - and it is the one dimension that decides whether a cap fits at all."}];
+ {k:'kccomb',t:'Print the stem fit comb (do this first)',d:"Create &gt; Keycaps &gt; Print &gt; <b>Stem fit test</b> exports five coupons with 1.15, 1.20, 1.25, 1.30 and 1.35 mm sockets. After printing and curing, try them on your MX switch. Read left to right across the front row, then the next row. Under <b>Stem fit</b>, choose the snug coupon that seats without force and press <b>Apply coupon</b>. The fit is remembered in this browser. Use <b>Too tight</b> to widen the next socket or <b>Too loose</b> to narrow it; the cap exterior keeps its size. This uses your feedback and cannot sense the fit automatically."}];
 /* The shelf is read once at boot so the step above can answer without making
    Getting started depend on IndexedDB being ready. */
 try{ if(window.keycapLibrary&&window.keycapLibrary.list)
@@ -8147,11 +8197,16 @@ try{const fwUpd=sessionStorage.getItem('tmFwUpd');if(fwUpd){sessionStorage.remov
   };
 
 /*#include parts/slicer-3d-bridge.js*/
-/*#include parts/studio-library.js*/
-/*#include parts/studio.js*/
 
   window.DBG3D=src;   // is konsoles matyti, kuri pakopa suveike
 })();
+</script>
+<script>
+/* Room navigation and the local library do not depend on the optional WebGL
+   renderer. Start them even when neither the SD copy nor CDN Three.js loads. */
+/*#include parts/studio-library.js*/
+/*#include parts/studio.js*/
+/*#include parts/monitor-preview.js*/
 </script>
 <!-- ===== Defektu zymejimas =================================================
      Kam: radus bloga atrama likdavo tik zodinis aprasymas, o po savaites nebeaisku,

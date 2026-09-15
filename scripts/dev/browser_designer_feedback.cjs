@@ -1,0 +1,41 @@
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const {chromium}=require(process.env.TINYMAKER_PLAYWRIGHT || 'playwright');
+const root=path.resolve(__dirname,'../..');
+fs.mkdirSync(path.join(root,'research/screenshots'),{recursive:true});fs.mkdirSync(path.join(root,'.cache'),{recursive:true});
+(async()=>{
+ const browser=await chromium.launch({executablePath:process.env.CHROME_BIN || undefined,headless:true});
+ try{
+  const context=await browser.newContext({viewport:{width:1440,height:1050}}),page=await context.newPage(),errors=[],posts=[];
+  page.on('pageerror',e=>errors.push(e.message));
+  await page.route('**/*',r=>{const u=new URL(r.request().url());if(r.request().method()!=='GET'){posts.push(u.href);return r.abort();}if(u.hostname!=='127.0.0.1')return r.abort();if(u.pathname==='/api/status')return r.fulfill({json:{ok:true,firmwareVersion:'0.18.7',firmwareBuild:'local-preview',state:'Local preview',busy:false,receiving:false,webControl:true,sdReady:false,freeHeap:170000}});return r.continue();});
+  await page.goto('http://127.0.0.1:8794/#create');await page.locator('#kcBoard button').filter({hasText:/^Esc$/}).click();await page.locator('#kcSteps [data-step="3"]').click();await page.locator('#kcLegendOn').uncheck();
+  const help=page.getByRole('button',{name:'About artwork size',exact:true});await help.focus();await page.keyboard.press('Enter');
+  await page.getByRole('dialog',{name:'Artwork size',exact:true}).waitFor();assert.match(await page.locator('#designerHelpBody').innerText(),/height is a maximum/);
+  await page.keyboard.press('Escape');assert.equal(await page.locator('#designerHelpDialog').isVisible(),false);assert.equal(await help.evaluate(e=>e===document.activeElement),true);
+  assert.equal(await page.locator('#kcHeightHelp').isVisible(),false);assert.equal(await page.locator('#kcViewHelp').isVisible(),false);
+  await page.locator('#kcFile').setInputFiles(path.join(root,'research/artisan-capabilities/flower-synthetic-input.stl'));
+  await page.waitForFunction(()=>document.querySelector('#kcProductStatus').textContent.includes('Ready to slice'),null,{timeout:30000});
+  assert.equal(await page.locator('#kcGenNote').isVisible(),false);assert.equal(await page.locator('#kcLegendWarn').isVisible(),false);assert.equal(await page.locator('#designerNotice').isVisible(),true);
+  assert.match(await page.locator('#designerNoticeText').innerText(),/Saved.*Library/);
+  await page.locator('#designerNoticeClose').click();
+  await page.locator('#kcProductName').fill('Cute <flower>');await page.locator('#kcSaveProduct').click();
+  await page.waitForFunction(()=>document.querySelector('#designerNoticeText').textContent.includes('Cute <flower>'));
+  assert.equal(await page.locator('#designerNoticeText flower').count(),0,'notice treats names as text');
+  assert.equal(await page.locator('#designerNotice').evaluate(e=>e.contains(document.activeElement)),false,'save notification does not steal focus');
+  await page.locator('#designerNoticeClose').click();
+  await page.locator('#kcSculptSize').fill('90');await page.locator('#kcSculptSize').dispatchEvent('input');await page.waitForTimeout(300);
+  assert.equal(await page.locator('#designerNotice').isVisible(),false,'slider refresh does not spawn notifications');
+  await page.locator('#kcCard').evaluate(e=>e.scrollIntoView({block:'start'}));
+  await page.locator('#kcCard').screenshot({path:path.join(root,'research/screenshots/designer-clean-desktop.png')});
+  await page.setViewportSize({width:390,height:844});
+  await page.getByRole('button',{name:'About artwork placement',exact:true}).click();await page.getByRole('dialog',{name:'Artwork placement',exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+  await page.screenshot({path:path.join(root,'research/screenshots/designer-help-mobile.png')});await page.getByRole('button',{name:'Close help',exact:true}).click();
+  await page.locator('#kcFile').setInputFiles({name:'broken.stl',mimeType:'model/stl',buffer:Buffer.from('broken')});
+  await page.waitForFunction(()=>document.querySelector('#kcGenNote').classList.contains('bad'));
+  assert.equal(await page.locator('#kcGenNote').isVisible(),true,'actionable errors stay inline');
+  assert.deepEqual(errors,[]);assert.deepEqual(posts,[]);
+  const result={passed:true,isolatedBrowser:true,checks:['contextual help replaces persistent size/zoom paragraphs','keyboard opens help, Escape closes it and returns focus','successful save produces text-only toast without focus theft','slider changes do not generate pop-ups','healthy duplicate status paragraphs removed','390px help dialog fits','import errors remain visible inline'],errors,posts,printStarted:false,newGenerationStarted:false};
+  fs.writeFileSync(path.join(root,'.cache/browser-designer-feedback.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));
+ }finally{await browser.close();}
+})().catch(e=>{console.error(e);process.exitCode=1;});

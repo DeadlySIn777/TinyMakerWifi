@@ -37,6 +37,32 @@
 (function (root) {
   'use strict';
 
+  // This runs on the UI thread. Refuse an unresolved attachment check rather
+  // than freezing the page or labelling an unfinished search as attached.
+  var ANALYSIS_LIMITS = { triangles: 300000, shells: 128, work: 4000000 };
+  function analysisFailure(reason) {
+    var e = new Error('Attachment check is unresolved: ' + reason +
+      '. Simplify the mesh or merge its disconnected pieces in a mesh editor, then import it again.');
+    e.attachmentAnalysis = true; throw e;
+  }
+  function spend(ctx, n) {
+    if (ctx && (ctx.left -= n == null ? 1 : n) < 0) analysisFailure('the geometry exceeds the analysis work limit');
+  }
+  function analysisContext(p, capTriangles) {
+    if (!p || !p.length || p.length % 9 || !Number.isInteger(capTriangles) ||
+        capTriangles < 1 || capTriangles >= p.length / 9)
+      analysisFailure('the cap/sculpt triangle ranges are invalid');
+    if (p.length / 9 > ANALYSIS_LIMITS.triangles)
+      analysisFailure('more than ' + ANALYSIS_LIMITS.triangles.toLocaleString() + ' triangles');
+    for (var i = 0; i < p.length; i++) if (!Number.isFinite(p[i]))
+      analysisFailure('the mesh contains invalid coordinates');
+    return { left: ANALYSIS_LIMITS.work, shells: 0 };
+  }
+  function unresolved(e, ctx) {
+    return { shells: ctx ? ctx.shells : 0, anchored: 0, floating: [],
+      unresolved: true, issue: e.message };
+  }
+
   function bounds(p) {
     var mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
     for (var i = 0; i < p.length; i += 3) for (var k = 0; k < 3; k++) {
@@ -57,7 +83,29 @@
     if (!sculptPositions || sculptPositions.length < 9 || sculptPositions.length % 9)
       throw new Error('keycap-sculpt: the sculpt is not a triangle soup');
 
-    var sb = bounds(sculptPositions);
+    var rotation = o.rotationDeg == null ? 0 : o.rotationDeg;
+    var percent = o.scalePercent == null ? 100 : o.scalePercent;
+    if (typeof rotation !== 'number' || !Number.isFinite(rotation) || rotation < 0 || rotation > 360)
+      throw new Error('keycap-sculpt: artwork rotation must be 0–360 degrees');
+    if (typeof percent !== 'number' || !Number.isFinite(percent) || percent < 50 || percent > 100)
+      throw new Error('keycap-sculpt: artwork size must be 50–100 percent');
+    if (rotation === 360) rotation = 0;
+    // Rotate artwork before measuring its envelope. A wide figure turned on
+    // a wide key must fit the new depth; changing only the outgoing vertices
+    // after fitting could push it into the neighboring row. Zero is the old
+    // path byte for byte. Neither this copy nor sizing touches the cap.
+    var sculpt = sculptPositions;
+    if (rotation) {
+      var radians = rotation * Math.PI / 180, cos = Math.cos(radians), sin = Math.sin(radians);
+      if (rotation % 90 === 0) { cos = Math.round(cos); sin = Math.round(sin); }
+      sculpt = new Float32Array(sculptPositions.length);
+      for (var v = 0; v < sculptPositions.length; v += 3) {
+        sculpt[v] = sculptPositions[v] * cos - sculptPositions[v+1] * sin;
+        sculpt[v+1] = sculptPositions[v] * sin + sculptPositions[v+1] * cos;
+        sculpt[v+2] = sculptPositions[v+2];
+      }
+    }
+    var sb = bounds(sculpt);
     if (sb.size[0] <= 0 || sb.size[1] <= 0 || sb.size[2] <= 0)
       throw new Error('keycap-sculpt: the sculpt is flat in one axis - it has no form to seat');
 
@@ -81,6 +129,7 @@
 
     var k = Math.min(maxW / sb.size[0], maxD / sb.size[1], maxH / sb.size[2]);
     if (o.scale) k = o.scale;
+    k *= percent / 100;                  // artwork only; aspect ratio retained
 
     /* ⚠️ WHERE THE FACE IS, MEASURED - NOT COMPUTED FROM THE PROFILE.
 
@@ -136,13 +185,13 @@
     for (t = 0; t < sculptPositions.length; t += 9) {
       for (c = 0; c < 3; c++) {
         var src = t + ORDER[c] * 3, dst = t + c * 3;
-        out[dst]     = (sculptPositions[src]     - sb.mid[0]) * k + sx;
-        out[dst + 1] = (sculptPositions[src + 1] - sb.mid[1]) * k + sy;
+        out[dst]     = (sculpt[src]     - sb.mid[0]) * k + sx;
+        out[dst + 1] = (sculpt[src + 1] - sb.mid[1]) * k + sy;
         /* The slope pivots about the point that was SAMPLED, so the measured
            bite is the bite there and the base stays parallel to the face
            everywhere else. Pivoting about y = 0 instead is what made the
            constant wrong in the first place. */
-        out[dst + 2] = -((sculptPositions[src + 2] - sb.mn[2]) * k) + seatDepth
+        out[dst + 2] = -((sculpt[src + 2] - sb.mn[2]) * k) + seatDepth
                      + (out[dst + 1] - syc) * tanRow;
       }
     }
@@ -151,13 +200,15 @@
     both.set(cap.positions, 0);
     both.set(out, cap.positions.length);
 
-    var fb = bounds(out);
+    var fb = bounds(out), cb = bounds(cap.positions), whole = bounds(both);
     return {
       positions: both,
       capTriangles: cap.positions.length / 9,
       sculptTriangles: out.length / 9,
       triangles: both.length / 9,
       scale: +k.toFixed(4),
+      rotationDeg: rotation,
+      scalePercent: percent,
       seatDepth: +seatDepth.toFixed(2),
       /* MEASURED FROM THE MESH, not from the input times the scale. seat()
          tilts the base by the row angle, which makes the seated sculpt taller
@@ -174,10 +225,10 @@
          negative and the proud part is -fb.mn[2]. The old arithmetic -
          sculpt height minus seat depth - assumed the sculpt sat flat and
          un-tilted, and was wrong by the row rise on every angled row. */
-      totalHeightMm: +(cap.size.z + Math.max(0, -fb.mn[2])).toFixed(2),
-      footprintMm: { x: +Math.max(capW, fb.size[0]).toFixed(2),
-                     y: +Math.max(capD, fb.size[1]).toFixed(2) },
-      overhangs: +(Math.max(0, fb.size[0] - capW) / 2).toFixed(2),
+      totalHeightMm: +whole.size[2].toFixed(2),
+      footprintMm: { x: +whole.size[0].toFixed(2), y: +whole.size[1].toFixed(2) },
+      overhangs: +Math.max(0, cb.mn[0]-fb.mn[0], fb.mx[0]-cb.mx[0],
+                            cb.mn[1]-fb.mn[1], fb.mx[1]-cb.mx[1]).toFixed(2),
       pitchMm: { x: +pitchW.toFixed(2), y: +pitchD.toFixed(2) },
       sizeU: cap.sizeU || 1
     };
@@ -198,31 +249,45 @@
 
      So: split the sculpt into connected shells, and work out which of them are
      anchored. A shell is anchored if it reaches down into the cap, or if it
-     overlaps something else that is. Bounding boxes, deliberately - a true
-     mesh intersection test is expensive and the answer only has to be
-     conservative in the safe direction: boxes overlap MORE often than the
-     meshes inside them, so this reports a floater only when the pieces are
-     genuinely far apart. */
+     overlaps something else that is. Bounding boxes only select candidate
+     pairs; actual surface contact or containment establishes attachment. */
   /* shells() hands back boxes, which is all the anchorage REPORT needed. To
      move a piece you also need to know WHICH triangles are in it, so the
      union-find lives here and shells() became a thin summary over it. Same
      algorithm and same answers - the old one is not re-implemented, it is
      re-exposed with the membership it was already computing and throwing away. */
-  function shellParts(p) {
+  function shellParts(p, ctx) {
     var n = p.length / 9, parent = new Int32Array(n), i;
+    spend(ctx, n);
     for (i = 0; i < n; i++) parent[i] = i;
     function find(a) { while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; } return a; }
     function join(a, b) { a = find(a); b = find(b); if (a !== b) parent[b] = a; }
     var map = Object.create(null);
-    for (i = 0; i < n; i++) for (var c = 0; c < 3; c++) {
-      var q = i * 9 + c * 3;
-      var key = Math.round(p[q] * 200) + ',' + Math.round(p[q + 1] * 200) + ',' + Math.round(p[q + 2] * 200);
-      if (map[key] === undefined) map[key] = i; else join(map[key], i);
+    // A shared vertex alone is a pin contact, not a solid connection. Connect
+    // faces across ordinary two-face edges; a four-face touching edge must not
+    // weld two separate solids into one supposedly attached shell.
+    for (i = 0; i < n; i++) {
+      var keys=[];
+      for (var c=0;c<3;c++) { var q=i*9+c*3;
+        // Five-micron rounding collapsed distinct vertices in detailed Meshy
+        // triangles, creating four-face edges and dozens of false fragments.
+        // A one-micron weld retains those features while still joining equal
+        // triangle-soup vertices after float32 transforms.
+        keys.push(Math.round(p[q]*1000)+','+Math.round(p[q+1]*1000)+','+Math.round(p[q+2]*1000)); }
+      for(c=0;c<3;c++) {
+        var a=keys[c],b=keys[(c+1)%3];if(a===b)continue;
+        var key=a<b?a+'|'+b:b+'|'+a,edge=map[key];
+        if(!edge)map[key]={first:i,second:-1,count:1};
+        else {edge.second=i;edge.count++;}
+      }
     }
+    Object.keys(map).forEach(function(key){var e=map[key];if(e.count===2)join(e.first,e.second);});
     var groups = {}, order = [];
     for (i = 0; i < n; i++) {
       var r = find(i), g = groups[r];
-      if (!g) { g = groups[r] = { tris: 0, idx: [], mn: [1e9, 1e9, 1e9], mx: [-1e9, -1e9, -1e9] }; order.push(g); }
+      if (!g) { g = groups[r] = { tris: 0, idx: [], mn: [1e9, 1e9, 1e9], mx: [-1e9, -1e9, -1e9] }; order.push(g);
+        if (ctx) { ctx.shells = order.length;
+          if (order.length > ANALYSIS_LIMITS.shells) analysisFailure('more than ' + ANALYSIS_LIMITS.shells + ' disconnected pieces'); } }
       g.tris++; g.idx.push(i);
       for (var v = 0; v < 9; v += 3) for (var k = 0; k < 3; k++) {
         var val = p[i * 9 + v + k];
@@ -234,28 +299,7 @@
   }
 
   function shells(p) {
-    var n = p.length / 9, parent = new Int32Array(n), i;
-    for (i = 0; i < n; i++) parent[i] = i;
-    function find(a) { while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; } return a; }
-    function join(a, b) { a = find(a); b = find(b); if (a !== b) parent[b] = a; }
-    var map = Object.create(null);
-    for (i = 0; i < n; i++) for (var c = 0; c < 3; c++) {
-      var q = i*9 + c*3;
-      var key = Math.round(p[q]*200) + ',' + Math.round(p[q+1]*200) + ',' + Math.round(p[q+2]*200);
-      if (map[key] === undefined) map[key] = i; else join(map[key], i);
-    }
-    var groups = {};
-    for (i = 0; i < n; i++) {
-      var r = find(i);
-      var g = groups[r] || (groups[r] = { tris: 0, mn: [1e9,1e9,1e9], mx: [-1e9,-1e9,-1e9] });
-      g.tris++;
-      for (var v = 0; v < 9; v += 3) for (var k = 0; k < 3; k++) {
-        var val = p[i*9 + v + k];
-        if (val < g.mn[k]) g.mn[k] = val;
-        if (val > g.mx[k]) g.mx[k] = val;
-      }
-    }
-    return Object.keys(groups).map(function (k) { return groups[k]; });
+    return shellParts(p).map(function(g){return {tris:g.tris,mn:g.mn,mx:g.mx};});
   }
 
   /* Do the two boxes share any ground in plan? At module scope because both
@@ -273,15 +317,173 @@
     return true;
   }
 
+
+  function capPart(p,count) {
+    var idx=[],mn=[Infinity,Infinity,Infinity],mx=[-Infinity,-Infinity,-Infinity];
+    for(var t=0;t<count;t++){idx.push(t);for(var v=0;v<3;v++)for(var k=0;k<3;k++){
+      var q=p[t*9+v*3+k];mn[k]=Math.min(mn[k],q);mx[k]=Math.max(mx[k],q);}}
+    return {idx:idx,mn:mn,mx:mx};
+  }
+  // Bounding boxes reject distant shells. Attachment requires actual surface
+  // contact or containment. A small BVH avoids a quadratic triangle-pair scan.
+  function contactTree(p, part, ctx) {
+    if (part._contactTree) return part._contactTree;
+    spend(ctx, part.idx.length);
+    var items = part.idx.map(function (t) {
+      var v = [], mn = [Infinity,Infinity,Infinity], mx = [-Infinity,-Infinity,-Infinity];
+      for (var i=0;i<3;i++) { var q=[p[t*9+i*3],p[t*9+i*3+1],p[t*9+i*3+2]];
+        v.push(q); for(var k=0;k<3;k++){mn[k]=Math.min(mn[k],q[k]);mx[k]=Math.max(mx[k],q[k]);} }
+      return {v:v,mn:mn,mx:mx};
+    });
+    /* Build only branches a contact query actually reaches. Previously every
+       level sorted every triangle before the first intersection test: a real
+       30k Meshy sculpt plus the fine cap exhausted the entire work allowance
+       constructing trees. Spatial partitioning is linear per visited branch;
+       exact bounds and the same narrow-phase tests still decide attachment. */
+    function tree(lo,hi) {
+      spend(ctx, hi-lo);
+      var n={mn:[Infinity,Infinity,Infinity],mx:[-Infinity,-Infinity,-Infinity],lo:lo,hi:hi};
+      for(var i=lo;i<hi;i++)for(var k=0;k<3;k++){
+        n.mn[k]=Math.min(n.mn[k],items[i].mn[k]);n.mx[k]=Math.max(n.mx[k],items[i].mx[k]);}
+      if(hi-lo<=8)n.items=items.slice(lo,hi);
+      return n;
+    }
+    function expand(n) {
+      if(n.items||n.left)return;
+      var axis=0;for(var k=1;k<3;k++)if(n.mx[k]-n.mn[k]>n.mx[axis]-n.mn[axis])axis=k;
+      var pivot=n.mn[axis]+n.mx[axis],mid=n.lo;
+      for(var i=n.lo;i<n.hi;i++){
+        spend(ctx);
+        if(items[i].mn[axis]+items[i].mx[axis]<pivot){var swap=items[mid];items[mid++]=items[i];items[i]=swap;}
+      }
+      // Coincident centres or highly skewed geometry must not make an empty
+      // child or a linear-depth tree. Index partitioning remains conservative:
+      // children get exact bounds, so it can only cost work, never invent contact.
+      var count=n.hi-n.lo;
+      if(mid-n.lo<count/10||n.hi-mid<count/10)mid=n.lo+(count>>1);
+      n.left=tree(n.lo,mid);n.right=tree(mid,n.hi);
+    }
+    part._contactTree={root:tree(0,items.length),items:items,expand:expand};return part._contactTree;
+  }
+  function sub3(a,b){return [a[0]-b[0],a[1]-b[1],a[2]-b[2]];}
+  function dot3(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
+  function cross3(a,b){return [a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];}
+  var CONTACT_EPS = 0.00001;
+  function trianglesCross(a,b) {
+    if(!boxesTouch(a,b,0.00001))return false;
+    var ae=[sub3(a.v[1],a.v[0]),sub3(a.v[2],a.v[1]),sub3(a.v[0],a.v[2])];
+    var be=[sub3(b.v[1],b.v[0]),sub3(b.v[2],b.v[1]),sub3(b.v[0],b.v[2])];
+    var an=cross3(ae[0],ae[1]),bn=cross3(be[0],be[1]),axes=[an,bn];
+    if(dot3(an,an)<1e-20||dot3(bn,bn)<1e-20)return false;
+    // A touching tip, edge, or coplanar face is not a volume crossing. Both
+    // triangles must actually straddle the other triangle's plane.
+    function straddles(v, origin, normal) {
+      var d=v.map(function(q){return dot3(sub3(q,origin),normal);});
+      var eps=CONTACT_EPS*Math.sqrt(dot3(normal,normal));
+      return Math.min.apply(null,d)<-eps && Math.max.apply(null,d)>eps;
+    }
+    if(!straddles(a.v,b.v[0],bn)||!straddles(b.v,a.v[0],an))return false;
+    for(var i=0;i<3;i++){
+      axes.push(cross3(an,ae[i]),cross3(bn,be[i])); // coplanar separation
+      for(var j=0;j<3;j++)axes.push(cross3(ae[i],be[j]));
+    }
+    for(var k=0;k<axes.length;k++){
+      var axis=axes[k],len=Math.sqrt(dot3(axis,axis));if(len<1e-12)continue;
+      var pa=a.v.map(function(v){return dot3(v,axis);}),pb=b.v.map(function(v){return dot3(v,axis);});
+      var amin=Math.min.apply(null,pa),amax=Math.max.apply(null,pa);
+      var bmin=Math.min.apply(null,pb),bmax=Math.max.apply(null,pb),eps=CONTACT_EPS*len;
+      if(amax<bmin-eps||bmax<amin-eps)return false;
+      // The two plane-straddle tests alone can still meet at a single segment
+      // endpoint. On axes where both triangles have extent, require overlap
+      // beyond that endpoint; the flat normal axes were handled above.
+      if(amax-amin>eps&&bmax-bmin>eps&&Math.min(amax,bmax)-Math.max(amin,bmin)<=eps)return false;
+    }
+    return true;
+  }
+  function pointOnTriangle(point, v) {
+    var u=sub3(v[1],v[0]),w=sub3(v[2],v[0]),q=sub3(point,v[0]);
+    var n=cross3(u,w),nn=dot3(n,n);
+    if(nn<1e-20)return false;
+    if(Math.abs(dot3(q,n))>CONTACT_EPS*Math.sqrt(nn))return false;
+    var uu=dot3(u,u),uw=dot3(u,w),ww=dot3(w,w),qu=dot3(q,u),qw=dot3(q,w);
+    var den=uu*ww-uw*uw;
+    if(!(den>0))return false;
+    var s=(ww*qu-uw*qw)/den,t=(uu*qw-uw*qu)/den;
+    return s>=-1e-7&&t>=-1e-7&&s+t<=1+1e-7;
+  }
+  function pointInside(point,tree,ctx) {
+    // Strict containment is impossible outside (or on) the solid's bounds.
+    // This avoids a full winding sum for every cap triangle when a small
+    // curved petal only overlaps a tiny part of the cap's bounding box.
+    for(var k=0;k<3;k++)if(point[k]<=tree.root.mn[k]+CONTACT_EPS||point[k]>=tree.root.mx[k]-CONTACT_EPS)return false;
+    var items=tree.items;
+    var angle=0;
+    for(var i=0;i<items.length;i++){
+      spend(ctx);
+      var v=items[i].v,a=sub3(v[0],point),b=sub3(v[1],point),c=sub3(v[2],point);
+      if(pointOnTriangle(point,v))return false;
+      var al=Math.hypot.apply(null,a),bl=Math.hypot.apply(null,b),cl=Math.hypot.apply(null,c);
+      if(Math.min(al,bl,cl)<CONTACT_EPS)return false;
+      angle+=2*Math.atan2(dot3(a,cross3(b,c)),al*bl*cl+dot3(a,b)*cl+dot3(b,c)*al+dot3(c,a)*bl);
+    }
+    return Number.isFinite(angle)&&Math.abs(Math.abs(angle)-Math.PI*4)<0.001;
+  }
+  function partsContact(ap,a,bp,b,ctx) {
+    if(!a.idx.length||!b.idx.length||!boxesTouch(a,b,0.00001))return false;
+    var at=contactTree(ap,a,ctx),bt=contactTree(bp,b,ctx);
+    function visit(x,y){
+      spend(ctx);
+      if(!boxesTouch(x,y,0.00001))return false;
+      if(x.items&&y.items){
+        for(var i=0;i<x.items.length;i++)for(var j=0;j<y.items.length;j++){
+          spend(ctx);if(trianglesCross(x.items[i],y.items[j]))return true;
+        }
+        return false;
+      }
+      at.expand(x);bt.expand(y);
+      return x.items ? visit(x,y.left)||visit(x,y.right) :
+        y.items ? visit(x.left,y)||visit(x.right,y) :
+        visit(x.left,y.left)||visit(x.left,y.right)||visit(x.right,y.left)||visit(x.right,y.right);
+    }
+    if(visit(at.root,bt.root)||pointInside(at.items[0].v[0],bt,ctx)||pointInside(bt.items[0].v[0],at,ctx))return true;
+    // Aligned and coincident boxes may have no strictly interior vertex and
+    // no transverse face crossings. Test face centres, then probes just on
+    // either side; only a point strictly INSIDE BOTH solids proves overlap.
+    function probes(from,to) {
+      for(var i=0;i<from.items.length;i++) {
+        spend(ctx);
+        var v=from.items[i].v,c=[0,0,0];
+        for(var k=0;k<3;k++)c[k]=(v[0][k]+v[1][k]+v[2][k])/3;
+        if(pointInside(c,to,ctx))return true;
+        var n=cross3(sub3(v[1],v[0]),sub3(v[2],v[0])),len=Math.sqrt(dot3(n,n));
+        if(len<1e-10)continue;
+        for(var sign=-1;sign<=1;sign+=2) {
+          var q=c.map(function(x,k){return x+sign*n[k]/len*CONTACT_EPS*4;});
+          // Test the other solid first: nearly all cap-face probes are outside
+          // the small sculpt, so they need no winding sum against the cap.
+          if(pointInside(q,to,ctx)&&pointInside(q,from,ctx))return true;
+        }
+      }
+      return false;
+    }
+    return probes(at,bt)||probes(bt,at);
+  }
+
   /* Which pieces of a seated sculpt are actually attached to something. */
   function anchorage(seatedPositions, capTriangles, opts) {
+    var ctx;
+    try { ctx=analysisContext(seatedPositions,capTriangles);return analyseAnchorage(seatedPositions,capTriangles,opts,ctx); }
+    catch(e){if(e.attachmentAnalysis)return unresolved(e,ctx);throw e;}
+  }
+  function analyseAnchorage(seatedPositions, capTriangles, opts, ctx) {
     var o = opts || {};
     var slack = o.slack == null ? 0.15 : o.slack;   // mm of tolerable gap
     var sc = seatedPositions.slice(capTriangles * 9);
     /* shellParts, not shells: identical grouping, and it also hands back each
        shell's triangle indices - which gapUnder() below needs to ray-cast one
        shell against another. */
-    var parts = shellParts(sc);
+    var parts = shellParts(sc,ctx);
+    var capSolid = capPart(seatedPositions, capTriangles);
     /* "z >= 0" WAS THE WRONG TEST and it is the reason a landed-but-still-
        floating piece could pass. z = 0 is the cap's highest point, not its
        face; a piece parked between the two satisfies the old test while
@@ -291,11 +493,11 @@
        The cheap test is kept as a REJECT only, which is the direction it is
        sound in: the surface is always at z >= 0, so a shell that cannot reach
        0 certainly cannot reach the surface, and that one needs no rays. */
-    var rays = o.rays || 5;
+    var rays = Math.min(15,Math.max(1,Math.floor(o.rays||5)));
     var anchored = parts.map(function (g) {
       if (g.mx[2] < 0) return false;
-      var s = surfaceUnder(seatedPositions, null, 0, capTriangles, g, rays, true);
-      return s !== null && g.mx[2] >= s - slack;
+      var s = surfaceUnder(seatedPositions, null, 0, capTriangles, g, rays, true,ctx);
+      return s !== null && g.mx[2] >= s - slack && partsContact(sc,g,seatedPositions,capSolid,ctx);
     });
     var changed = true, i, j;
     while (changed) {
@@ -304,7 +506,8 @@
         if (anchored[i]) continue;
         for (j = 0; j < parts.length; j++) {
           if (i === j || !anchored[j]) continue;
-          if (boxesTouch(parts[i], parts[j], slack)) { anchored[i] = true; changed = true; break; }
+          spend(ctx);
+          if (partsContact(sc, parts[i], sc, parts[j],ctx)) { anchored[i] = true; changed = true; break; }
         }
       }
     }
@@ -318,12 +521,12 @@
        shell that overlaps it in plan, and name what it is clear of. */
     function gapUnder(f) {
       var best = null, what = null;
-      var cz = surfaceUnder(seatedPositions, null, 0, capTriangles, f, rays, true);
+      var cz = surfaceUnder(seatedPositions, null, 0, capTriangles, f, rays, true,ctx);
       if (cz != null) { best = cz - f.mx[2]; what = 'the cap'; }
       for (var q = 0; q < parts.length; q++) {
         if (parts[q] === f || parts[q].tris <= 2) continue;
         if (!planOverlap(f, parts[q], slack)) continue;
-        var sz = surfaceUnder(sc, parts[q].idx, 0, 0, f, rays);
+        var sz = surfaceUnder(sc, parts[q].idx, 0, 0, f, rays,false,ctx);
         if (sz == null) continue;
         var d = sz - f.mx[2];
         if (d < -0.001) continue;                      // that one is above it
@@ -333,7 +536,8 @@
     }
     var floating = [];
     for (i = 0; i < parts.length; i++)
-      if (!anchored[i] && parts[i].tris > 2)
+      if (!anchored[i] && parts[i].tris > 2) {
+        var gap=gapUnder(parts[i]);
         floating.push({ triangles: parts[i].tris,
                         sizeMm: [ +(parts[i].mx[0]-parts[i].mn[0]).toFixed(2),
                                   +(parts[i].mx[1]-parts[i].mn[1]).toFixed(2),
@@ -345,8 +549,9 @@
                            wrong on a dished or tilted face, which is every
                            face this engine makes. Measure to the surface
                            actually under it. */
-                        gapMm: +gapUnder(parts[i]).mm.toFixed(2),
-                        gapOf: gapUnder(parts[i]).of });
+                        gapMm: +gap.mm.toFixed(2),
+                        gapOf: gap.of });
+      }
     return { shells: parts.length, anchored: anchored.filter(Boolean).length,
              floating: floating };
   }
@@ -397,7 +602,8 @@
   }
 
   /* The highest material at (x,y) - smallest z, because z runs downward. */
-  function rayTop(p, idx, lo, hi, x, y) {
+  function rayTop(p, idx, lo, hi, x, y, ctx) {
+    spend(ctx,idx ? idx.length : hi-lo);
     var top = null, k, t, z;
     if (idx) {
       for (k = 0; k < idx.length; k++) {
@@ -436,7 +642,7 @@
      ALL OF THAT REASONING IS ABOUT THE CAP, and it does not carry to a shell
      the generator produced - hence centreFirst, passed true by the four cap
      callers and by nobody else. */
-  function surfaceUnder(p, idx, lo, hi, box, n, centreFirst) {
+  function surfaceUnder(p, idx, lo, hi, box, n, centreFirst, ctx) {
     n = n || 5;
     /* THE CENTRE RAY IS ONLY SOUND FOR THE CAP, and it used to be taken for
        everything. Its justification is that a keycap's top face varies by a
@@ -449,7 +655,7 @@
        cheap path, because there the claim is actually true. */
     if (centreFirst) {
       var cx = (box.mn[0] + box.mx[0]) / 2, cy = (box.mn[1] + box.mx[1]) / 2;
-      var c = rayTop(p, idx, lo, hi, cx, cy);
+      var c = rayTop(p, idx, lo, hi, cx, cy,ctx);
       if (c !== null) return c;
     }
     var best = null, a, b, x, y, z;
@@ -457,7 +663,7 @@
     for (a = 0; a < n; a++) for (b = 0; b < n; b++) {
       x = box.mn[0] + w * (a + 0.5) / n;
       y = box.mn[1] + d * (b + 0.5) / n;
-      z = rayTop(p, idx, lo, hi, x, y);
+      z = rayTop(p, idx, lo, hi, x, y,ctx);
       if (z !== null && (best === null || z < best)) best = z;
     }
     return best;
@@ -491,16 +697,27 @@
      millimetres, because a mesh that silently rearranged itself is worse than
      one that failed loudly. */
   function reseat(seated, opts) {
+    if (!seated || !seated.positions || seated.capTriangles == null)
+      throw new Error('keycap-sculpt: reseat needs a seated result');
+    var ctx;
+    try { ctx=analysisContext(seated&&seated.positions,seated&&seated.capTriangles);
+      return analyseReseat(seated,opts,ctx); }
+    catch(e){if(!e.attachmentAnalysis)throw e;
+      var result=Object.assign({},seated);result.moved=[];result.stillFloating=null;
+      result.unresolved=true;result.issue=e.message;return result;}
+  }
+  function analyseReseat(seated, opts, ctx) {
     var o = opts || {};
     if (!seated || !seated.positions || seated.capTriangles == null)
       throw new Error('keycap-sculpt: reseat needs a seated result');
     var capTris = seated.capTriangles;
     var out = new Float32Array(seated.positions);      // a copy; the caller keeps theirs
     var sc = out.subarray(capTris * 9);
-    var parts = shellParts(sc);
+    var parts = shellParts(sc,ctx);
+    var capSolid = capPart(out,capTris);
     var slack = o.slack == null ? 0.15 : o.slack;
     var maxDrop = o.maxDropMm == null ? 24 : o.maxDropMm;
-    var rays = o.rays || 5;
+    var rays = Math.min(15,Math.max(1,Math.floor(o.rays||5)));
 
     var anchored = parts.map(function (g) { return reaches(g); });
     var moved = [], guard = 0, i, j;
@@ -510,18 +727,18 @@
     /* Anchored means "it reaches the material of the cap", measured, not
        "its box crosses z = 0". */
     function reaches(g) {
-      var s = surfaceUnder(out, null, 0, capTris, g, rays, true);
-      return s !== null && g.mx[2] >= s - slack;
+      var s = surfaceUnder(out, null, 0, capTris, g, rays, true,ctx);
+      return s !== null && g.mx[2] >= s - slack && partsContact(sc,g,out,capSolid,ctx);
     }
     function settle(g, dz) {
       for (var q = 0; q < g.idx.length; q++) {
         var base = g.idx[q] * 9;
         for (var v = 2; v < 9; v += 3) sc[base + v] += dz;
       }
-      g.mn[2] += dz; g.mx[2] += dz;
+      g.mn[2] += dz; g.mx[2] += dz; delete g._contactTree;
     }
 
-    /* Seeded from the cap and then spread through overlapping boxes, the way
+    /* Seeded from the cap and then spread through verified contact, the way
        anchorage() reports it: a figure standing on the base never touches the
        cap, and dropping it would shove it through the rock it stands on. */
     var spread = true;
@@ -531,7 +748,8 @@
         if (anchored[i]) continue;
         for (j = 0; j < parts.length; j++) {
           if (i === j || !anchored[j]) continue;
-          if (boxesTouch(parts[i], parts[j], slack)) { anchored[i] = true; spread = true; break; }
+          spend(ctx);
+          if (partsContact(sc, parts[i], sc, parts[j],ctx)) { anchored[i] = true; spread = true; break; }
         }
       }
     }
@@ -561,13 +779,13 @@
         for (j = 0; j < parts.length; j++) {
           if (i === j || !anchored[j]) continue;
           if (!planOverlap(f, parts[j], slack)) continue;
-          var sz = surfaceUnder(sc, parts[j].idx, 0, 0, f, rays);
+          var sz = surfaceUnder(sc, parts[j].idx, 0, 0, f, rays,false,ctx);
           if (sz === null) continue;
           var d = sz - f.mx[2];
           if (d >= -slack && (best === null || d < best)) { best = d < 0 ? 0 : d; onto = 'the piece under it'; }
         }
         if (best === null) {
-          var cz = surfaceUnder(out, null, 0, capTris, f, rays, true);
+          var cz = surfaceUnder(out, null, 0, capTris, f, rays, true,ctx);
           if (cz !== null) { best = cz - f.mx[2]; if (best < 0) best = 0; onto = 'the cap'; }
         }
         /* Nothing under it at all. Translation cannot save this piece, so it
@@ -611,7 +829,7 @@
         settle(f, dz);
         anchored[i] = true; did = true;
         for (j = 0; j < parts.length; j++)
-          if (!anchored[j] && boxesTouch(parts[j], f, slack)) anchored[j] = true;
+          if (!anchored[j] && partsContact(sc, parts[j], sc, f,ctx)) anchored[j] = true;
         moved.push({ triangles: f.tris, dropMm: +dz.toFixed(2), onto: onto,
                      sizeMm: [+(f.mx[0] - f.mn[0]).toFixed(2),
                               +(f.mx[1] - f.mn[1]).toFixed(2),
@@ -624,19 +842,22 @@
        the flags reseat set on itself. The old version asked its own bookkeeping
        whether it had succeeded, which is how it came to report 0 floaters in a
        scene that still had one. */
-    var left = anchorage(out, capTris, { slack: slack, rays: rays }).floating.length;
+    var left = analyseAnchorage(out, capTris, { slack: slack, rays: rays },ctx).floating.length;
 
-    var fb = bounds(sc);
-    var capHeight = seated.totalHeightMm - (seated.sculptMm.z - seated.seatDepth);
+    var fb = bounds(sc), cb = bounds(out.subarray(0, capTris * 9)), whole = bounds(out);
     var fixed = {};
     for (var k in seated)
       if (Object.prototype.hasOwnProperty.call(seated, k)) fixed[k] = seated[k];
     fixed.positions = out;
     fixed.sculptMm = { x: +fb.size[0].toFixed(2), y: +fb.size[1].toFixed(2),
                        z: +fb.size[2].toFixed(2) };
-    fixed.footprintMm = { x: +Math.max(seated.footprintMm.x, fb.size[0]).toFixed(2),
-                          y: +Math.max(seated.footprintMm.y, fb.size[1]).toFixed(2) };
-    fixed.totalHeightMm = +(capHeight + Math.max(0, -fb.mn[2])).toFixed(2);
+    // A tilted sculpt's Z span includes its row slope. Subtracting that span
+    // from the old total invents a shorter cap after landing a floating piece.
+    // Measure the emitted union, including off-center placement, instead.
+    fixed.footprintMm = { x: +whole.size[0].toFixed(2), y: +whole.size[1].toFixed(2) };
+    fixed.totalHeightMm = +whole.size[2].toFixed(2);
+    fixed.overhangs = +Math.max(0, cb.mn[0]-fb.mn[0], fb.mx[0]-cb.mx[0],
+                               cb.mn[1]-fb.mn[1], fb.mx[1]-cb.mx[1]).toFixed(2);
     fixed.moved = moved;
     fixed.stillFloating = left;
     return fixed;
@@ -651,14 +872,19 @@
     var pitchD = o.pitchD || (seated.pitchMm ? seated.pitchMm.y : 19.05);
     var bed = o.bed || { x: 40.8, y: 30.6, zSupported: 52 };
 
+    var actual = seated.positions ? bounds(seated.positions) : null;
     if (seated.footprintMm.x > pitchW || seated.footprintMm.y > pitchD)
       issues.push('it is ' + seated.footprintMm.x.toFixed(1) + ' × ' +
         seated.footprintMm.y.toFixed(1) + ' mm across the widest point, over the ' +
         pitchW.toFixed(2) + ' × ' + pitchD.toFixed(2) +
         ' mm this key is allowed - it will foul the key next to it');
+    else if (actual && (actual.mn[0] < -pitchW/2 - 1e-5 || actual.mx[0] > pitchW/2 + 1e-5 ||
+                        actual.mn[1] < -pitchD/2 - 1e-5 || actual.mx[1] > pitchD/2 + 1e-5))
+      issues.push('the artwork is offset beyond this key\'s ' + pitchW.toFixed(2) + ' × ' +
+        pitchD.toFixed(2) + ' mm space; center it or reduce its size to clear neighboring keys');
     else if (seated.overhangs > 0.05)
-      notes.push('the sculpt overhangs the cap by ' + seated.overhangs.toFixed(1) +
-        ' mm a side, which is still inside the key pitch');
+      notes.push('the sculpt reaches up to ' + seated.overhangs.toFixed(1) +
+        ' mm beyond the cap, which is still inside the key pitch');
 
     if (seated.sculptMm.z < 1.5)
       notes.push('a ' + seated.sculptMm.z.toFixed(1) +
@@ -679,7 +905,8 @@
     var anchors = null;
     if (seated.positions && seated.capTriangles != null) {
       anchors = anchorage(seated.positions, seated.capTriangles, o);
-      if (anchors.shells > 1)
+      if (anchors.unresolved) issues.push(anchors.issue);
+      else if (anchors.shells > 1)
         notes.push('the sculpt is ' + anchors.shells + ' separate pieces; ' +
           anchors.anchored + ' of them are attached to the cap or to each other, ' +
           'and overlapping pieces fuse in the slicer');

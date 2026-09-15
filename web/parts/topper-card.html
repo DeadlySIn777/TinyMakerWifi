@@ -1,0 +1,42 @@
+<section class='card' id='topperCard'>
+  <h2>Pencil &amp; stylus toppers</h2>
+  <div class='topperGrid'>
+    <div><canvas id='tpPreview' width='640' height='560' aria-label='Topper geometry preview'></canvas><p id='tpDims' class='hint'></p></div>
+    <div>
+      <div class='topperLabelRow'><label for='tpPreset'>Fit to</label><button type='button' class='designerHelp' data-designer-help='tpPurposeHelp' data-help-title='About toppers' aria-label='About topper fit'>?</button></div>
+      <select id='tpPreset'><option value='pencil-round'>Round pencil · measure first</option><option value='pencil-hex'>Hex pencil · measure first</option><option value='marker'>Marker · custom size</option><option value='apple-stylus'>Apple stylus · custom size</option><option value='samsung-stylus'>Samsung stylus · custom size</option><option value='custom'>Custom</option></select>
+      <p id='tpPurposeHelp' hidden>A removable decoration for the back end. Measure where it will sit; stylus models and markers do not share one diameter. This is not an airtight marker lid or a charging adapter.</p>
+      <label for='tpModel'>Model or label</label><input id='tpModel' maxlength='60' placeholder='e.g. my pencil or exact stylus model'>
+      <div class='calRow'><div class='topperField'><div class='topperLabelRow'><label for='tpShape'>Socket shape</label><button type='button' class='designerHelp' data-designer-help='tpMeasureHelp' data-help-title='Measure your pencil or stylus' aria-label='About socket measurements'>?</button></div><select id='tpShape'><option value='round'>Round</option><option value='hex'>Hexagonal</option><option value='oval'>Oval</option></select></div><label>Measured width (mm)<input id='tpWidth' type='number' min='2' max='24' step='0.1' value='7'></label></div>
+      <label id='tpSecondLabel' for='tpSecondWidth'>Oval second width (mm)</label><input id='tpSecondWidth' type='number' min='0.5' max='24' step='0.1' placeholder='Only for an oval socket'>
+      <p id='tpMeasureHelp' hidden>For hex pencils measure across two flat sides. Round sockets use the diameter; oval sockets need both axes. Measure the exact place where the topper will sit. Irregular or asymmetric styluses need a custom shape.</p>
+      <div class='calRow'><label>Socket depth (mm)<input id='tpDepth' type='number' min='3' max='30' step='0.5' value='10'></label><label>Wall (mm)<input id='tpWall' type='number' min='1.2' max='4' step='0.1' value='1.6'></label></div>
+      <div class='topperLabelRow'><label for='tpFit'>Fit allowance <output id='tpFitValue'>0.20 mm</output></label><button type='button' class='designerHelp' data-designer-help='tpFitHelp' data-help-title='Adjust the fit' aria-label='About fit allowance'>?</button></div><input id='tpFit' type='range' min='0' max='0.6' step='0.02' value='0.2'>
+      <p id='tpFitHelp' hidden>Start with a plain socket fit test. More allowance widens the socket; less makes it tighter. The allowance changes the full opening width, not each side. The tight and loose buttons change it by 0.02 mm. Your settings and draft are kept in this browser when storage is available.</p>
+      <div class='calRow'><button id='tpTight' class='button secondary' type='button'>Too tight · widen</button><button id='tpLoose' class='button secondary' type='button'>Too loose · narrow</button></div>
+      <div class='topperLabelRow'><label for='tpPrompt'>Meshy artwork</label><button type='button' class='designerHelp' data-designer-help='tpMeshyHelp' data-help-title='Generate a fitted topper' aria-label='About Meshy toppers'>?</button></div>
+      <input id='tpPrompt' maxlength='180' placeholder='e.g. a chubby kitten hugging a strawberry'>
+      <p id='tpMeshyHelp' hidden>Uses the same Meshy API key as Keycaps and Models. Meshy generates the decoration; TinyMaker builds the measured socket and checks the attachment. Generating uses Meshy credits. Artwork and the finished topper are saved to Library. Recover resumes an existing paid task without creating another. Inspect the result and test your socket fit before printing.</p>
+      <div class='calRow'><button id='tpGenerate' type='button' class='go'>Generate artwork + cap</button><button id='tpRecover' type='button' hidden>Recover artwork</button></div>
+      <p id='tpGenState' class='hint' aria-live='polite' hidden></p>
+      <details><summary>Import your own sculpt</summary><label class='button secondary' for='tpArtFile'>Choose .stl / .glb</label><input id='tpArtFile' type='file' accept='.stl,.glb' class='hidden'></details>
+      <p id='tpSculptHelp' hidden>Sculpt height is a maximum; wide artwork may be smaller to fit. The dimensions below show the actual sculpt size. Turning or resizing the artwork keeps the body at its measured socket size.</p>
+      <div class='calRow'><div class='topperField'><div class='topperLabelRow'><label for='tpArtHeight'>Sculpt height (mm)</label><button type='button' class='designerHelp' data-designer-help='tpSculptHelp' data-help-title='Place your sculpt' aria-label='About sculpt placement'>?</button></div><input id='tpArtHeight' type='number' min='3' max='28' step='0.5' value='12'></div><button id='tpClearArt' type='button' class='button secondary'>Clear sculpt</button></div>
+      <label for='tpArtRotation'>Turn sculpt <output id='tpRotationValue'>0°</output></label><input id='tpArtRotation' type='range' min='0' max='360' step='5' value='0'>
+      <p id='tpArtSize' class='hint' hidden></p>
+      <p id='tpArtName' class='hint'>Plain socket</p>
+      <div class='calRow'><button id='tpSave' type='button'>Save to Library</button><button id='tpSlice' type='button'>Send to slicer</button><button id='tpExport' class='button secondary' type='button'>Export STL</button></div>
+      <p class='hint topperLimit'>Not an airtight lid. Test the fit and review supports.</p>
+      <p id='tpState' class='hint' aria-live='polite' hidden></p>
+      <p id='tpDraftState' class='hint' aria-live='polite' hidden></p>
+    </div>
+  </div>
+</section>
+<style>
+#topperCard .topperGrid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+#topperCard canvas{width:100%;height:auto;background:#101113;border-radius:16px;touch-action:none}
+#topperCard label{display:block;margin:12px 0 6px}#topperCard .calRow>label{flex:1;min-width:110px}
+#topperCard .calRow{gap:8px}#topperCard output{float:right;color:var(--muted)}
+#topperCard .topperLabelRow{display:flex;align-items:center;gap:8px;margin:12px 0 6px}#topperCard .topperLabelRow label{flex:1;margin:0}#topperCard .topperField{flex:1;min-width:110px}#topperCard .topperLimit{font-size:12px;margin:8px 0}#topperCard [hidden]{display:none!important}
+@media(max-width:800px){#topperCard .topperGrid{grid-template-columns:1fr}}
+</style>

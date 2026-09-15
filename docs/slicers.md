@@ -1,142 +1,110 @@
-# Sending a model from your slicer
+# TinyMaker slicer bridge
 
-The printer prints **PNG layer images**. An `.sl1` file is exactly that - a ZIP
-full of PNGs plus a small `config.ini` - which is why `.sl1` and `.zip` are the
-two things it takes, over the network or off the SD card.
+The PC bridge converts a sliced file when necessary, checks its layer images,
+uploads it, then waits until the printer has unpacked and verified the model.
+Uploading alone does **not** start a print.
 
-Everything below is a consequence of that one fact.
+## Printer profile
 
-## Which slicer can do what
+Use **320 × 240 pixels, 40.8 × 30.6 mm**, with source layers at **0.05 mm**.
+The included TinyMaker.ini is the PrusaSlicer profile. The same raster and
+physical dimensions are required when setting up another slicer.
 
-| Slicer | Sends over the network | How |
-|---|---|---|
-| **PrusaSlicer** | yes, built in | Add a *Physical printer*, host `tinymaker.local`, type **OctoPrint**. Then **Send to printer**. Nothing else to install. |
-| **Lychee Slicer** | yes, with the helper | Export as **Prusa SL1**, then `tm_send.py`. Or point the helper at Lychee's export folder and forget about it. |
-| **Chitubox** | yes, with the helper | Chitubox writes `.ctb`, which the printer cannot read. The helper converts it first (UVtools) and uploads the result. |
-| **UVtools** | yes | It already speaks `.sl1`. Export, then `tm_send.py` - or use its own tooling. |
+Exposure comes from the **printer's selected resin profile**, not the sliced
+file. The bridge prints the active values before uploading. A printer profile
+set to 0.10 mm uses alternate 0.05 mm source layers.
 
-## Why Chitubox needs a helper
+Conversion changes the file format. It cannot safely fix a file sliced for a
+different screen resolution, plate size, orientation or exposure process.
 
-Chitubox exports `.ctb` / `.photon` / `.pwmx`. Those are proprietary, the layer
-data is run-length encoded, and the encoding changes between Chitubox versions.
+## Install and send
 
-Decoding them **on the printer** was considered and rejected: this is an
-ESP32-WROOM with 4 MB of flash and no PSRAM, already running a web server, an
-SD stack and a print loop inside one `loop()`. Adding a format that needs
-chasing every time a vendor revises it is a permanent maintenance cost paid in
-the one place we have no room - and it would put parsing of untrusted binary
-right next to the print loop.
+Python 3.8 or newer is required. The bridge uses only Python's standard library.
+Install [UVtools](https://github.com/sn4k3/UVtools) for CTB and other converted
+formats; SL1 does not need it.
 
-So the conversion happens on the PC, where UVtools already does it properly and
-for free, and the printer keeps its one simple contract.
+From the bridge folder:
 
-## The helper
+    python tm_send.py "C:\Models\my-model.sl1" --printer 192.168.1.22
+    python tm_send.py "C:\Models\my-model.ctb" --printer 192.168.1.22
 
-[`scripts/tm_send.py`](../scripts/tm_send.py) - Python 3.8+, standard library
-only, nothing to install.
+In the firmware source tree, use python scripts/tm_send.py instead.
 
-```
-python scripts/tm_send.py model.sl1                   send it
-python scripts/tm_send.py model.ctb                   convert, then send
-python scripts/tm_send.py model.ctb --start           send and start printing
-python scripts/tm_send.py --watch "D:/Chitubox/out"   send anything exported there
-```
+On Windows, you can right-click **Send-Model.ps1 → Run with PowerShell** to
+choose a sliced file and enter the printer address. This launcher keeps existing
+models by renaming duplicates and never starts a print. It requires Python
+3.8+ and follows the computer's existing script-execution policy.
 
-`--watch` is the one worth setting up. Leave it running, slice in Chitubox as
-you always do, hit export - and the model is on the printer before you have
-walked over to it. Files are only picked up once they have stopped growing, so
-a half-written export is never sent.
-
-For `.ctb` and friends you also need [UVtools](https://github.com/sn4k3/UVtools)
-(free, open source). `.sl1` and `.zip` need nothing at all.
-
-### UVtools quirks, found by actually running it (v6.2.0)
-
-Two things that cost time if you meet them cold:
-
-- **`UVtoolsCmd` returns exit code 1 even when the conversion fully succeeds.**
-  Verified: exit 1, and a valid 99 KB `.sl1` written next to it. So `tm_send.py`
-  judges the result by the output FILE, not the exit code. `check_sl1()` still
-  runs afterwards and rejects anything that is not a ZIP of PNG layers, so a
-  silently wrong conversion cannot reach the printer.
-- **`ctb` is an ambiguous target.** Two encoders claim that extension (Chitubox
-  and CTBEncrypted), so `convert x.sl1 ctb out.ctb` fails and prints the list of
-  32 encoders. Use the strict encoder name - `Chitubox`. This only matters going
-  TOWARDS ctb; `sl1` is claimed by one encoder, which is the direction this tool
-  uses.
-
-Also worth knowing: a real `.sl1` needs **both** `config.ini` and
-`prusaslicer.ini` inside it. UVtools refuses one without the other
-("Malformed file: prusaslicer.ini is missing"). The printer is more forgiving -
-it takes any ZIP of PNGs - so a bare archive that the printer prints happily can
-still be unreadable to UVtools.
-
-### Verified end to end
-
-`.ctb` -> UVtools -> `.sl1` -> upload -> unpacked and printable on the machine.
-The test article was a cube sliced by PrusaSlicer 2.9.6 with the TinyMaker
-profile, converted to Chitubox format, then sent with
-`tm_send.py --describe`.
-
-### Useful flags
-
-| Flag | What it does |
+| Starting file | Route |
 |---|---|
-| `--printer HOST` | printer address; default `tinymaker.local`, use the IP if mDNS is unreliable on your network |
-| `--start` | begin printing as soon as the upload finishes |
-| `--action rename` | keep both when the name is already on the card (default is `replace`) |
-| `--uvtools PATH` | point at `UVtoolsCmd` if it is not on `PATH` |
-| `--describe` | name it `model_printer_layer_exposure_date`, so the printer's file list says what each model is |
+| PrusaSlicer SL1 | Send directly with the bridge. PrusaSlicer's separate OctoPrint upload support also exists. |
+| Lychee Prusa SL1 export | Send with the bridge after configuring the TinyMaker dimensions. A native Lychee export has not yet been verified here. |
+| Chitubox CTB | The bridge runs UVtools and checks the resulting SL1 before uploading. |
+| PNG layer ZIP | Requires numbered consecutive layers and config.ini containing layerHeight = 0.05. Thumbnails alone are rejected. |
 
-### About `--describe`
+Default name conflicts stop without overwriting. Use --action rename to keep
+both, or explicitly use --action replace to replace an existing model.
+The final message identifies the name actually stored on the printer.
 
-The printer's file list shows names and nothing else, so `Tooth` three times
-over tells you nothing about which one was 0.05 mm at 2.6 s. With `--describe`
-the same file uploads as:
+For a slicer's export folder:
 
-```
-Tooth_SL1_005_26_2026_09_13_02_46_13
-```
+    python tm_send.py --watch "C:\Models\Exports" --printer 192.168.1.22 --action rename
 
-Layer height and exposure come from the `config.ini` inside the `.sl1`
-(PrusaSlicer writes one; a bare ZIP of PNGs does not, and then the name simply
-carries fewer facts). The date is the file's own modification time - when it was
-sliced, which is the fact worth keeping, not when it happened to be uploaded.
+The watcher waits for a nonempty, stable file. It detects overwritten exports,
+retries temporary printer failures, and reports files needing attention. If
+delivery becomes uncertain after an upload, it asks you to inspect the printer
+instead of blindly duplicating the model.
 
-**Why it looks like that and not like `0.05mm` or `2.6s`:** the printer keeps 40
-characters and deletes everything that is not a letter, a digit, `-` or `_`
-(`safeModelName`, [src/Import.ino:71](../src/Import.ino)). So `0.05` arrives as
-`005` whatever you do, and anything past 40 characters is cut off the END -
-which is where the date lives. The helper therefore shortens the MODEL name to
-make room and keeps the reading intact, rather than letting the firmware cut the
-timestamp off. It says so when it shortens one.
+--uvtools PATH selects a specific UVtoolsCmd executable. --describe adds
+source-slicer metadata to the name; exposure in that name is a label, **not**
+the printer's actual exposure setting.
 
-### What it will not do
+Use --check with an SL1/ZIP for a local validation without contacting the printer.
+--wait-seconds sets the maximum wait for unpacking and confirmation (default 900).
 
-It refuses before uploading if the archive is not a ZIP or has no PNG layers in
-it. That check is cheap here and expensive on the printer, where a bad archive
-is minutes of unpacking on the ESP32 before it fails with the user watching.
+--start is optional and explicitly requests a print after confirmed import.
+It runs printer preflight and does not override resin warnings. For initial
+setup, upload first and review the printer's preview and resin settings.
 
-## Under the hood
+## Checks before success
 
-The upload is a plain multipart POST to `/upload` (see [api.md](api.md)), the
-same endpoint the dashboard and `curl` use:
+- ZIP integrity, safe paths, numbered layers without gaps or duplicates.
+- Every layer is a supported 320 × 240 PNG; maximum 1,200 source layers.
+- Source layer height and any declared physical display dimensions agree.
+- Printer SD card and web control are available; printer is not busy.
+- The accepted upload becomes a newly imported model with the expected layer
+  count and source layer height. HTTP 201 / "queued" alone is not completion.
 
-```
-curl -F "file=@model.sl1" -F "action=replace" http://tinymaker.local/upload
-```
+An error preserves the source export. The bridge does not change model scale,
+motor settings, resin profiles or firmware.
 
-Requests that carry no `Origin` header are only allowed to change things if
-they carry `X-TinyMaker` (the CSRF rule, issue #95). The helper sends it, which
-is why `--start` works from a script while a random web page cannot do the same.
+## What was actually tested
 
-## What would remove the helper entirely
+The local fixture is a cube sliced with PrusaSlicer **2.9.6** using the
+TinyMaker profile: **235 layers at 320 × 240, 0.05 mm**. It was converted from
+SL1 to Chitubox format and back through installed UVtoolsCmd, which reports
+2.1.0+c581952afa9bab99542c3120735090f1c5cab480.
 
-Chitubox and Lychee both speak the **Elegoo/Anycubic UDP discovery + upload
-protocol** natively - a much simpler wire format than OctoPrint. If the firmware
-answered that, both slicers would find the printer on the network by themselves
-and their own Send button would light up, with no PC-side tool and no format
-conversion for the ones that can already emit PNG layers.
+All layer bounds stayed identical. The CTB round trip changed some antialias
+values by at most 1 on a 0–255 scale. This is a verified **format round trip**,
+not a native Chitubox/Lychee export or a completed physical print.
 
-That is firmware work in `Network.ino`, so it goes through the hardware gate.
-Proposed, not scheduled - it belongs on the plan only if V puts it there.
+The live CTB bridge upload also passed: the printer completed import of
+Bridge_QA_Cube with all 235 layers and the correct layer height. Existing models
+were preserved; no print was started. It was tested on 0.18.7, then the printer
+was updated to 0.18.8 and its model list was verified again after reboot.
+The packaged validation receipt records this result and exact source hashes.
+Firmware 0.18.9 was also checked with a deliberately empty archive and a valid
+235-layer archive: each returned its own matching failure or success receipt.
+The new successful QA model was removed afterward; earlier models were preserved.
+Automated tests cover conversion validation, delayed import, name conflicts,
+renaming, rejected starts and watch recovery using a simulated printer.
+
+Observed UVtools behavior: the converter can exit with code 1 after writing a
+valid output. The bridge validates the produced file instead of accepting or
+rejecting it solely on that code. When generating a CTB fixture, use the strict
+encoder name Chitubox; the extension ctb is ambiguous between encoders.
+
+This helper can be distributed separately from firmware. It does not install
+UVtools on the ESP32, and it has not been published or submitted upstream by
+this repair.

@@ -116,5 +116,23 @@ console.log('\nTHE LEGEND SWITCH TRAVELS, because a blank cap has to arrive blan
     S.encode(blank).length + ' vs ' + S.encode(Object.assign({}, blank, { legendOn: true })).length);
 }
 
+console.log('\npainting-reference settings travel without embedding source mesh or colours');
+{
+  const recipe={profile:'XDA',colorMode:'color',baseColor:'#FA8CB2',artColor:'#55BBAA',useSourceColors:false,
+    sourceColors:new Float32Array([1,0,0]),sourceColorKind:'vertex'};
+  const decoded=S.decode(S.encode(recipe));
+  for(const key of ['colorMode','baseColor','artColor','useSourceColors'])ok(key+' survives exactly',decoded[key],recipe[key]);
+  ok('source array does not enter a share code',decoded.sourceColors,undefined);
+  ok('source metadata does not pretend the code contains colours',decoded.sourceColorKind,undefined);
+  for(const fields of [{colorMode:'paint'},{baseColor:'#abc'},{artColor:'red'},{baseColor:42},{useSourceColors:'false'}]){
+    let error='';try{S.encode({profile:'XDA',...fields});}catch(e){error=e.message;}
+    truthy('invalid colour settings rejected on encode: '+JSON.stringify(fields),!!error);
+    const aliases={colorMode:'cm',baseColor:'bc',artColor:'ac',useSourceColors:'sc'},raw={p:'XDA'};
+    for(const key in fields)raw[aliases[key]]=fields[key];
+    error='';try{S.decode('TMK1-'+Buffer.from(JSON.stringify(raw)).toString('base64url'));}catch(e){error=e.message;}
+    truthy('invalid colour settings rejected on decode: '+JSON.stringify(fields),!!error);
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -29,7 +29,7 @@
   'use strict';
 
   var DB = 'tmKeycaps', STORE = 'designs', VERSION = 1;
-  var MAX = 60;
+  var MAX = 60; // Legacy explicit trim() default; saves never remove older work.
 
   function open() {
     return new Promise(function (res, rej) {
@@ -117,13 +117,52 @@
   function withRaw(facts, raw) {
     var out = {};
     if (raw) { out.sizeRaw = raw.sizeRaw; out.bytes = raw.bytes; }
-    if (facts) Object.keys(facts).forEach(function (k) { out[k] = facts[k]; });
+    // Measurements and cap settings are JSON data, but can contain nested
+    // arrays/objects owned by the editor. Capture them with the source mesh.
+    if (facts) {var snapshot=JSON.parse(JSON.stringify(facts));Object.keys(snapshot).forEach(function (k) { out[k] = snapshot[k]; });}
+    return out;
+  }
+
+  /* A finished product is a second mesh: the checked assembly in print pose.
+     Keep the source artwork separately for editing. Snapshot before opening
+     IndexedDB so edits made while storage opens cannot change this save. */
+  function copyProduct(p, includePositions) {
+    if (!p) return null;
+    var out = { version: p.version, kind: p.kind, state: p.state,
+      issues: Array.isArray(p.issues) ? p.issues.slice() : [], checkedAt: p.checkedAt,
+      fit: p.fit ? { slotMm: p.fit.slotMm } : null,
+      sizeMm: Array.isArray(p.sizeMm) ? p.sizeMm.slice() : null,
+      triangles: p.triangles, recipe: p.recipe, signature: p.signature };
+    if (includePositions) {
+      if (p.positions != null && Object.prototype.toString.call(p.positions) !== '[object Float32Array]')
+        throw new Error('The finished product mesh must be a Float32Array. Rebuild and save it again.');
+      out.positions = p.positions == null ? null : new Float32Array(p.positions);
+    }
     return out;
   }
 
   function save(entry) {
     var e = entry || {};
     if (!e.name && !e.prompt) return Promise.reject(new Error('A saved design needs a name or a prompt.'));
+    var product, positions=null, facts, topperRecipe=null, topperSource=null;
+    try {
+      product = copyProduct(e.product, true);
+      if(e.positions!=null){
+        if(Object.prototype.toString.call(e.positions)!=='[object Float32Array]')
+          throw new Error('The source artwork must be a Float32Array. Reopen and save it again.');
+        positions=new Float32Array(e.positions);
+      }
+      facts=withRaw(e.facts,measure(positions));
+      if(e.topperRecipe!=null)topperRecipe=copyTopperRecipe(e.topperRecipe);
+      if(e.topperSource!=null){
+        if(!topperRecipe||Object.prototype.toString.call(e.topperSource)!=='[object Float32Array]'||
+          !e.topperSource.length||e.topperSource.length%9||e.topperSource.length>2700000)
+          throw new Error('The original topper artwork could not be saved.');
+        for(var ti=0;ti<e.topperSource.length;ti++)if(!Number.isFinite(e.topperSource[ti]))throw new Error('The topper artwork contains invalid coordinates.');
+        topperSource=new Float32Array(e.topperSource);
+      }
+    }
+    catch (error) { return Promise.reject(error); }
     var rec = {
       id: e.id || newId(),
       at: e.at || Date.now(),
@@ -132,17 +171,39 @@
       kind: e.kind || 'sculpt',
       thumb: e.thumb || null,
       design: e.design || null,
-      /* Stored as the typed array it already is. This is the whole reason for
-         IndexedDB, and the reason picking one costs nothing. */
-      positions: e.positions || null,
-      triangles: e.positions ? e.positions.length / 9 : 0,
+      /* The source, product, colors and measurements all describe this same
+         save, even if the editor changes while IndexedDB is opening. */
+      positions: positions,
+      sourceColors: copySourceColors(e.sourceColors,positions),
+      sourceColorKind: /^(material|vertex|texture|partial)$/.test(e.sourceColorKind||'')?e.sourceColorKind:null,
+      topperRecipe:topperRecipe, topperSource:topperSource,
+      triangles: positions ? positions.length / 9 : 0,
       /* The caller's own measurements win, because only the caller knows the
          scale. measure() contributes what it honestly can from the raw mesh:
          its byte size, and its extent in whatever unit the generator used. */
-      facts: withRaw(e.facts, measure(e.positions))
+      facts: facts,
+      product: product
     };
-    return tx('readwrite', function (os) { os.put(rec); return rec; })
-      .then(function (r) { return trim().then(function () { return r; }); });
+    // Storage-full errors reach the caller. Never erase paid generations or
+    // finished products to make room for a new one.
+    return tx('readwrite', function (os) { os.put(rec); return rec; });
+  }
+
+  function copyTopperRecipe(recipe){
+    if(!recipe||recipe.version!==1||!recipe.fields||typeof recipe.fields!=='object'||Array.isArray(recipe.fields))
+      throw new Error('The saved topper settings are unsupported.');
+    var fields={},keys=['tpPreset','tpModel','tpShape','tpWidth','tpSecondWidth','tpDepth','tpWall','tpFit','tpArtHeight','tpArtRotation','tpPrompt'];
+    keys.forEach(function(key){var value=recipe.fields[key];
+      if(typeof value!=='string'||value.length>(key==='tpPrompt'?180:key==='tpModel'?60:200))throw new Error('The saved topper settings are incomplete or too long.');
+      fields[key]=value;
+    });
+    return {version:1,fields:fields};
+  }
+
+  function copySourceColors(colors,positions){
+    if(!colors||!positions||colors.length!==positions.length||Object.prototype.toString.call(colors)!=='[object Float32Array]')return null;
+    for(var i=0;i<colors.length;i++)if(!Number.isFinite(colors[i])||colors[i]<0||colors[i]>1)return null;
+    return new Float32Array(colors);
   }
 
   /* Newest first. Meshes are left behind on purpose - a shelf of twenty models
@@ -160,7 +221,8 @@
                    /* Measured at save. A record written before this existed has
                       none, and the card says so for those two fields rather
                       than loading a megabyte to fill in a caption. */
-                   facts: v.facts || null });
+                   facts: v.facts || null,
+                   product: copyProduct(v.product, false) });
         c.continue();
       };
       return { get result() { return out; } };
@@ -177,8 +239,8 @@
     return tx('readwrite', function (os) { os.clear(); return true; });
   }
 
-  /* Drop the oldest beyond MAX. Called after every save so the shelf cannot
-     grow until a quota error is the thing that tells you about it. */
+  /* Legacy explicit maintenance API only. Never called by save or the UI;
+     deleting older work requires a deliberate caller action. */
   function trim(max) {
     max = max || MAX;
     return list().then(function (rows) {
@@ -200,7 +262,7 @@
   }
 
   root.keycapLibrary = { save: save, list: list, get: get, remove: remove,
-                         measure: measure,
+                         measure: measure, copyTopperRecipe:copyTopperRecipe,
                          clear: clear, trim: trim, usage: usage,
                          newId: newId, MAX: MAX };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.keycapLibrary;

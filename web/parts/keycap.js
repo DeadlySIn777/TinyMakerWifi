@@ -190,29 +190,64 @@
     return out;
   }
 
-  /* How far a set of triangles has to move in +z before every one of `pts`
-     clears it by `want`. The triangles are the roof underside; the points are
-     the top face. z grows INTO the cap, so "underside below the top" means
-     triZ >= topZ + want, and a shortfall is topZ + want - triZ. Returns 0 when
-     nothing is violated, which is the ordinary case. */
-  function liftOver(tris, pts, want) {
-    var extra = 0, t, i, j, k;
-    for (t = 0; t < tris.length; t++) {
+  /* Required +z movement of the underside triangles to clear every triangle
+     on the finished top. z grows INTO the cap; undersideZ >= topZ + want.
+     Intersect the XY triangles and measure both planes at the overlap's
+     vertices, including edge intersections absent from the source grids. */
+  function liftOver(tris, grid, want) {
+    var extra = 0, n = grid.length;
+    // The difference of two triangle planes reaches its extrema at a vertex
+    // of their XY overlap. Top vertices alone miss edge/edge intersections.
+    function lower(axis, v) {
+      var lo = 0, hi = n - 1;
+      while (lo < hi) {
+        var m = (lo + hi) >> 1;
+        if ((axis ? grid[0][m][1] : grid[m][0][0]) < v) lo = m + 1; else hi = m;
+      }
+      return Math.max(0, lo - 1);
+    }
+    function clipped(top, roof) {
+      var poly = top, sign = ((roof[1][0]-roof[0][0])*(roof[2][1]-roof[0][1]) -
+        (roof[1][1]-roof[0][1])*(roof[2][0]-roof[0][0])) >= 0 ? 1 : -1;
+      for (var e = 0; e < 3 && poly.length; e++) {
+        var a = roof[e], b = roof[(e+1)%3], out = [], prev = poly[poly.length-1];
+        var dp = sign*((b[0]-a[0])*(prev[1]-a[1])-(b[1]-a[1])*(prev[0]-a[0]));
+        for (var k = 0; k < poly.length; k++) {
+          var cur = poly[k];
+          var dc = sign*((b[0]-a[0])*(cur[1]-a[1])-(b[1]-a[1])*(cur[0]-a[0]));
+          if ((dp >= 0) !== (dc >= 0)) {
+            var f = dp/(dp-dc);
+            out.push([prev[0]+f*(cur[0]-prev[0]), prev[1]+f*(cur[1]-prev[1]),
+              prev[2]+f*(cur[2]-prev[2])]);
+          }
+          if (dc >= 0) out.push(cur);
+          prev = cur; dp = dc;
+        }
+        poly = out;
+      }
+      return poly;
+    }
+    for (var t = 0; t < tris.length; t++) {
       var a = tris[t][0], b = tris[t][1], c = tris[t][2];
       var mnx = Math.min(a[0], b[0], c[0]), mxx = Math.max(a[0], b[0], c[0]);
       var mny = Math.min(a[1], b[1], c[1]), mxy = Math.max(a[1], b[1], c[1]);
       var d = (b[1]-c[1])*(a[0]-c[0]) + (c[0]-b[0])*(a[1]-c[1]);
       if (Math.abs(d) < 1e-12) continue;                    // degenerate in plan
-      for (k = 0; k < pts.length; k++) {
-        var x = pts[k][0], y = pts[k][1];
-        if (x < mnx || x > mxx || y < mny || y > mxy) continue;
-        var l1 = ((b[1]-c[1])*(x-c[0]) + (c[0]-b[0])*(y-c[1])) / d;
-        var l2 = ((c[1]-a[1])*(x-c[0]) + (a[0]-c[0])*(y-c[1])) / d;
-        var l3 = 1 - l1 - l2;
-        if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) continue;
-        var z = l1*a[2] + l2*b[2] + l3*c[2];
-        var need = pts[k][2] + want - z;
-        if (need > extra) extra = need;
+      for (var i = lower(0, mnx); i < n-1 && grid[i][0][0] <= mxx; i++) {
+        for (var j = lower(1, mny); j < n-1 && grid[0][j][1] <= mxy; j++) {
+          var pair = [[grid[i][j], grid[i][j+1], grid[i+1][j+1]],
+            [grid[i][j], grid[i+1][j+1], grid[i+1][j]]];
+          for (var q = 0; q < 2; q++) {
+            var pts = clipped(pair[q], tris[t]);
+            for (var k = 0; k < pts.length; k++) {
+              var x = pts[k][0], y = pts[k][1];
+              var l1 = ((b[1]-c[1])*(x-c[0]) + (c[0]-b[0])*(y-c[1])) / d;
+              var l2 = ((c[1]-a[1])*(x-c[0]) + (a[0]-c[0])*(y-c[1])) / d;
+              var z = l1*a[2] + l2*b[2] + (1-l1-l2)*c[2];
+              extra = Math.max(extra, pts[k][2] + want - z);
+            }
+          }
+        }
       }
     }
     return extra;
@@ -265,10 +300,47 @@
     while ((4*n - 4) % 12) n++;
     return n;
   }
-  /* The grid that matches the machine: about one sample per printer pixel
-     across the face. Finer than that is detail the mask cannot hold. */
+  /* The base grid targets printer pixels. Lettering gets finer local samples
+     below so its edge position survives triangulation before rasterisation. */
   function gridForFace(topWmm, pixelMm) {
     return snapGrid(Math.ceil(topWmm / (pixelMm || PIXEL_MM)) + 1);
+  }
+
+  /* Fine type needs several samples across a stroke, not a denser whole cap.
+     Refine only its physical bounds. Both axes keep equal length, preserving
+     the closed ring topology, and no triangle is independently subdivided. */
+  function surfaceAxes(n, w, h, relief, stepMm) {
+    var regions = relief && typeof relief.detailRegions === 'function'
+      ? relief.detailRegions(w, h) : [];
+    function axis(span, key) {
+      var values = [];
+      for (var i = 0; i < n; i++) values.push(-span/2 + span*i/(n-1));
+      regions.forEach(function (r) {
+        var lo = Math.max(-span/2, r[key][0]), hi = Math.min(span/2, r[key][1]);
+        if (!isFinite(lo) || !isFinite(hi) || hi <= lo) return;
+        // Replace coarse samples inside the region. Keeping both grids would
+        // waste triangles and can leave two almost coincident coordinates.
+        values = values.filter(function (v) {
+          return v === -span/2 || v === span/2 || v < lo-stepMm/8 || v > hi+stepMm/8;
+        });
+        var count = Math.min(192, Math.ceil((hi-lo)/stepMm));
+        for (var j = 0; j <= count; j++) values.push(lo+(hi-lo)*j/count);
+      });
+      values.sort(function (a,b) { return a-b; });
+      return values.filter(function (v,i) { return !i || v-values[i-1] > 1e-6; });
+    }
+    var x = axis(w, 'x'), y = axis(h, 'y');
+    var count = Math.max(x.length, y.length);
+    while ((4*count-4)%12) count++;
+    function pad(a) {
+      while (a.length < count) {
+        var widest = 0;
+        for (var i = 1; i < a.length-1; i++) if (a[i+1]-a[i] > a[widest+1]-a[widest]) widest=i;
+        a.splice(widest+1, 0, (a[widest]+a[widest+1])/2);
+      }
+      return a;
+    }
+    return { x: pad(x), y: pad(y) };
   }
 
 
@@ -332,6 +404,9 @@
     /* Legends and any generated skin are the same thing: an extra displacement
        on this one surface. Nothing downstream has to know which it was. */
     var relief = o.relief || null;
+    var axes = surfaceAxes(n, topW, topD, relief,
+      Math.max(PIXEL_MM/4, o.legendPixelMm || PIXEL_MM/2));
+    n = axes.x.length;
     function raw(x, y) {
       var z = field(x, y);
       if (relief) z += relief(x / (topW/2), y / (topD/2), topW, topD);
@@ -341,7 +416,7 @@
     // normalise so the cap's highest point is z = 0 and z grows into the cap
     var i, j, minZ = Infinity;
     for (i = 0; i < n; i++) for (j = 0; j < n; j++) {
-      var zz = raw(-topW/2 + topW*i/(n-1), -topD/2 + topD*j/(n-1));
+      var zz = raw(axes.x[i], axes.y[j]);
       if (zz < minZ) minZ = zz;
     }
     function surf(x, y) { return raw(x, y) - minZ; }
@@ -350,7 +425,7 @@
     for (i = 0; i < n; i++) {
       gp.push([]);
       for (j = 0; j < n; j++) {
-        var x = -topW/2 + topW*i/(n-1), y = -topD/2 + topD*j/(n-1), z = surf(x, y);
+        var x = axes.x[i], y = axes.y[j], z = surf(x, y);
         if (z > maxZ) maxZ = z;
         gp[i].push([x, y, z]);
       }
@@ -387,23 +462,24 @@
        a hole in the top.
 
        So measure it. bridgeTris() is the same walk bridgeUneven() emits, so
-       what is checked is what gets built; liftOver() drops the top grid onto
-       those triangles and returns the worst shortfall. Pushing BOTH rings down
+       what is checked is what gets built; liftOver() compares the finished top
+       triangles over their entire overlap and returns the worst shortfall.
+       Pushing BOTH rings down
        by that much restores the clearance without flattening the roof - which
        matters, because a flat roof is what makes a tilted Cherry R3 4 mm thick
        at the front and leaves no room for a stem (see `roof` above). */
     var MIN_ROOF = o.minRoof == null ? 0.5 : o.minRoof;   // ~10 layers at 0.05
-    var inPts = [], inPost = [];
+    var inPost = [];
     for (i = 0; i < n; i++) for (j = 0; j < n; j++) {
       var px = gp[i][j][0], py = gp[i][j][1];
       if (Math.abs(px) > innerW/2 || Math.abs(py) > innerD/2) continue;
-      (px*px + py*py <= mx.postR*mx.postR ? inPost : inPts).push(gp[i][j]);
+      if (px*px + py*py <= mx.postR*mx.postR) inPost.push(gp[i][j]);
     }
     var roofRing0 = subdivRect(innerW, innerD, n, 0).map(function (q) {
       return [q[0], q[1], surf(q[0], q[1]) + roof];
     });
     var poLo0 = postXY.map(function (q) { return [q[0], q[1], surf(q[0], q[1]) + roof]; });
-    var roofExtra = liftOver(bridgeTris(roofRing0, poLo0), inPts, MIN_ROOF);
+    var roofExtra = liftOver(bridgeTris(roofRing0, poLo0), gp, MIN_ROOF);
 
     /* The hole floor is flat, so the switch bottoms out evenly, and it sits at
        the deepest the roof gets anywhere under the post - otherwise a dish or a
@@ -418,6 +494,11 @@
       var z = surf(p[0], p[1]) + roof + roofExtra; if (z > floorZ) floorZ = z; });
     inPost.forEach(function (q) {
       var z = q[2] + Math.max(roof, MIN_ROOF) + roofExtra; if (z > floorZ) floorZ = z; });
+    var postFloor = postXY.map(function (q) { return [q[0], q[1], floorZ]; });
+    var floorTris = postFloor.map(function (q, i) {
+      return [[0,0,floorZ], q, postFloor[(i+1)%postFloor.length]];
+    });
+    floorZ += liftOver(floorTris, gp, Math.max(roof, MIN_ROOF));
     /* A low sculpted row cannot hold a full-depth stem - Cherry R4 is 8.45 mm
        tall and a 4.2 mm stem under a 1.2 mm roof wants 8.58. Real caps shorten
        the stem rather than not existing, so this does too: take what the cap
@@ -505,6 +586,7 @@
     return {
       positions: pos,
       triangles: s.count(),
+      topGrid: n,
       profile: pname, row: rname, sizeU: sizeU,
       size: { x: W, y: D, z: +mouthZ.toFixed(3) },
       slotWidth: +slot.toFixed(3),
@@ -628,12 +710,18 @@
     if (!positions || !positions.length || positions.length % 9)
       return { ok: false, issues: ['not a triangle soup'], notes: [] };
 
+    for (var finite = 0; finite < positions.length; finite++)
+      if (!Number.isFinite(positions[finite]))
+        return { ok: false, issues: ['mesh contains a non-finite coordinate'], notes: [] };
+
     var mn = [Infinity,Infinity,Infinity], mxx = [-Infinity,-Infinity,-Infinity];
     for (var i = 0; i < positions.length; i += 3) for (var k = 0; k < 3; k++) {
       if (positions[i+k] < mn[k]) mn[k] = positions[i+k];
       if (positions[i+k] > mxx[k]) mxx[k] = positions[i+k];
     }
     var size = { x: mxx[0]-mn[0], y: mxx[1]-mn[1], z: mxx[2]-mn[2] };
+    if (!(size.x > 0 && size.y > 0 && size.z > 0))
+      issues.push('mesh has no solid three-dimensional extent');
 
     var wantW = capWidth(sizeU);
     if (size.x > UNIT * sizeU) issues.push('it is ' + size.x.toFixed(1) +
@@ -657,7 +745,7 @@
       ' pixels across - under about 8 it will not hold its shape');
 
     var h = root.meshHealth ? root.meshHealth(positions) : null;
-    if (h && h.severity === 'bad') issues.push('mesh: ' + h.advice);
+    if (h && (h.fatal || h.severity === 'bad')) issues.push('mesh: ' + (h.fatal || h.advice));
     else if (h && !h.watertight) notes.push('mesh: ' + h.summary);
 
     return { ok: !issues.length, size: size, slotWidth: +slot.toFixed(3),
@@ -883,14 +971,24 @@
     var o = opts || {};
     caps = (caps || []).filter(Boolean);
 
-    // work out how each cap actually sits on the plate
+    // Inputs are already oriented for printing. Measure those coordinates:
+    // a lean shifts the XY centre, and a rounded plan footprint can differ
+    // from the actual asymmetric sculpture. Packing metadata alone let a
+    // model fit by width while its coordinates crossed the reserved bed edge.
     var items = caps.map(function (c, i) {
-      var plan = c.printPlan || fits(c.size.x, c.size.y, c.size.z);
-      var w = plan.foot ? plan.foot.x : c.size.x;
-      var d = plan.foot ? plan.foot.y : c.size.y;
-      var h = plan.height || c.size.z;
+      var p=c.positions,mn=[Infinity,Infinity,Infinity],mx=[-Infinity,-Infinity,-Infinity];
+      var valid=!!p&&p.length>=9&&p.length%9===0;
+      if(valid)for(var q=0;q<p.length;q+=3)for(var a=0;a<3;a++){
+        var value=p[q+a];
+        if(typeof value!=='number'||!Number.isFinite(value)){valid=false;continue;}
+        mn[a]=Math.min(mn[a],value);mx[a]=Math.max(mx[a],value);
+      }
+      var w=mx[0]-mn[0],d=mx[1]-mn[1],h=mx[2];
+      valid=valid&&w>0&&d>0&&mx[2]>mn[2];
+      var plan = c.printPlan || (valid ? fits(w,d,h) : {ok:false});
       return { c: c, i: i, w: w, d: d, h: h, tilt: plan.tilt || 0,
-               supports: !!plan.supports, ok: plan.ok !== false };
+               midX:(mn[0]+mx[0])/2,midY:(mn[1]+mx[1])/2,minZ:mn[2],
+               supports: !!plan.supports, ok: valid&&plan.ok !== false };
     });
 
     var anySupport = items.some(function (t) { return t.supports; });
@@ -898,6 +996,7 @@
        support tree is wider at the plate than the part above it, and two
        neighbouring trees growing into each other is how a plate fails late. */
     var gap = o.gap == null ? (anySupport ? SUPPORT_GAP : FLAT_GAP) : o.gap;
+    var zLimit = anySupport ? BED.zSupported : BED.zFlat;
 
     /* Shelf packing, tallest first. Sorting by depth first is what makes rows
        fill instead of leaving a strip of dead bed under every short cap. */
@@ -907,7 +1006,7 @@
     var placed = [], left = [], parts = [], total = 0;
     var cx = 0, cy = 0, rowD = 0, maxH = 0;
     order.forEach(function (t) {
-      if (!t.ok) { left.push(t.c); return; }
+      if (!t.ok || t.minZ < -1e-5 || t.h > zLimit+1e-5) { left.push(t.c); return; }
       // turn a cap 90 degrees if that is the only way it lands
       var w = t.w, d = t.d, turned = false;
       /* PACKED INTO WHAT IS FREE, not into the bed - see usableBed(). The
@@ -927,7 +1026,7 @@
       var dx = cx + w / 2 - usable.x / 2, dy = cy + d / 2 - usable.y / 2;
       var p = t.c.positions, out = new Float32Array(p.length);
       for (var k = 0; k < p.length; k += 3) {
-        var px = p[k], py = p[k + 1];
+        var px = p[k]-t.midX, py = p[k + 1]-t.midY;
         if (turned) { var sw = px; px = -py; py = sw; }
         out[k] = px + dx; out[k + 1] = py + dy; out[k + 2] = p[k + 2];
       }
@@ -942,7 +1041,6 @@
     var all = new Float32Array(total), at = 0;
     parts.forEach(function (p) { all.set(p, at); at += p.length; });
 
-    var zLimit = anySupport ? BED.zSupported : BED.zFlat;
     var issues = [];
     if (maxH > zLimit) issues.push('the tallest cap on this plate stands ' +
       maxH.toFixed(1) + ' mm and the volume allows ' + zLimit);

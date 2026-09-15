@@ -36,8 +36,15 @@
   }
 
   function meshHealth(pos) {
+    function invalid(message, count) {
+      return { ok: false, fatal: message, severity: 'bad', triangles: count || 0,
+        watertight: false, boundaryEdges: 0, nonManifoldEdges: 0, flippedEdges: 0,
+        degenerate: 0, size: { x: 0, y: 0, z: 0 }, surfaceArea: 0,
+        problems: [message], advice: 'This mesh has no usable geometry. ' + message,
+        summary: message };
+    }
     if (!pos || pos.length < 9 || pos.length % 9 !== 0) {
-      return { ok: false, fatal: 'not a triangle soup', triangles: 0 };
+      return invalid('not a complete triangle soup');
     }
     var triCount = pos.length / 9;
 
@@ -46,11 +53,14 @@
     var mxx = -Infinity, mxy = -Infinity, mxz = -Infinity;
     for (var i = 0; i < pos.length; i += 3) {
       var x = pos[i], y = pos[i + 1], z = pos[i + 2];
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z))
+        return invalid('non-finite vertex coordinates', triCount);
       if (x < mnx) mnx = x; if (x > mxx) mxx = x;
       if (y < mny) mny = y; if (y > mxy) mxy = y;
       if (z < mnz) mnz = z; if (z > mxz) mxz = z;
     }
     var span = Math.max(mxx - mnx, mxy - mny, mxz - mnz);
+    if (!Number.isFinite(span)) return invalid('coordinate range is too large', triCount);
     var key = keyer(span);
 
     var edges = new Map();     // "a|b" (a<b) -> {n, fwd, rev}
@@ -68,11 +78,12 @@
       var vx = cx - ax, vy = cy - ay, vz = cz - az;
       var nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
       var mag = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      if (!Number.isFinite(mag)) return invalid('triangle area is out of range', triCount);
       if (!(mag > span * span * 1e-12)) { degenerate++; continue; }
-      area2 += mag;
 
       var ka = key(ax, ay, az), kb = key(bx, by, bz), kc = key(cx, cy, cz);
       if (ka === kb || kb === kc || kc === ka) { degenerate++; continue; }
+      area2 += mag;
 
       var tri = [[ka, kb], [kb, kc], [kc, ka]];
       for (var e = 0; e < 3; e++) {
@@ -86,6 +97,11 @@
       }
     }
 
+    if (degenerate === triCount) {
+      var empty = invalid('all triangles have zero usable area', triCount);
+      empty.degenerate = degenerate;
+      return empty;
+    }
     var boundary = 0, nonManifold = 0, flipped = 0;
     edges.forEach(function (r) {
       if (r.n === 1) boundary++;

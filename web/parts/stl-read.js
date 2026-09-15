@@ -42,34 +42,44 @@
   }
 
   function readAscii(text) {
-    /* One pass, no split() on the whole file: an ASCII STL of any size is
-       mostly whitespace and splitting it allocates several times the file. */
-    /* ⚠️ THE OLD CLASS HELD '+' AND NOT '-', so it matched 1.0e+000 and could
-       not match 1.0e-003 - which exporters emit constantly for small
-       coordinates. A miss on the first or second coordinate failed the whole
-       match, the engine skipped past the line, and the VERTEX WAS DROPPED:
-       every later vertex shifted one place and triangles were then built from
-       corners belonging to different facets. A mesh that is wrong everywhere,
-       with nothing to say so. The length%9 trim at the end hides it further by
-       quietly discarding the remainder.
-
-       A real float pattern, not a character class - adding '-' to the class
-       would also have accepted "1-2-3". */
-    var NUM = '[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?';
-    var re = new RegExp('vertex\\s+(' + NUM + ')\\s+(' + NUM + ')\\s+(' + NUM + ')', 'g');
-    var vals = [], m;
-    while ((m = re.exec(text))) {
-      vals.push(+m[1], +m[2], +m[3]);
-      if (vals.length > MAX_TRIS * 9) throw new Error('That STL is too large to open here.');
+    // Read the facet grammar, not a global vertex regex: 2 + 4 vertices in
+    // adjacent facets must never become two triangles with unrelated corners.
+    var num = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/;
+    var tokens = /\S+/g, vals = [], token;
+    function damaged(detail) {
+      throw new Error('That ASCII STL is damaged or incomplete: ' + detail + '.');
     }
-    /* A remainder means vertices went missing mid-file, not that the last facet
-       was cut short - and silently trimming it turns a corrupt read into a
-       plausible-looking mesh. Say so. */
-    if (vals.length % 9) {
-      if (vals.length % 3)
-        throw new Error('That ASCII STL has an incomplete vertex in it - the file ' +
-                        'looks truncated or damaged.');
-      vals.length -= vals.length % 9;
+    function next() { var m = tokens.exec(text); return m ? m[0] : null; }
+    function expect(word) {
+      var found = next();
+      if (!found || found.toLowerCase() !== word) damaged('expected ' + word);
+    }
+    function number() {
+      var s = next(), value = Number(s);
+      if (!s || !num.test(s) || !Number.isFinite(value)) damaged('invalid coordinate');
+      return value;
+    }
+    function skipName() {
+      // The optional solid name occupies the remainder of its header line.
+      var end = text.indexOf('\n', tokens.lastIndex);
+      tokens.lastIndex = end < 0 ? text.length : end + 1;
+    }
+    while ((token = next()) !== null) {
+      if (token.toLowerCase() !== 'solid') damaged('expected solid');
+      skipName();
+      while (true) {
+        token = next();
+        if (!token) damaged('missing endsolid');
+        if (token.toLowerCase() === 'endsolid') { skipName(); break; }
+        if (token.toLowerCase() !== 'facet') damaged('expected facet');
+        expect('normal'); number(); number(); number();
+        expect('outer'); expect('loop');
+        for (var v = 0; v < 3; v++) {
+          expect('vertex'); vals.push(number(), number(), number());
+        }
+        expect('endloop'); expect('endfacet');
+        if (vals.length > MAX_TRIS * 9) throw new Error('That STL is too large to open here.');
+      }
     }
     return new Float32Array(vals);
   }
@@ -77,10 +87,8 @@
   /* buf: ArrayBuffer. Returns { positions, triangles, format }. */
   function readSTL(buf) {
     if (!buf || !buf.byteLength) throw new Error('That file is empty.');
-    if (buf.byteLength < 84) throw new Error('That file is too short to be an STL.');
-
     var dv = new DataView(buf);
-    var n = dv.getUint32(80, true);
+    var n = buf.byteLength >= 84 ? dv.getUint32(80, true) : 0;
     var looksBinary = n > 0 && n <= MAX_TRIS && buf.byteLength === 84 + n * 50;
 
     var positions;
@@ -124,7 +132,7 @@
     if (isGlb) {
       if (!root.meshyParseGLB) throw new Error('The GLB reader is missing from this build.');
       var g = root.meshyParseGLB(buf);
-      return { positions: g.positions, triangles: g.positions.length / 9, format: 'glb' };
+      return Object.assign({},g,{triangles:g.positions.length/9,format:'glb'});
     }
     return readSTL(buf);
   }

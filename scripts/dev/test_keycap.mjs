@@ -190,9 +190,15 @@ near('last slot', comb.stems[4].slotMm, 1.40, 1e-6);
 truthy('the comb is a real mesh', comb.triangles > 100);
 
 console.log('\nplate layout');
+// Match the production contract: layout receives already oriented coordinates,
+// not upright geometry accompanied by a plan that only describes the lean.
+function posed(cap) {
+  const plan=cap.printPlan||{};
+  return {...cap,positions:K.orientAsPrinted(cap.positions,cap.angle,plan.tilt||0,{mouthDown:!!plan.mouthDown})};
+}
 const two = [
-  { ...K.build({ profile: 'DSA', sizeU: 1 }), name: 'a' },
-  { ...K.build({ profile: 'DSA', sizeU: 1 }), name: 'b' }
+  { ...posed(K.build({ profile: 'DSA', sizeU: 1 })), name: 'a' },
+  { ...posed(K.build({ profile: 'DSA', sizeU: 1 })), name: 'b' }
 ];
 const plate = K.layout(two);
 /* Same arithmetic as perPlate, and the same printed evidence: one lands, one
@@ -226,14 +232,14 @@ truthy('a 2.25u Enter is wider than the bed sitting upright',
   enter.size.x > K.BED.x, enter.size.x.toFixed(1) + ' mm vs ' + K.BED.x);
 truthy('but its print plan leans it over', enter.printPlan.tilt > 0,
   enter.printPlan.tilt + ' degrees');
-const entPlate = K.layout([{ ...enter, name: 'enter' }]);
+const entPlate = K.layout([{ ...posed(enter), name: 'enter' }]);
 ok('and it lands on the plate', entPlate.placed.length, 1);
 truthy('packed at its tilted width, not its upright one',
   entPlate.placed[0].w < enter.size.x,
   entPlate.placed[0].w.toFixed(1) + ' mm packed vs ' + enter.size.x.toFixed(1) + ' upright');
 
 console.log('\nsupports get their own clearance');
-const flatPair = K.layout([K.build({ profile: 'DSA', sizeU: 1 }), K.build({ profile: 'DSA', sizeU: 1 })]);
+const flatPair = K.layout([posed(K.build({ profile: 'DSA', sizeU: 1 })), posed(K.build({ profile: 'DSA', sizeU: 1 }))]);
 ok('flat caps need no supports', flatPair.supports, false);
 truthy('and pack tight', flatPair.gapMm <= 1.5, flatPair.gapMm + ' mm gap');
 /* A support tree is wider at the plate than the part above it, so two
@@ -269,7 +275,7 @@ truthy('a 4 mm sculpt makes a much taller cap', artisan.size.z > 12,
 ok('and it is still watertight', globalThis.meshHealth(artisan.positions).watertight, true);
 truthy('the stem is untouched by it',
   Math.abs(artisan.slotWidth - (K.MX.crossWide + K.MX.slotClearance)) < 1e-6);
-const artPlate = K.layout([{ ...artisan, name: 'a' }, { ...artisan, name: 'b' }]);
+const artPlate = K.layout([{ ...posed(artisan), name: 'a' }, { ...posed(artisan), name: 'b' }]);
 /* The point of this one was never the number two - it was that a TALL cap is
    packed by the footprint it prints at rather than by its height. One lands
    and one waits, and the reason given is the plate's width, not the sculpt. */
@@ -293,7 +299,7 @@ function overlaps(p) {
   return null;
 }
 const six = K.layout(['a','b','c','d','e','f'].map(n =>
-  ({ ...K.build({ profile: 'XDA', row: 'R3', sizeU: 1, topGrid: 13 }), name: n })));
+  ({ ...posed(K.build({ profile: 'XDA', row: 'R3', sizeU: 1, topGrid: 13 })), name: n })));
 ok('six 1u caps overlap nowhere', overlaps(six.placed), null);
 /* One per run now - see usableBed(). The invariant that matters is that the
    six are accounted for, none silently lost. */
@@ -309,7 +315,7 @@ ok('and every one is inside the bed', inside, true);
 
 console.log('\nplanning a whole set');
 const set = K.planSet(['1','2','3','4','5','6'].map(n =>
-  ({ ...K.build({ profile: 'XDA', row: 'R3', sizeU: 1, topGrid: 13 }), name: n })));
+  ({ ...posed(K.build({ profile: 'XDA', row: 'R3', sizeU: 1, topGrid: 13 })), name: n })));
 ok('six caps take six runs', set.runs, 6);
 ok('none stranded', set.stranded, 0);
 truthy('and it totals the layers across them', set.totalLayers > 0, set.totalLayers + ' layers');
@@ -353,8 +359,8 @@ near('as does the footprint', upCap.printPlan.foot.x,
 console.log('\nthe plate obeys the same plan');
 function plateOf(cap) {
   return K.layout([
-    { positions: cap.positions, size: cap.size, name: 'a', printPlan: cap.printPlan },
-    { positions: cap.positions, size: cap.size, name: 'b', printPlan: cap.printPlan }]);
+    { ...posed(cap), name: 'a' },
+    { ...posed(cap), name: 'b' }]);
 }
 const engPlate = plateOf(engCap), upPlate = plateOf(upCap);
 /* Both plates hold one cap now - 1u caps no longer pair, see usableBed() -
@@ -478,7 +484,7 @@ for (const [name, opts] of [['DSA R3', { profile: 'DSA', row: 'R3', topGrid: 9 }
                             ['CHERRY R4', { profile: 'CHERRY', row: 'R4', topGrid: 9 }]]) {
   const c = K.build(opts);
   const said = K.perPlate(opts.sizeU || 1, null, c.size.z, c.printPlan).count;
-  const packed = K.layout(Array(12).fill(c)).placed.length;
+  const packed = K.layout(Array(12).fill(posed(c))).placed.length;
   ok('what ' + name + ' says fits is what the packer fits', said, packed);
 }
 truthy('and perPlate still answers without a plan, for the flat comparison',

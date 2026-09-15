@@ -56,13 +56,12 @@
         style='flex:2 1 180px'>
       <button id='meshyKeySave' class='button secondary' type='button' style='flex:1 1 90px'>Save</button>
       <button id='meshyTest' class='button secondary' type='button' style='flex:1 1 90px'>Test</button>
+      <button id='meshyKeyRemove' class='button secondary' type='button' style='flex:1 1 100px' disabled>Remove key</button>
     </div>
+    <p id='meshyKeyStatus' class='hint' aria-live='polite'></p>
     <p id='meshyProbe' class='hint'></p>
     <div class='hint'>
-      Stored in this browser only. This page is served from the printer over
-      plain HTTP on your network, so anyone who can reach the printer can read
-      it - use a key you are willing to rotate, or run the Worker proxy and
-      leave this blank.
+      Stored only in this browser. Use this on a trusted local network; the printer page uses HTTP.
     </div>
   </details>
 </section>

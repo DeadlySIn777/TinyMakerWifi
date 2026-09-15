@@ -9,6 +9,14 @@
   if (!$('meshyCard')) return;                 // card not on this page
 
   var last = null;      // { glb, task, name, positions, health }
+  var loadVersion=0;
+  function requireLoad(version){
+    if(version!==loadVersion){var e=new Error('Another model was opened while this one loaded. Your existing Meshy task is kept for recovery.');e.staleModel=true;throw e;}
+  }
+  // Library reads may wait for IndexedDB or the slicer module. Register the
+  // selection before either wait so an older import cannot replace it later.
+  window.meshyBeginModelOpen=function(){loadVersion++;busy(false);return loadVersion;};
+  window.meshyModelLoadCurrent=function(version){return version===loadVersion;};
 
   function say(el, msg, warn) {
     var e = $(el); if (!e) return;
@@ -16,7 +24,7 @@
     e.style.color = warn ? 'var(--warncol)' : '';
   }
   function busy(on) {
-    ['meshyGo', 'meshyRefine', 'meshyExport', 'meshyFile'].forEach(function (id) {
+    ['meshyGo', 'meshyRefine', 'meshyExport', 'meshyFile', 'meshyHeight', 'meshyFlat', 'meshyPoly'].forEach(function (id) {
       var e = $(id); if (e) e.disabled = !!on;
     });
     if (!on) {
@@ -44,15 +52,18 @@
     else                            say('meshyHealth', h.triangles.toLocaleString() + ' triangles, ' + h.summary);
   }
 
-  function loadIntoSlicer(buf, name) {
+  function loadIntoSlicer(buf, name, metadata, version) {
+    var previous = last;
     return ensureEngine().then(function (ok) {
       if (!ok) throw new Error('Could not load the slicer engine. Open the STL slicer card once, then retry.');
+      requireLoad(version);
+      if (last !== previous) throw new Error('Another model was opened while this one loaded. Your existing Meshy task is kept for recovery.');
       var h = window.meshy.intoSlicer(
         buf, name,
         parseFloat($('meshyHeight').value) || null,
         $('meshyFlat').checked
       );
-      last = last || {};
+      last = metadata || last || {};
       last.glb = buf; last.name = name;
       last.positions = h.positions; last.health = h.health;
       showHealth(h.health);
@@ -63,38 +74,111 @@
           + (sc.fits === false ? ' - too big: ' + sc.why : '') , sc.fits === false);
       }
       say('meshyState', 'ready to slice');
-      return h;
+      var loaded = last;
+      // Colour is a display reference, so an unavailable texture must never
+      // discard otherwise usable geometry or its paid task recovery record.
+      return Promise.resolve().then(function () {
+        return window.keycapColor && window.keycapColor.fromGLB && h.parsed
+          ? window.keycapColor.fromGLB(h.parsed) : null;
+      }).catch(function () { return null; }).then(function (reference) {
+        requireLoad(version);
+        if (last !== loaded) throw new Error('Another model was opened while this one loaded. Your existing Meshy task is kept for recovery.');
+        if (reference && reference.colors) {
+          loaded.sourceColors = new Float32Array(reference.colors);
+          loaded.sourceColorKind = reference.kind || 'material';
+        }
+        return h;
+      });
     });
   }
 
   // ---- generate -----------------------------------------------------------
+  function receiveModel(state, version) {
+    if (!state || !state.glb) return Promise.resolve(null);
+    requireLoad(version);
+    var o = state.opts || {}, prompt = state.prompt || 'Recovered model';
+    if (Number.isFinite(o.heightMm) && o.heightMm > 0) $('meshyHeight').value = o.heightMm;
+    if (typeof o.flatBase === 'boolean') $('meshyFlat').checked = o.flatBase;
+    $('meshyPrompt').value = prompt;
+    return loadIntoSlicer(state.glb, prompt, {
+      previewId: state.previewId, task: state.task, textured: !!state.refineId,
+      deliveryId: state.deliveryId, prompt: prompt
+    }, version).then(function () { requireLoad(version);return keepInLibrary(prompt, prompt); })
+      .then(function (record) {
+        if (record && record.id && state.refineId) {
+          say('meshyInfo', 'Geometry saved in the Library. Export the GLB to keep its texture too; task recovery remains available until then.');
+        } else if (record && record.id && window.meshy.acknowledge) window.meshy.acknowledge(state.deliveryId);
+        return record;
+      });
+  }
+  function recoverModel() {
+    var p = window.meshy.pending && window.meshy.pending();
+    if (!p || p.from !== 'model') return Promise.resolve(null);
+    var version=++loadVersion;
+    busy(true); say('meshyInfo', 'Recovering the existing task; no new generation is submitted.');
+    return window.meshy.resume(function (m) { if(version===loadVersion)say('meshyState', m); })
+      .then(function(state){return receiveModel(state,version);})
+      .catch(function (e) { say('meshyState', ''); showFail(e); })
+      .then(function () { if(version===loadVersion)busy(false); });
+  }
+  function generateModel(prompt) {
+    var version=++loadVersion;
+    busy(true); say('meshyInfo', ''); say('meshyHealth', '');
+    return window.meshy.generate(prompt, {
+      polycount: parseInt($('meshyPoly').value, 10) || 30000,
+      heightMm: parseFloat($('meshyHeight').value) || null,
+      flatBase: $('meshyFlat').checked, from: 'model',
+      refine: false
+    }, function (m) { if(version===loadVersion)say('meshyState', m); })
+      .then(function(state){return receiveModel(state,version);})
+      .catch(function (e) { say('meshyState', ''); showFail(e); })
+      .then(function () { if(version===loadVersion)busy(false); });
+  }
   $('meshyGo').addEventListener('click', function () {
     var prompt = ($('meshyPrompt').value || '').trim();
     if (!prompt) { say('meshyInfo', 'Type what you want first.', true); return; }
-    if (!window.meshy.hasKey()) { say('meshyInfo', 'Add a Meshy API key below, or load a .glb instead.', true); return; }
-    busy(true); say('meshyInfo', ''); say('meshyHealth', '');
-    window.meshy.generate(prompt, {
-      polycount: parseInt($('meshyPoly').value, 10) || 30000,
-      refine: false                      // preview first; texture costs credits
-    }, function (m) { say('meshyState', m); })
-      .then(function (state) {
-        last = { previewId: state.previewId, task: state.task, textured: false };
-        return loadIntoSlicer(state.glb, 'meshy').then(function () {
-          /* IT GOES TO THE LIBRARY FROM HERE TOO. Only the keycap card was
-             filing generations, so anything made in this card lived in a
-             variable until the next one replaced it - a minute and real credits
-             thrown away by switching tools or reloading. */
-          keepInLibrary(prompt, state);
+    if (!window.meshy.hasKey()) {
+      var keyState = paintKeyStatus();
+      say('meshyInfo', keyState.error || 'Add a Meshy API key below, or load a .glb instead.', true); return;
+    }
+    var p = window.meshy.pending && window.meshy.pending();
+    if (p) {
+      if (p.from !== 'model') {
+        say('meshyInfo', 'A keycap generation is waiting to be saved. Recover it in the keycap editor before starting a model.', true);
+        return;
+      }
+      var question = 'An earlier model is waiting to be recovered or saved. Recover it without a new generation?';
+      var choice = typeof uiConfirm === 'function'
+        ? uiConfirm(question, { ok: 'Recover model', cancel: 'Start a new model' })
+        : Promise.resolve(confirm(question));
+      return Promise.resolve(choice).then(function (yes) {
+        if (yes) return recoverModel();
+        // Native Cancel is not consent to spend credits. The custom dialog's
+        // secondary button names the action, but confirm the lost recovery
+        // record explicitly for either surface before replacing paid work.
+        var replace = 'Start a new paid generation and replace this model\'s recovery record? The existing model remains in your Meshy task history.';
+        var confirmNew = typeof uiConfirm === 'function'
+          ? uiConfirm(replace, { ok: 'Generate new model', cancel: 'Keep existing task' })
+          : Promise.resolve(confirm(replace));
+        return Promise.resolve(confirmNew).then(function (approved) {
+          if (!approved) return;
+          if (!window.meshy.forgetPending(p.id)) { say('meshyInfo', 'The saved task changed. Recover the current task before replacing it.', true); return; }
+          return generateModel(prompt);
         });
-      })
-      .catch(function (e) { say('meshyState', ''); showFail(e); })
-      .then(function () { busy(false); });
+      });
+    }
+    return generateModel(prompt);
   });
+  if (typeof setTimeout === 'function') setTimeout(function () {
+    // Automatic recovery is only for an untouched startup. A model selected
+    // while the page loads is newer intent; its pending task stays recoverable.
+    if (loadVersion===0&&window.meshy.hasKey()) recoverModel();
+  }, 1500);
 
   /* Same reasoning as the keycap card: a model that finished and cannot be
      fetched by script is still a model, and the link is what makes it one. */
   function bboxOf(p) {
-    var mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9], i, k, v;
+    var mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity], i, k, v;
     for (i = 0; i < p.length; i += 3) for (k = 0; k < 3; k++) {
       v = p[i + k];
       if (v < mn[k]) mn[k] = v;
@@ -103,8 +187,29 @@
     return [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]];
   }
 
-  function keepInLibrary(prompt, state) {
-    if (!window.keycapLibrary || !last || !last.positions) return;
+  function modelPositions() {
+    if (!last || !last.positions) return null;
+    var positions = last.positions;
+    // Only apply the current slicer transform when it belongs to this model.
+    // Opening another tool must not rotate/scale an older model's export.
+    if (typeof slicerRaw !== 'undefined' && slicerRaw === positions &&
+        typeof slicerMod !== 'undefined' && slicerMod && slicerMod.place &&
+        typeof slicerTr !== 'undefined') positions = slicerMod.place(positions, slicerTr);
+    return new Float32Array(positions);
+  }
+
+  function keepInLibrary(name, prompt) {
+    if (!window.keycapLibrary || !last || !last.positions) {
+      say('meshyInfo', 'Model loaded, but the Library is unavailable. Export a copy to keep it.', true);
+      return Promise.resolve(null);
+    }
+    /* Keep the geometry in millimetres as it is posed in the preview. Reopening
+       a saved model must not auto-size or auto-orient it a second time. Copy it
+       before the asynchronous save, so later edits cannot change this record. */
+    var model=last, savedName=name||last.name||'model';
+    var positions = modelPositions();
+    var sourceColors = last.sourceColors ? new Float32Array(last.sourceColors) : null;
+    var sourceColorKind = last.sourceColorKind || null;
     var thumb = null;
     try {
       var c = document.getElementById('printPreviewCanvas');
@@ -121,24 +226,42 @@
        the same object the slicer will. */
     var mm = null;
     try {
-      var b = bboxOf(last.positions);
+      var b = bboxOf(positions);
       mm = { sizeMm: [+b[0].toFixed(2), +b[1].toFixed(2), +b[2].toFixed(2)] };
       if (window.keycap && window.keycap.volumeMm3)
-        mm.resinMl = +(window.keycap.volumeMm3(last.positions) / 1000).toFixed(2);
+        mm.resinMl = +(window.keycap.volumeMm3(positions) / 1000).toFixed(2);
     } catch (e) { mm = null; }
-    window.keycapLibrary.save({
+    return Promise.resolve().then(function () { return window.keycapLibrary.save({
       facts: mm,
-      name: (prompt || 'model').slice(0, 48),
+      name: savedName,
       prompt: prompt || '',
       kind: 'model',
-      positions: last.positions,
+      positions: positions,
+      sourceColors: sourceColors,
+      sourceColorKind: sourceColorKind,
       thumb: thumb
-    }).then(function () {
-      say('meshyInfo', 'kept in the Library');
+    }); }).then(function (rec) {
+      if (!rec || !rec.id) throw new Error('the Library returned no saved record');
+      if(last===model)say('meshyInfo', 'kept in the Library');
+      return rec;
     }).catch(function (err) {
-      say('meshyInfo', 'generated, but NOT saved to the Library: ' + err.message, true);
+      if(last===model)say('meshyInfo', 'Model loaded, but saving to the Library could not be confirmed: ' + err.message + '. Export a copy to keep it.', true);
+      return null;
     });
   }
+
+  /* Library restore updates this card's export state without importing again,
+     spending a generation, or creating another Library record. */
+  window.meshyModelOpened = function (name, positions, record, version) {
+    if(version!=null)requireLoad(version);else loadVersion++;
+    last = { name: name, positions: positions, textured: false,
+      sourceColors: record && record.sourceColors ? new Float32Array(record.sourceColors) : null,
+      sourceColorKind: record && record.sourceColorKind || null };
+    showHealth(window.meshHealth ? window.meshHealth(positions) : null);
+    say('meshyState', 'ready to slice');
+    say('meshyInfo', 'Loaded ' + name + ' from the Library. Saved size and pose kept.');
+    busy(false);
+  };
 
   function showFail(e) {
     var n = $('meshyInfo');
@@ -156,48 +279,52 @@
   // ---- refine (texture) ---------------------------------------------------
   $('meshyRefine').addEventListener('click', function () {
     if (!last || !last.previewId) return;
+    var accepted = last, version=++loadVersion;
     busy(true);
-    window.meshy.refine(last.previewId).then(function (id) {
-      return window.meshy.waitFor(id, function (st, p) { say('meshyState', 'texture: ' + st.toLowerCase() + ' ' + (p || 0) + '%'); });
-    }).then(function (t) {
-      last.task = t; last.textured = true;
-      return window.meshy.fetchModel(t, 'glb').then(function (buf) {
-        return loadIntoSlicer(buf, 'meshy');
-      }).then(function () {
-        var tex = window.meshy.textureUrl(t);
+    window.meshy.generateTexture(accepted.previewId, {
+      from: 'model', prompt: accepted.prompt || accepted.name || '',
+      heightMm: parseFloat($('meshyHeight').value) || null, flatBase: $('meshyFlat').checked
+    }, function (m) { if(version===loadVersion)say('meshyState', m); }).then(function (state) {
+      return receiveModel(state,version).then(function () {
+        requireLoad(version);
+        var tex = window.meshy.textureUrl(state.task);
         if (tex && window.gl3dTexMesh && last.positions) {
           return fetch(tex).then(function (r) { return r.blob(); })
             .then(function (b) { return createImageBitmap(b); })
-            .then(function (img) { window.gl3dTexMesh(last.positions, null, img); })
+            .then(function (img) { if(version===loadVersion)window.gl3dTexMesh(last.positions, null, img); })
             .catch(function () { /* preview stays untextured; not worth failing over */ });
         }
       });
-    }).catch(function (e) { say('meshyInfo', e.message, true); })
-      .then(function () { busy(false); });
+    }).catch(function (e) { showFail(e); })
+      .then(function () { if(version===loadVersion)busy(false); });
   });
 
   // ---- load a local file (works with no account at all) -------------------
   $('meshyFile').addEventListener('change', function (e) {
     var f = e.target.files && e.target.files[0];
     if (!f) return;
+    var version=++loadVersion;
     busy(true); say('meshyState', 'reading ' + f.name + '…'); say('meshyInfo', '');
-    f.arrayBuffer().then(function (buf) {
+    var name = f.name.replace(/\.[^.]+$/, '') || f.name;
+    return f.arrayBuffer().then(function (buf) {
+      requireLoad(version);
       if (/\.stl$/i.test(f.name)) {
         return ensureEngine().then(function (ok) {
+          requireLoad(version);
           if (!ok) throw new Error('Slicer engine not loaded.');
-          var p = slicerMod.parseSTL(buf).positions;
-          last = { textured: false };
-          last.positions = p;
+          if (!window.stlRead) throw new Error('The model reader is missing from this build.');
+          var p = window.stlRead.readSTL(buf).positions;
           var h = window.meshHealth ? window.meshHealth(p) : null;
           showHealth(h);
           if (!window.slicerLoadMesh(p, f.name, f.size)) throw new Error('No usable triangles.');
+          last = { name: name, textured: false, positions: p, health: h };
           say('meshyState', 'ready to slice');
         });
       }
-      last = { textured: false };
-      return loadIntoSlicer(buf, f.name.replace(/\.[^.]+$/, ''));
-    }).catch(function (err) { say('meshyState', ''); say('meshyInfo', err.message, true); })
-      .then(function () { busy(false); });
+      return loadIntoSlicer(buf, name, { textured: false }, version);
+    }).then(function () { requireLoad(version);return keepInLibrary(name, ''); })
+      .catch(function (err) { if(version===loadVersion){say('meshyState', ''); say('meshyInfo', err.message, true);} })
+      .then(function () { if(version===loadVersion)busy(false); });
   });
 
   // ---- export -------------------------------------------------------------
@@ -229,24 +356,66 @@
     if (!last) return;
     var stamp = ($('slicerName') && $('slicerName').value) || 'model';
     try {
-      if (last.glb) save(new Blob([last.glb], { type: 'model/gltf-binary' }), stamp + '.glb');
-      if (last.positions) save(binarySTL(last.positions), stamp + '.stl');
-      say('meshyInfo', 'Saved the GLB and the STL of exactly what is loaded. Meshy deletes its own copies after about three days.');
+      if (last.glb) {
+        save(new Blob([last.glb], { type: 'model/gltf-binary' }), stamp + '.glb');
+        if (last.deliveryId && window.meshy.acknowledge) window.meshy.acknowledge(last.deliveryId);
+      }
+      if (last.positions) save(binarySTL(modelPositions()), stamp + '.stl');
+      say('meshyInfo', (last.glb ? 'GLB and STL downloads started. Keep the GLB to preserve any texture. ' : 'STL download started; this Library entry contains geometry only. ') + 'Check your browser downloads before closing this page.');
     } catch (e) { say('meshyInfo', e.message, true); }
   });
 
   // ---- key ----------------------------------------------------------------
+  function paintKeyStatus() {
+    var s = window.meshy.keyStatus ? window.meshy.keyStatus()
+          : { available: true, stored: window.meshy.hasKey(), error: '' };
+    say('meshyKeyStatus', s.error || (s.stored
+      ? 'Key saved in this browser. Use Test to check it; the field stays blank.'
+      : 'No key saved at this printer address in this browser.'), !s.available);
+    var remove = $('meshyKeyRemove');
+    if (remove) remove.disabled = !s.available || !s.stored;
+    return s;
+  }
   $('meshyKeySave').addEventListener('click', function () {
     /* setKey refuses a key that cannot go in a header rather than storing one
        that will fail on every generation with a message about the network. */
     try {
-      window.meshy.setKey($('meshyKey').value || '');
+      var entered = $('meshyKey').value || '';
+      if (!entered.trim()) {
+        var s = paintKeyStatus();
+        say('meshyInfo', s.error || (s.stored
+          ? 'Your saved key is unchanged. Choose Test to check it.'
+          : 'Paste a Meshy API key before choosing Save.'), !s.available || !s.stored);
+        return;
+      }
+      window.meshy.setKey(entered);
+      var saved = paintKeyStatus();
+      if (!saved.available || !saved.stored) {
+        say('meshyInfo', saved.error || 'Paste a Meshy API key before choosing Save.', true);
+        return;
+      }
       $('meshyKey').value = '';
-      say('meshyInfo', window.meshy.hasKey() ? 'Key saved in this browser.' : 'Key cleared.');
+      say('meshyInfo', 'Key saved in this browser. Choose Test to check it.');
       say('meshyProbe', '');
     } catch (e) {
       say('meshyInfo', e.message, true);
+      paintKeyStatus();
     }
+  });
+  var removeKeyBtn = $('meshyKeyRemove');
+  if (removeKeyBtn) removeKeyBtn.addEventListener('click', function () {
+    if (!confirm('Remove the saved Meshy API key from this browser?')) return;
+    try {
+      window.meshy.removeKey();
+      $('meshyKey').value = '';
+      say('meshyInfo', 'Meshy key removed from this browser.');
+      say('meshyProbe', '');
+    } catch (e) { say('meshyInfo', e.message, true); }
+    paintKeyStatus();
+  });
+  paintKeyStatus();
+  if (window.addEventListener) window.addEventListener('storage', function (event) {
+    if (!event.key || event.key === 'tmMeshyKey') paintKeyStatus();
   });
 
   /* "Failed to fetch" cannot tell you whether the network is down or the key is
@@ -259,11 +428,11 @@
     say('meshyProbe', 'checking…');
     window.meshy.probe().then(function (r) {
       say('meshyProbe', r.verdict + '  (internet ' + (r.internet ? 'yes' : 'no') +
-        ' · key ' + (r.key ? 'stored' : 'missing') +
+        ' · key ' + (r.storageError ? 'storage unavailable' : (r.key ? 'stored' : 'missing')) +
         ' · meshy ' + (r.meshy || '—') + ' · ' + r.ms + ' ms)',
         !(r.internet && r.meshy === 'ok'));
     }).catch(function (e) {
       say('meshyProbe', 'the check itself failed: ' + e.message, true);
-    }).then(function () { testBtn.disabled = false; });
+    }).then(function () { testBtn.disabled = false; paintKeyStatus(); });
   });
 })();

@@ -123,12 +123,12 @@ truthy('every drawn icon has a prompt to replace it', Object.keys(S.PROMPTS).len
    was right while a model was flattened onto the face and wrong the moment it
    started being seated as a real sculpt - the button was asking for a flat
    relief and then standing it up. */
-truthy('a sculpt prompt asks for a 3D object', /full 3D figurine/.test(S.promptFor('ifak')));
+truthy('a sculpt prompt asks for a 3D object', /full 3D sculpture/.test(S.promptFor('ifak')));
 truthy('and NOT for a flat relief', !/bas relief/.test(S.promptFor('ifak')));
-truthy('an unknown name still gets the tail', /full 3D figurine/.test(S.promptFor('a rubber duck')));
+truthy('an unknown name still gets the tail', /full 3D sculpture/.test(S.promptFor('a rubber duck')));
 /* Anchoring is cheaper to ask for than to fix: keycap-sculpt refuses a piece
    touching nothing, and a hovering figure looks perfect on screen. */
-truthy('it asks for everything to touch the base', /touching the base/.test(S.promptFor('x')));
+truthy('it asks for connected geometry with stable contact instead of an added pedestal', /one connected closed solid with broad stable underside/.test(S.promptFor('x')));
 truthy('and warns the generator off thin parts', /no thin or fragile/.test(S.promptFor('x')));
 /* The legend path still wants the flattened kind. */
 truthy('relief mode still asks for a relief', /bas relief/.test(S.promptFor('ifak', null, 'relief')));
@@ -148,7 +148,7 @@ console.log('\nTHE PROMPT KNOWS WHAT SIZE THE CAP IS');
    half the width the key actually has. */
 const oneU = { wMm: 19.08, dMm: 18.65, hMm: 13, minFeatureMm: 0.51 };
 const shift = { wMm: 42.46, dMm: 18.65, hMm: 13, minFeatureMm: 0.51 };
-truthy('a 1u prompt states the print size', /sized to print at about 19 by 19/.test(S.promptFor('pikachu', null, 'sculpt', oneU)));
+truthy('a 1u prompt states the print size', /print size about 19 by 19/.test(S.promptFor('pikachu', null, 'sculpt', oneU)));
 truthy('and the smallest feature the mask can hold', /finer than 0.51 mm/.test(S.promptFor('pikachu', null, 'sculpt', oneU)));
 truthy('a 1u cap is NOT told to compose across the width',
   !/ACROSS the width/.test(S.promptFor('pikachu', null, 'sculpt', oneU)));
@@ -156,9 +156,9 @@ truthy('a 2.25u Shift IS', /ACROSS the width/.test(S.promptFor('two figures', nu
 truthy('and it says why - a scene, not one upright figure',
   /side by side/.test(S.promptFor('two figures', null, 'sculpt', shift)));
 truthy('the sculpt tail survives alongside the size sentence',
-  /full 3D figurine/.test(S.promptFor('pikachu', null, 'sculpt', oneU)));
+  /full 3D sculpture/.test(S.promptFor('pikachu', null, 'sculpt', oneU)));
 ok('no cap spec, no size sentence - the old callers still work',
-  /sized to print/.test(S.promptFor('pikachu')), false);
+  /print size/.test(S.promptFor('pikachu')), false);
 ok('capSentence says nothing about nothing', S.capSentence(null), '');
 
 /* The bug this was written for: the Generate handler read
